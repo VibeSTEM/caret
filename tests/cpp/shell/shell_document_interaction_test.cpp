@@ -14,6 +14,7 @@
 #include <QClipboard>
 #include <QColor>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QGuiApplication>
 #include <QHash>
@@ -48,7 +49,9 @@
 #include <QtCore/qglobal.h>
 #include <QtCore/qobject.h>
 #include <QtCore/qobjectdefs.h>
+#include <QtCore/qtestsupport_core.h>
 #include <QtCore/qvariant.h>
+#include <QtGui/qtestsupport_gui.h>
 #include <QtMath>
 #include <QtQml/qqmlextensionplugin.h>
 #include <QtTest/QTest>
@@ -60,6 +63,7 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <memory>
 #include <qcontainerfwd.h>
 #include <string>
 #include <string_view>
@@ -803,6 +807,392 @@ void ShellLoadTest::documentCanvasRoutesCommandKeysAndKeepsNormalEditingBehavior
     QCOMPARE(text_input.takeFirst().at(0).toString(), QStringLiteral("@"));
 }
 
+// 文档交互 slot 共用的 PageSurface 窗口 fixture 与前置步骤 helper。
+//
+// 每个 slot 独立构建 fixture 并重放到所需文档状态，避免一个函数串起多个互不
+// 相关的行为契约；helper 只负责建立前置状态，断言仍留在各 slot 内。
+namespace {
+
+class DocumentInteractionFixture {
+  public:
+    DocumentInteractionFixture() = default;
+    ~DocumentInteractionFixture() { delete surface; }
+    DocumentInteractionFixture(const DocumentInteractionFixture&) = delete;
+    DocumentInteractionFixture& operator=(const DocumentInteractionFixture&) = delete;
+
+    bool initialize();
+
+    std::unique_ptr<QQmlEngine> engine;
+    std::unique_ptr<QQmlComponent> surface_component;
+    QQuickWindow window;
+    QQuickItem* surface = nullptr;
+    caret::DocumentCanvas* canvas = nullptr;
+    caret::LayoutViewModel* layout_view_model = nullptr;
+    QObject* scroller = nullptr;
+    QObject* selection_drag = nullptr;
+    QObject* pointer_handler = nullptr;
+    QString error;
+};
+
+// 页面渲染依赖 Theme 单例；单独运行某个 slot 时也要先注入与完整 suite 相同的主题快照。
+void installDocumentInteractionTheme() {
+    const QString theme =
+        QString::fromUtf8(CARET_SOURCE_DIR) + QStringLiteral("/qml/Themes/Theme.qml");
+    QHash<QString, QVariantMap> themes;
+    themes.insert(QStringLiteral("light"), caret::shell_test::snapshot_from_theme_facade(
+                                               theme, QColor(QStringLiteral("#ffffff")), 16));
+    themes.insert(QStringLiteral("dark"), caret::shell_test::snapshot_from_theme_facade(
+                                              theme, QColor(QStringLiteral("#111111")), 18));
+    caret::install_theme_snapshots(std::move(themes), QStringLiteral("light"));
+}
+
+bool installBlankInteractionRuntime(QString* error) {
+    auto runtime = caret::ffi::new_blank_document_runtime();
+    const rust::String snapshot = caret::ffi::layout_snapshot_json(*runtime);
+    if (std::string_view(snapshot.data(), snapshot.size()).starts_with("error:")) {
+        *error = QStringLiteral("空白文档快照返回错误");
+        return false;
+    }
+    if (!caret::install_layout_snapshot(
+            QString::fromUtf8(snapshot.data(), static_cast<qsizetype>(snapshot.size())))) {
+        *error = QStringLiteral("空白文档快照无法安装");
+        return false;
+    }
+    if (!caret::install_document_runtime(std::move(runtime))) {
+        *error = QStringLiteral("空白文档 runtime 无法安装");
+        return false;
+    }
+    return true;
+}
+
+bool DocumentInteractionFixture::initialize() {
+    installDocumentInteractionTheme();
+    engine = std::make_unique<QQmlEngine>();
+    engine->addImportPath(QString::fromUtf8(CARET_QML_IMPORT_PATH));
+    surface_component = std::make_unique<QQmlComponent>(engine.get());
+    surface_component->setData(QByteArrayLiteral("import QtQuick\n"
+                                                 "import Caret.Shell\n"
+                                                 "PageSurface { width: 500; height: 500 }\n"),
+                               QUrl());
+    if (!surface_component->isReady()) {
+        error = surface_component->errorString();
+        return false;
+    }
+    surface = qobject_cast<QQuickItem*>(surface_component->create());
+    if (surface == nullptr) {
+        error = QStringLiteral("PageSurface 无法创建");
+        return false;
+    }
+    canvas = surface->findChild<caret::DocumentCanvas*>(QStringLiteral("documentCanvas"));
+    scroller = surface->findChild<QObject*>(QStringLiteral("documentScroller"));
+    selection_drag = surface->findChild<QObject*>(QStringLiteral("documentSelectionDrag"));
+    pointer_handler = surface->findChild<QObject*>(QStringLiteral("documentCanvasPointerHandler"));
+    if (canvas == nullptr || scroller == nullptr || selection_drag == nullptr ||
+        pointer_handler == nullptr) {
+        error = QStringLiteral("PageSurface 缺少文档画布或指针处理子项");
+        return false;
+    }
+    window.resize(500, 500);
+    surface->setParentItem(window.contentItem());
+    window.show();
+    if (!QTest::qWaitForWindowExposed(&window, 3000)) {
+        error = QStringLiteral("PageSurface 窗口未在 3000ms 内暴露");
+        return false;
+    }
+    layout_view_model =
+        engine->singletonInstance<caret::LayoutViewModel*>("Caret.ViewModels", "LayoutViewModel");
+    if (layout_view_model == nullptr) {
+        error = QStringLiteral("LayoutViewModel 单例不可用");
+        return false;
+    }
+    return true;
+}
+
+bool prepareDocumentInteractionFixture(DocumentInteractionFixture& fixture) {
+    if (!installBlankInteractionRuntime(&fixture.error)) {
+        return false;
+    }
+    return fixture.initialize();
+}
+
+bool waitForDocumentGeneration(DocumentInteractionFixture& fixture, const QString& generation) {
+    QElapsedTimer timer;
+    timer.start();
+    while (fixture.layout_view_model->documentGeneration() != generation) {
+        if (timer.elapsed() >= 3000) {
+            fixture.error = QStringLiteral("文档代际未在 3000ms 内到达 %1（当前 %2）")
+                                .arg(generation, fixture.layout_view_model->documentGeneration());
+            return false;
+        }
+        QTest::qWait(10);
+    }
+    return true;
+}
+
+bool requireValidInteractionResult(const QVariantMap& result, const QString& action,
+                                   DocumentInteractionFixture& fixture) {
+    if (result.value(QStringLiteral("valid")).toBool()) {
+        return true;
+    }
+    fixture.error =
+        QStringLiteral("%1 失败：%2").arg(action, result.value(QStringLiteral("error")).toString());
+    return false;
+}
+
+bool clickDocumentPageCenter(DocumentInteractionFixture& fixture) {
+    const QSizeF page_size = fixture.canvas->pageSizesPt().front().toSizeF();
+    const QPointF page_center(std::min(100.0, page_size.width()), 140.0);
+    const QPointF content_point = fixture.canvas->documentToContent(0, page_center);
+    const QPointF window_point =
+        fixture.canvas->mapToItem(fixture.window.contentItem(), content_point);
+    QTest::mouseClick(&fixture.window, Qt::LeftButton, Qt::NoModifier, window_point.toPoint());
+    QElapsedTimer timer;
+    timer.start();
+    while (!fixture.canvas->hasActiveFocus()) {
+        if (timer.elapsed() >= 3000) {
+            fixture.error = QStringLiteral("画布未在 3000ms 内获得焦点");
+            return false;
+        }
+        QTest::qWait(10);
+    }
+    return true;
+}
+
+struct DocumentDragStops {
+    QVariantMap start;
+    QVariantMap preview_start;
+    QVariantMap end;
+    bool valid = false;
+};
+
+DocumentDragStops findDocumentDragStops(DocumentInteractionFixture& fixture) {
+    DocumentDragStops stops;
+    const QVariantMap hit_map = fixture.layout_view_model->dragHitMap(0);
+    if (!hit_map.value(QStringLiteral("valid")).toBool()) {
+        fixture.error = QStringLiteral("拖选命中图失败：%1")
+                            .arg(hit_map.value(QStringLiteral("error")).toString());
+        return stops;
+    }
+    for (const QVariant& value : hit_map.value(QStringLiteral("stops")).toList()) {
+        const QVariantMap stop = value.toMap();
+        const QString offset = stop.value(QStringLiteral("position"))
+                                   .toMap()
+                                   .value(QStringLiteral("offsetUtf8"))
+                                   .toString();
+        if (offset == QStringLiteral("1") && stops.start.isEmpty()) {
+            stops.start = stop;
+        }
+        if (offset == QStringLiteral("0") && stops.preview_start.isEmpty()) {
+            stops.preview_start = stop;
+        }
+        if (offset == QStringLiteral("4")) {
+            stops.end = stop;
+        }
+    }
+    stops.valid = !stops.start.isEmpty() && !stops.preview_start.isEmpty() && !stops.end.isEmpty();
+    if (!stops.valid) {
+        fixture.error = QStringLiteral("拖选命中图缺少 0/1/4 字节端点");
+    }
+    return stops;
+}
+
+QPointF documentStopPoint(DocumentInteractionFixture& fixture, const QVariantMap& stop) {
+    return fixture.canvas->documentToContent(
+        stop.value(QStringLiteral("pageIndex")).toInt(),
+        QPointF(stop.value(QStringLiteral("xPt")).toReal(),
+                stop.value(QStringLiteral("y0Pt")).toReal() + 3.0));
+}
+
+QPointF documentStopWindowPoint(DocumentInteractionFixture& fixture, const QVariantMap& stop) {
+    return fixture.canvas->mapToItem(fixture.window.contentItem(),
+                                     documentStopPoint(fixture, stop));
+}
+
+bool renderedGlyphHasInk(DocumentInteractionFixture& fixture, qsizetype placement_index) {
+    const QImage frame = fixture.window.grabWindow();
+    if (frame.isNull()) {
+        return false;
+    }
+    const QVariantMap current_frame = fixture.canvas->glyphFrames().first().toMap();
+    const QVariantList images = current_frame.value(QStringLiteral("images")).toList();
+    const QVariantList placements = current_frame.value(QStringLiteral("placements")).toList();
+    if (images.isEmpty() || placement_index < 0 || placement_index >= placements.size()) {
+        return false;
+    }
+    const QVariantMap placement = placements.at(placement_index).toMap();
+    const quint32 image_index = placement.value(QStringLiteral("imageIndex")).toUInt();
+    if (image_index >= static_cast<quint32>(images.size())) {
+        return false;
+    }
+    const QVariantMap image = images.at(static_cast<qsizetype>(image_index)).toMap();
+    const bool phase_applied = placement.value(QStringLiteral("pixelPhaseApplied")).toBool();
+    const qreal phase_x =
+        phase_applied ? placement.value(QStringLiteral("pixelPhaseX")).toReal() : 0.0;
+    const qreal phase_y =
+        phase_applied ? placement.value(QStringLiteral("pixelPhaseY")).toReal() : 0.0;
+    const qreal image_scale = fixture.canvas->zoom() * 96.0 / 72.0 /
+                              current_frame.value(QStringLiteral("rasterPxPerPt")).toReal();
+    const QPointF baseline = fixture.canvas->mapToItem(
+        fixture.window.contentItem(),
+        fixture.canvas->documentToContent(
+            0, QPointF(placement.value(QStringLiteral("xPt")).toReal(),
+                       placement.value(QStringLiteral("baselineYPt")).toReal())));
+    const QRectF glyph_rect(
+        baseline.x() + (image.value(QStringLiteral("left")).toReal() - phase_x) * image_scale,
+        baseline.y() + (-image.value(QStringLiteral("top")).toReal() - phase_y) * image_scale,
+        image.value(QStringLiteral("width")).toReal() * image_scale,
+        image.value(QStringLiteral("height")).toReal() * image_scale);
+    const qreal pixels_per_x = static_cast<qreal>(frame.width()) / fixture.window.width();
+    const qreal pixels_per_y = static_cast<qreal>(frame.height()) / fixture.window.height();
+    const QRect pixel_rect(
+        qFloor(glyph_rect.left() * pixels_per_x), qFloor(glyph_rect.top() * pixels_per_y),
+        qCeil(glyph_rect.width() * pixels_per_x), qCeil(glyph_rect.height() * pixels_per_y));
+    const QRect clipped = pixel_rect.intersected(frame.rect());
+    if (clipped.isEmpty()) {
+        return false;
+    }
+    for (int y = clipped.top(); y <= clipped.bottom(); ++y) {
+        for (int x = clipped.left(); x <= clipped.right(); ++x) {
+            if (frame.pixelColor(x, y).lightness() < 240) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool waitForGlyphFrame(DocumentInteractionFixture& fixture, const QString& generation,
+                       qsizetype minimum_placements = 1) {
+    QElapsedTimer timer;
+    timer.start();
+    while (true) {
+        const QVariantList frames = fixture.canvas->glyphFrames();
+        if (!frames.isEmpty()) {
+            const QVariantMap frame = frames.first().toMap();
+            if (frame.value(QStringLiteral("documentGeneration")).toString() == generation &&
+                frame.value(QStringLiteral("placements")).toList().size() >= minimum_placements) {
+                return true;
+            }
+        }
+        if (timer.elapsed() >= 3000) {
+            fixture.error = QStringLiteral("glyph 帧未在 3000ms 内到达代际 %1").arg(generation);
+            return false;
+        }
+        QTest::qWait(10);
+    }
+}
+
+// 通过画布键盘/公开 ViewModel 命令把空白文档重放到目标文档代际，供各行为契约
+// slot 建立独立前置状态；重放步骤本身不重复断言，由拥有该行为的 slot 断言。
+bool clickDocumentForTyping(DocumentInteractionFixture& fixture) {
+    if (fixture.canvas->hasActiveFocus()) {
+        return true;
+    }
+    return clickDocumentPageCenter(fixture);
+}
+
+bool replayDocumentToGeneration(DocumentInteractionFixture& fixture, int generation) {
+    if (generation <= 0) {
+        return true;
+    }
+    if (!clickDocumentForTyping(fixture)) {
+        return false;
+    }
+    QTest::keyClick(&fixture.window, Qt::Key_X);
+    if (!waitForDocumentGeneration(fixture, QStringLiteral("1"))) {
+        return false;
+    }
+    if (generation == 1) {
+        return true;
+    }
+    if (!requireValidInteractionResult(fixture.layout_view_model->insertText(QStringLiteral("！")),
+                                       QStringLiteral("插入全角叹号"), fixture)) {
+        return false;
+    }
+    if (!waitForDocumentGeneration(fixture, QStringLiteral("2"))) {
+        return false;
+    }
+    if (generation == 2) {
+        return true;
+    }
+    QTest::keyClick(&fixture.window, Qt::Key_Return);
+    if (!waitForDocumentGeneration(fixture, QStringLiteral("3"))) {
+        return false;
+    }
+    if (generation == 3) {
+        return true;
+    }
+    QTest::keyClick(&fixture.window, Qt::Key_Backspace);
+    if (!waitForDocumentGeneration(fixture, QStringLiteral("4"))) {
+        return false;
+    }
+    QTest::keyClick(&fixture.window, Qt::Key_Backspace);
+    if (!waitForDocumentGeneration(fixture, QStringLiteral("5"))) {
+        return false;
+    }
+    QTest::keyClick(&fixture.window, Qt::Key_Backspace);
+    if (!waitForDocumentGeneration(fixture, QStringLiteral("6"))) {
+        return false;
+    }
+    if (generation == 6) {
+        return true;
+    }
+    QTest::keyClick(&fixture.window, Qt::Key_Return, Qt::ShiftModifier);
+    if (!waitForDocumentGeneration(fixture, QStringLiteral("7"))) {
+        return false;
+    }
+    if (generation == 7) {
+        return true;
+    }
+    if (!requireValidInteractionResult(fixture.layout_view_model->insertText(QStringLiteral("abc")),
+                                       QStringLiteral("插入 abc"), fixture)) {
+        return false;
+    }
+    if (!waitForDocumentGeneration(fixture, QStringLiteral("8"))) {
+        return false;
+    }
+    if (generation == 8) {
+        return true;
+    }
+    DocumentDragStops stops = findDocumentDragStops(fixture);
+    if (!stops.valid) {
+        return false;
+    }
+    if (!requireValidInteractionResult(
+            fixture.layout_view_model->setSelection(stops.start, stops.end),
+            QStringLiteral("设置 1..4 字节选区"), fixture)) {
+        return false;
+    }
+    QGuiApplication::clipboard()->setText(QStringLiteral("abc"));
+    QTest::keyClick(&fixture.window, Qt::Key_V, Qt::ControlModifier);
+    if (!waitForDocumentGeneration(fixture, QStringLiteral("9"))) {
+        return false;
+    }
+    if (generation == 9) {
+        return true;
+    }
+    if (!requireValidInteractionResult(
+            fixture.layout_view_model->setSelection(stops.start, stops.end),
+            QStringLiteral("重新设置 1..4 字节选区"), fixture)) {
+        return false;
+    }
+    QGuiApplication::clipboard()->setText(QStringLiteral("left\nright"));
+    QTest::keyClick(&fixture.window, Qt::Key_V, Qt::ControlModifier);
+    if (!waitForDocumentGeneration(fixture, QStringLiteral("10"))) {
+        return false;
+    }
+    return true;
+}
+
+bool prepareDocumentInteractionAt(DocumentInteractionFixture& fixture, int generation) {
+    if (!prepareDocumentInteractionFixture(fixture)) {
+        return false;
+    }
+    return replayDocumentToGeneration(fixture, generation);
+}
+
+} // namespace
+
 void ShellLoadTest::documentHitTestReturnsRustPosition() {
     auto runtime = caret::ffi::new_blank_document_runtime();
     const rust::String snapshot = caret::ffi::layout_snapshot_json(*runtime);
@@ -811,10 +1201,15 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
         QString::fromUtf8(snapshot.data(), static_cast<qsizetype>(snapshot.size()))));
     QVERIFY(caret::install_document_runtime(std::move(runtime)));
 
-    QQmlEngine engine;
-    engine.addImportPath(QString::fromUtf8(CARET_QML_IMPORT_PATH));
-    QQmlComponent component(&engine);
-    component.setData(
+    DocumentInteractionFixture fixture;
+    QVERIFY2(fixture.initialize(), qPrintable(fixture.error));
+    QVERIFY2(fixture.surface_component->isReady(),
+             qPrintable(fixture.surface_component->errorString()));
+    QVERIFY(fixture.surface != nullptr);
+    QVERIFY(fixture.canvas != nullptr);
+
+    QQmlComponent probe_component(fixture.engine.get());
+    probe_component.setData(
         QByteArrayLiteral("import QtQuick\n"
                           "import Caret.ViewModels\n"
                           "Item {\n"
@@ -822,8 +1217,8 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
                           "    property var miss: LayoutViewModel.hitTestDocument(-1, 73, 73)\n"
                           "}\n"),
         QUrl());
-    QVERIFY2(component.isReady(), qPrintable(component.errorString()));
-    QObject* probe = component.create();
+    QVERIFY2(probe_component.isReady(), qPrintable(probe_component.errorString()));
+    QObject* probe = probe_component.create();
     QVERIFY(probe != nullptr);
     const QVariantMap hit = probe->property("hit").toMap();
     QVERIFY(hit.value(QStringLiteral("valid")).toBool());
@@ -838,165 +1233,121 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
         QStringLiteral("body"));
     delete probe;
 
-    QQmlComponent surface_component(&engine);
-    surface_component.setData(QByteArrayLiteral("import QtQuick\n"
-                                                "import Caret.Shell\n"
-                                                "PageSurface { width: 500; height: 500 }\n"),
-                              QUrl());
-    QVERIFY2(surface_component.isReady(), qPrintable(surface_component.errorString()));
-    auto* surface = qobject_cast<QQuickItem*>(surface_component.create());
-    QVERIFY(surface != nullptr);
-    auto* canvas = surface->findChild<caret::DocumentCanvas*>(QStringLiteral("documentCanvas"));
-    QVERIFY(canvas != nullptr);
-
-    QQuickWindow window;
-    window.resize(500, 500);
-    surface->setParentItem(window.contentItem());
-    QSignalSpy position_spy(surface, SIGNAL(documentPositionHit(QVariant)));
-    QVERIFY(position_spy.isValid());
-    window.show();
-    QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 3000);
-    const QSizeF page_size = canvas->pageSizesPt().front().toSizeF();
+    QTRY_VERIFY_WITH_TIMEOUT(fixture.window.isExposed(), 3000);
+    const QSizeF page_size = fixture.canvas->pageSizesPt().front().toSizeF();
     const QPointF page_center(std::min(100.0, page_size.width()), 140.0);
-    const QPointF content_point = canvas->documentToContent(0, page_center);
-    const QVariantMap page_hit = canvas->hitTestPage(content_point);
+    const QPointF content_point = fixture.canvas->documentToContent(0, page_center);
+    const QVariantMap page_hit = fixture.canvas->hitTestPage(content_point);
     QCOMPARE(page_hit.value(QStringLiteral("pageIndex")).toInt(), 0);
-    auto* layout_view_model =
-        engine.singletonInstance<caret::LayoutViewModel*>("Caret.ViewModels", "LayoutViewModel");
-    QVERIFY(layout_view_model != nullptr);
+    QVERIFY(fixture.layout_view_model != nullptr);
     const QVariantMap invalid_glyph_request =
-        layout_view_model->rasterizePageGlyphs(-1, 1.0, 0.0, 0.0, 0, 0, 0, 255);
+        fixture.layout_view_model->rasterizePageGlyphs(-1, 1.0, 0.0, 0.0, 0, 0, 0, 255);
     QVERIFY(!invalid_glyph_request.value(QStringLiteral("valid")).toBool());
     QCOMPARE(invalid_glyph_request.value(QStringLiteral("error")).toString(),
              QStringLiteral("layout.glyphs_invalid_request"));
-    const QVariantMap rust_hit =
-        layout_view_model->hitTestDocument(page_hit.value(QStringLiteral("pageIndex")).toInt(),
-                                           page_hit.value(QStringLiteral("xPt")).toReal(),
-                                           page_hit.value(QStringLiteral("yPt")).toReal());
+    const QVariantMap rust_hit = fixture.layout_view_model->hitTestDocument(
+        page_hit.value(QStringLiteral("pageIndex")).toInt(),
+        page_hit.value(QStringLiteral("xPt")).toReal(),
+        page_hit.value(QStringLiteral("yPt")).toReal());
     QVERIFY2(rust_hit.value(QStringLiteral("valid")).toBool(),
              qPrintable(rust_hit.value(QStringLiteral("error")).toString()));
-    const QPointF window_point = canvas->mapToItem(window.contentItem(), content_point);
-    QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, window_point.toPoint());
+}
+
+void ShellLoadTest::documentCanvasClickAndTypingPublishRustSnapshot() {
+    DocumentInteractionFixture fixture;
+    QVERIFY2(prepareDocumentInteractionAt(fixture, 0), qPrintable(fixture.error));
+    const QSizeF page_size = fixture.canvas->pageSizesPt().front().toSizeF();
+    const QPointF page_center(std::min(100.0, page_size.width()), 140.0);
+    const QPointF content_point = fixture.canvas->documentToContent(0, page_center);
+    QSignalSpy position_spy(fixture.surface, SIGNAL(documentPositionHit(QVariant)));
+    QVERIFY(position_spy.isValid());
+    const QPointF window_point =
+        fixture.canvas->mapToItem(fixture.window.contentItem(), content_point);
+    QTest::mouseClick(&fixture.window, Qt::LeftButton, Qt::NoModifier, window_point.toPoint());
     QTRY_COMPARE_WITH_TIMEOUT(position_spy.size(), 1, 3000);
-    QTRY_VERIFY_WITH_TIMEOUT(canvas->hasActiveFocus(), 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(fixture.canvas->hasActiveFocus(), 3000);
     const QVariantMap clicked_hit = position_spy.takeFirst().at(0).toMap();
     QVERIFY(clicked_hit.value(QStringLiteral("valid")).toBool());
     QCOMPARE(clicked_hit.value(QStringLiteral("documentGeneration")).toString(),
              QStringLiteral("0"));
-    const qreal initial_caret_x = canvas->caretGeometry().value(QStringLiteral("xPt")).toReal();
-    QSignalSpy text_input_spy(canvas, &caret::DocumentCanvas::textInputRequested);
+    const qreal initial_caret_x =
+        fixture.canvas->caretGeometry().value(QStringLiteral("xPt")).toReal();
+    QSignalSpy text_input_spy(fixture.canvas, &caret::DocumentCanvas::textInputRequested);
     QVERIFY(text_input_spy.isValid());
-    QSignalSpy editor_key_spy(canvas, &caret::DocumentCanvas::editorKeyRequested);
+    QSignalSpy editor_key_spy(fixture.canvas, &caret::DocumentCanvas::editorKeyRequested);
     QVERIFY(editor_key_spy.isValid());
-    QTest::keyClick(&window, Qt::Key_X);
+    QTest::keyClick(&fixture.window, Qt::Key_X);
     QTRY_COMPARE_WITH_TIMEOUT(text_input_spy.size(), 1, 3000);
     QCOMPARE(text_input_spy.takeFirst().at(0).toString(), QStringLiteral("x"));
-    QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->documentGeneration(), QStringLiteral("1"), 3000);
-    QCOMPARE(layout_view_model->paragraphLayouts()
+    QTRY_COMPARE_WITH_TIMEOUT(fixture.layout_view_model->documentGeneration(), QStringLiteral("1"),
+                              3000);
+    QCOMPARE(fixture.layout_view_model->paragraphLayouts()
                  .first()
                  .toMap()
                  .value(QStringLiteral("text"))
                  .toString(),
              QStringLiteral("x"));
-    QTRY_VERIFY_WITH_TIMEOUT(
-        canvas->caretGeometry().value(QStringLiteral("xPt")).toReal() > initial_caret_x, 3000);
-    QTRY_VERIFY_WITH_TIMEOUT(!canvas->glyphFrames().isEmpty() &&
-                                 canvas->glyphFrames()
+    QTRY_VERIFY_WITH_TIMEOUT(fixture.canvas->caretGeometry().value(QStringLiteral("xPt")).toReal() >
+                                 initial_caret_x,
+                             3000);
+    QTRY_VERIFY_WITH_TIMEOUT(!fixture.canvas->glyphFrames().isEmpty() &&
+                                 fixture.canvas->glyphFrames()
                                          .first()
                                          .toMap()
                                          .value(QStringLiteral("documentGeneration"))
                                          .toString() == QStringLiteral("1") &&
-                                 !canvas->glyphFrames()
+                                 !fixture.canvas->glyphFrames()
                                       .first()
                                       .toMap()
                                       .value(QStringLiteral("placements"))
                                       .toList()
                                       .isEmpty(),
                              3000);
-    const QVariantMap updated_glyph_frame = canvas->glyphFrames().first().toMap();
+    const QVariantMap updated_glyph_frame = fixture.canvas->glyphFrames().first().toMap();
     QCOMPARE(updated_glyph_frame.value(QStringLiteral("documentGeneration")).toString(),
              QStringLiteral("1"));
     QVERIFY(!updated_glyph_frame.value(QStringLiteral("placements")).toList().isEmpty());
+}
 
-    const auto rendered_glyph_has_ink = [&](qsizetype placement_index) {
-        const QImage frame = window.grabWindow();
-        if (frame.isNull()) {
-            return false;
-        }
-        const QVariantMap current_frame = canvas->glyphFrames().first().toMap();
-        const QVariantList images = current_frame.value(QStringLiteral("images")).toList();
-        const QVariantList placements = current_frame.value(QStringLiteral("placements")).toList();
-        if (images.isEmpty() || placement_index < 0 || placement_index >= placements.size()) {
-            return false;
-        }
-        const QVariantMap placement = placements.at(placement_index).toMap();
-        const quint32 image_index = placement.value(QStringLiteral("imageIndex")).toUInt();
-        if (image_index >= static_cast<quint32>(images.size())) {
-            return false;
-        }
-        const QVariantMap image = images.at(static_cast<qsizetype>(image_index)).toMap();
-        const bool phase_applied = placement.value(QStringLiteral("pixelPhaseApplied")).toBool();
-        const qreal phase_x =
-            phase_applied ? placement.value(QStringLiteral("pixelPhaseX")).toReal() : 0.0;
-        const qreal phase_y =
-            phase_applied ? placement.value(QStringLiteral("pixelPhaseY")).toReal() : 0.0;
-        const qreal image_scale = canvas->zoom() * 96.0 / 72.0 /
-                                  current_frame.value(QStringLiteral("rasterPxPerPt")).toReal();
-        const QPointF baseline = canvas->mapToItem(
-            window.contentItem(),
-            canvas->documentToContent(
-                0, QPointF(placement.value(QStringLiteral("xPt")).toReal(),
-                           placement.value(QStringLiteral("baselineYPt")).toReal())));
-        const QRectF glyph_rect(
-            baseline.x() + (image.value(QStringLiteral("left")).toReal() - phase_x) * image_scale,
-            baseline.y() + (-image.value(QStringLiteral("top")).toReal() - phase_y) * image_scale,
-            image.value(QStringLiteral("width")).toReal() * image_scale,
-            image.value(QStringLiteral("height")).toReal() * image_scale);
-        const qreal pixels_per_x = static_cast<qreal>(frame.width()) / window.width();
-        const qreal pixels_per_y = static_cast<qreal>(frame.height()) / window.height();
-        const QRect pixel_rect(
-            qFloor(glyph_rect.left() * pixels_per_x), qFloor(glyph_rect.top() * pixels_per_y),
-            qCeil(glyph_rect.width() * pixels_per_x), qCeil(glyph_rect.height() * pixels_per_y));
-        const QRect clipped = pixel_rect.intersected(frame.rect());
-        if (clipped.isEmpty()) {
-            return false;
-        }
-        for (int y = clipped.top(); y <= clipped.bottom(); ++y) {
-            for (int x = clipped.left(); x <= clipped.right(); ++x) {
-                if (frame.pixelColor(x, y).lightness() < 240) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    };
-    QTRY_VERIFY_WITH_TIMEOUT(rendered_glyph_has_ink(0), 3000);
+void ShellLoadTest::documentCanvasRasterizesTypedGlyphWithInk() {
+    DocumentInteractionFixture fixture;
+    QVERIFY2(prepareDocumentInteractionAt(fixture, 1), qPrintable(fixture.error));
+    QVERIFY2(waitForGlyphFrame(fixture, QStringLiteral("1")), qPrintable(fixture.error));
+    QTRY_VERIFY_WITH_TIMEOUT(renderedGlyphHasInk(fixture, 0), 3000);
+}
 
+void ShellLoadTest::documentFontFallbackPreservesLatinBaseline() {
+    DocumentInteractionFixture fixture;
+    QVERIFY2(prepareDocumentInteractionAt(fixture, 1), qPrintable(fixture.error));
+    QVERIFY2(waitForGlyphFrame(fixture, QStringLiteral("1")), qPrintable(fixture.error));
+    const QVariantMap latin_glyph_frame = fixture.canvas->glyphFrames().first().toMap();
     const qreal latin_baseline_before_fallback =
-        updated_glyph_frame.value(QStringLiteral("placements"))
+        latin_glyph_frame.value(QStringLiteral("placements"))
             .toList()
             .first()
             .toMap()
             .value(QStringLiteral("baselineYPt"))
             .toReal();
-    const QVariantMap fullwidth_insert = layout_view_model->insertText(QStringLiteral("！"));
+    const QVariantMap fullwidth_insert =
+        fixture.layout_view_model->insertText(QStringLiteral("！"));
     QVERIFY2(fullwidth_insert.value(QStringLiteral("valid")).toBool(),
              qPrintable(fullwidth_insert.value(QStringLiteral("error")).toString()));
-    QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->documentGeneration(), QStringLiteral("2"), 3000);
-    QTRY_VERIFY_WITH_TIMEOUT(!canvas->glyphFrames().isEmpty() &&
-                                 canvas->glyphFrames()
+    QTRY_COMPARE_WITH_TIMEOUT(fixture.layout_view_model->documentGeneration(), QStringLiteral("2"),
+                              3000);
+    QTRY_VERIFY_WITH_TIMEOUT(!fixture.canvas->glyphFrames().isEmpty() &&
+                                 fixture.canvas->glyphFrames()
                                          .first()
                                          .toMap()
                                          .value(QStringLiteral("documentGeneration"))
                                          .toString() == QStringLiteral("2") &&
-                                 canvas->glyphFrames()
+                                 fixture.canvas->glyphFrames()
                                          .first()
                                          .toMap()
                                          .value(QStringLiteral("placements"))
                                          .toList()
                                          .size() >= 2,
                              3000);
-    const QVariantMap mixed_glyph_frame = canvas->glyphFrames().first().toMap();
+    const QVariantMap mixed_glyph_frame = fixture.canvas->glyphFrames().first().toMap();
     const qreal latin_baseline_after_fallback =
         mixed_glyph_frame.value(QStringLiteral("placements"))
             .toList()
@@ -1005,79 +1356,100 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
             .value(QStringLiteral("baselineYPt"))
             .toReal();
     QCOMPARE(latin_baseline_after_fallback, latin_baseline_before_fallback);
-    QTRY_VERIFY_WITH_TIMEOUT(rendered_glyph_has_ink(1), 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(renderedGlyphHasInk(fixture, 1), 3000);
+}
 
-    QTest::keyClick(&window, Qt::Key_Return);
+void ShellLoadTest::returnSplitsParagraphAndForwardsEditorKey() {
+    DocumentInteractionFixture fixture;
+    QVERIFY2(prepareDocumentInteractionAt(fixture, 2), qPrintable(fixture.error));
+    QSignalSpy editor_key_spy(fixture.canvas, &caret::DocumentCanvas::editorKeyRequested);
+    QVERIFY(editor_key_spy.isValid());
+    QTest::keyClick(&fixture.window, Qt::Key_Return);
     QTRY_COMPARE_WITH_TIMEOUT(editor_key_spy.size(), 1, 3000);
     QCOMPARE(editor_key_spy.takeFirst().at(0).toString(), QStringLiteral("enter"));
-    QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->documentGeneration(), QStringLiteral("3"), 3000);
-    QCOMPARE(layout_view_model->paragraphLayouts().size(), 2);
-    QCOMPARE(layout_view_model->paragraphLayouts()
+    QTRY_COMPARE_WITH_TIMEOUT(fixture.layout_view_model->documentGeneration(), QStringLiteral("3"),
+                              3000);
+    QCOMPARE(fixture.layout_view_model->paragraphLayouts().size(), 2);
+    QCOMPARE(fixture.layout_view_model->paragraphLayouts()
                  .at(0)
                  .toMap()
                  .value(QStringLiteral("text"))
                  .toString(),
              QStringLiteral("x！"));
-    QCOMPARE(layout_view_model->paragraphLayouts()
+    QCOMPARE(fixture.layout_view_model->paragraphLayouts()
                  .at(1)
                  .toMap()
                  .value(QStringLiteral("text"))
                  .toString(),
              QString());
+}
 
-    const qulonglong composition_revision = layout_view_model->layoutRevision();
+void ShellLoadTest::inputMethodCompositionUnderlineTracksPageTransforms() {
+    DocumentInteractionFixture fixture;
+    QVERIFY2(prepareDocumentInteractionAt(fixture, 3), qPrintable(fixture.error));
+    const qulonglong composition_revision = fixture.layout_view_model->layoutRevision();
     QList<QInputMethodEvent::Attribute> composition_attributes;
     composition_attributes.push_back(
         QInputMethodEvent::Attribute(QInputMethodEvent::Cursor, 2, 0, {}));
     QInputMethodEvent composition_event(QStringLiteral("ni hao"), composition_attributes);
-    QCoreApplication::sendEvent(canvas, &composition_event);
-    QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->layoutRevision(), composition_revision + 1, 3000);
-    QCOMPARE(layout_view_model->paragraphLayouts()
+    QCoreApplication::sendEvent(fixture.canvas, &composition_event);
+    QTRY_COMPARE_WITH_TIMEOUT(fixture.layout_view_model->layoutRevision(), composition_revision + 1,
+                              3000);
+    QCOMPARE(fixture.layout_view_model->paragraphLayouts()
                  .at(1)
                  .toMap()
                  .value(QStringLiteral("text"))
                  .toString(),
              QStringLiteral("ni hao"));
-    QVERIFY(!layout_view_model->compositionRects().isEmpty());
+    QVERIFY(!fixture.layout_view_model->compositionRects().isEmpty());
     QQuickItem* underline = nullptr;
-    for (QQuickItem* item : canvas->parentItem()->childItems()) {
+    for (QQuickItem* item : fixture.canvas->parentItem()->childItems()) {
         if (item->objectName() == QStringLiteral("compositionUnderline")) {
             underline = item;
             break;
         }
     }
     QVERIFY(underline != nullptr);
-    const QVariantMap composition_rect = layout_view_model->compositionRects().first().toMap();
+    const QVariantMap composition_rect =
+        fixture.layout_view_model->compositionRects().first().toMap();
     const auto expected_underline_start = [&]() {
-        return canvas->documentToContent(
+        return fixture.canvas->documentToContent(
             composition_rect.value(QStringLiteral("pageIndex")).toInt(),
             QPointF(composition_rect.value(QStringLiteral("x0Pt")).toReal(),
                     composition_rect.value(QStringLiteral("y0Pt")).toReal()));
     };
     QTRY_COMPARE_WITH_TIMEOUT(underline->x(), expected_underline_start().x(), 3000);
     QTRY_COMPARE_WITH_TIMEOUT(underline->y(), expected_underline_start().y(), 3000);
-    surface->setProperty("pageScale", 1.5);
+    fixture.surface->setProperty("pageScale", 1.5);
     QTRY_COMPARE_WITH_TIMEOUT(underline->x(), expected_underline_start().x(), 3000);
     QTRY_COMPARE_WITH_TIMEOUT(underline->y(), expected_underline_start().y(), 3000);
-    window.resize(window.width() + 100, window.height());
+    fixture.window.resize(fixture.window.width() + 100, fixture.window.height());
     QTRY_COMPARE_WITH_TIMEOUT(underline->x(), expected_underline_start().x(), 3000);
-    surface->setProperty("pageScale", 1.0);
-    QTRY_VERIFY_WITH_TIMEOUT(!canvas->glyphFrames().isEmpty() &&
-                                 !canvas->glyphFrames()
+    fixture.surface->setProperty("pageScale", 1.0);
+    QTRY_VERIFY_WITH_TIMEOUT(!fixture.canvas->glyphFrames().isEmpty() &&
+                                 !fixture.canvas->glyphFrames()
                                       .first()
                                       .toMap()
                                       .value(QStringLiteral("placements"))
                                       .toList()
                                       .isEmpty(),
                              3000);
+}
 
+void ShellLoadTest::mixedCompositionPublishesOneUnderlinePerRect() {
+    DocumentInteractionFixture fixture;
+    QVERIFY2(prepareDocumentInteractionAt(fixture, 3), qPrintable(fixture.error));
+    const qulonglong composition_revision = fixture.layout_view_model->layoutRevision();
+    QInputMethodEvent first_composition(QStringLiteral("ni hao"), {});
+    QCoreApplication::sendEvent(fixture.canvas, &first_composition);
     QInputMethodEvent mixed_composition(QStringLiteral("hello中文hello"), {});
-    QCoreApplication::sendEvent(canvas, &mixed_composition);
-    QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->layoutRevision(), composition_revision + 2, 3000);
-    const QVariantList mixed_rects = layout_view_model->compositionRects();
+    QCoreApplication::sendEvent(fixture.canvas, &mixed_composition);
+    QTRY_COMPARE_WITH_TIMEOUT(fixture.layout_view_model->layoutRevision(), composition_revision + 2,
+                              3000);
+    const QVariantList mixed_rects = fixture.layout_view_model->compositionRects();
     QVERIFY(!mixed_rects.isEmpty());
     QList<QQuickItem*> underlines;
-    for (QQuickItem* item : canvas->parentItem()->childItems()) {
+    for (QQuickItem* item : fixture.canvas->parentItem()->childItems()) {
         if (item->objectName() == QStringLiteral("compositionUnderline")) {
             underlines.push_back(item);
         }
@@ -1086,113 +1458,163 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
     for (qsizetype index = 0; index < mixed_rects.size(); ++index) {
         const QVariantMap rect = mixed_rects.at(index).toMap();
         const QPointF start =
-            canvas->documentToContent(rect.value(QStringLiteral("pageIndex")).toInt(),
-                                      QPointF(rect.value(QStringLiteral("x0Pt")).toReal(),
-                                              rect.value(QStringLiteral("y0Pt")).toReal()));
+            fixture.canvas->documentToContent(rect.value(QStringLiteral("pageIndex")).toInt(),
+                                              QPointF(rect.value(QStringLiteral("x0Pt")).toReal(),
+                                                      rect.value(QStringLiteral("y0Pt")).toReal()));
         QCOMPARE(underlines.at(index)->x(), start.x());
         QCOMPARE(underlines.at(index)->y(), start.y());
     }
+}
 
-    QTest::keyClick(&window, Qt::Key_Escape);
-    QTRY_VERIFY_WITH_TIMEOUT(canvas->preeditText().isEmpty(), 3000);
-    QTRY_VERIFY_WITH_TIMEOUT(layout_view_model->compositionRects().isEmpty(), 3000);
+void ShellLoadTest::cancelledCompositionClearsPreeditAndCompositionRects() {
+    DocumentInteractionFixture fixture;
+    QVERIFY2(prepareDocumentInteractionAt(fixture, 3), qPrintable(fixture.error));
+    QSignalSpy editor_key_spy(fixture.canvas, &caret::DocumentCanvas::editorKeyRequested);
+    QVERIFY(editor_key_spy.isValid());
+    const qulonglong composition_revision = fixture.layout_view_model->layoutRevision();
+    QInputMethodEvent composition_event(QStringLiteral("ni hao"), {});
+    QCoreApplication::sendEvent(fixture.canvas, &composition_event);
+    QInputMethodEvent mixed_composition(QStringLiteral("hello中文hello"), {});
+    QCoreApplication::sendEvent(fixture.canvas, &mixed_composition);
+    QTest::keyClick(&fixture.window, Qt::Key_Escape);
+    QTRY_VERIFY_WITH_TIMEOUT(fixture.canvas->preeditText().isEmpty(), 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(fixture.layout_view_model->compositionRects().isEmpty(), 3000);
     QTRY_COMPARE_WITH_TIMEOUT(editor_key_spy.size(), 1, 3000);
     QCOMPARE(editor_key_spy.takeFirst().at(0).toString(), QStringLiteral("escape"));
-    QVERIFY(layout_view_model->layoutRevision() >= composition_revision + 3);
-    QCOMPARE(layout_view_model->paragraphLayouts()
+    QVERIFY(fixture.layout_view_model->layoutRevision() >= composition_revision + 3);
+    QCOMPARE(fixture.layout_view_model->paragraphLayouts()
                  .at(1)
                  .toMap()
                  .value(QStringLiteral("text"))
                  .toString(),
              QString());
-    QVERIFY(layout_view_model->compositionRects().isEmpty());
+    QVERIFY(fixture.layout_view_model->compositionRects().isEmpty());
     const QVariantMap idle_ime_response =
-        layout_view_model->inputMethodEvent(QString(), QString(), 0, 0, 0);
+        fixture.layout_view_model->inputMethodEvent(QString(), QString(), 0, 0, 0);
     QVERIFY2(idle_ime_response.value(QStringLiteral("valid")).toBool(),
              qPrintable(idle_ime_response.value(QStringLiteral("error")).toString()));
-    QCOMPARE(layout_view_model->documentGeneration(), QStringLiteral("3"));
+    QCOMPARE(fixture.layout_view_model->documentGeneration(), QStringLiteral("3"));
+}
 
+void ShellLoadTest::escapeClosesCommandLineWithoutEditingTheDocument() {
+    DocumentInteractionFixture fixture;
+    QVERIFY2(prepareDocumentInteractionAt(fixture, 3), qPrintable(fixture.error));
+    QSignalSpy editor_key_spy(fixture.canvas, &caret::DocumentCanvas::editorKeyRequested);
+    QVERIFY(editor_key_spy.isValid());
     QKeyEvent command_start(QEvent::KeyPress, Qt::Key_Backslash, Qt::NoModifier,
                             QStringLiteral("\\"));
-    QCoreApplication::sendEvent(canvas, &command_start);
+    QCoreApplication::sendEvent(fixture.canvas, &command_start);
     QTRY_VERIFY_WITH_TIMEOUT(
-        layout_view_model->commandLine().value(QStringLiteral("active")).toBool(), 3000);
-    QTest::keyClick(&window, Qt::Key_Escape);
+        fixture.layout_view_model->commandLine().value(QStringLiteral("active")).toBool(), 3000);
+    QTest::keyClick(&fixture.window, Qt::Key_Escape);
     QTRY_VERIFY_WITH_TIMEOUT(
-        !layout_view_model->commandLine().value(QStringLiteral("active")).toBool(), 3000);
+        !fixture.layout_view_model->commandLine().value(QStringLiteral("active")).toBool(), 3000);
     QTRY_COMPARE_WITH_TIMEOUT(editor_key_spy.size(), 1, 3000);
     QCOMPARE(editor_key_spy.takeFirst().at(0).toString(), QStringLiteral("escape"));
-    QCOMPARE(layout_view_model->documentGeneration(), QStringLiteral("3"));
+    QCOMPARE(fixture.layout_view_model->documentGeneration(), QStringLiteral("3"));
+}
 
-    QTest::keyClick(&window, Qt::Key_Left);
-    QTRY_COMPARE_WITH_TIMEOUT(
-        layout_view_model->inputMethodContext().value(QStringLiteral("surroundingText")).toString(),
-        QStringLiteral("x！"), 3000);
-    QCOMPARE(
-        layout_view_model->inputMethodContext().value(QStringLiteral("cursorPosition")).toInt(), 2);
-    QTest::keyClick(&window, Qt::Key_Right);
-    QTRY_COMPARE_WITH_TIMEOUT(
-        layout_view_model->inputMethodContext().value(QStringLiteral("surroundingText")).toString(),
-        QString(), 3000);
+void ShellLoadTest::inputMethodContextTracksCaretNavigation() {
+    DocumentInteractionFixture fixture;
+    QVERIFY2(prepareDocumentInteractionAt(fixture, 3), qPrintable(fixture.error));
+    QTest::keyClick(&fixture.window, Qt::Key_Left);
+    QTRY_COMPARE_WITH_TIMEOUT(fixture.layout_view_model->inputMethodContext()
+                                  .value(QStringLiteral("surroundingText"))
+                                  .toString(),
+                              QStringLiteral("x！"), 3000);
+    QCOMPARE(fixture.layout_view_model->inputMethodContext()
+                 .value(QStringLiteral("cursorPosition"))
+                 .toInt(),
+             2);
+    QTest::keyClick(&fixture.window, Qt::Key_Right);
+    QTRY_COMPARE_WITH_TIMEOUT(fixture.layout_view_model->inputMethodContext()
+                                  .value(QStringLiteral("surroundingText"))
+                                  .toString(),
+                              QString(), 3000);
+}
 
-    QTest::keyClick(&window, Qt::Key_Backspace);
+void ShellLoadTest::backspaceMergesParagraphsAndDeletesText() {
+    DocumentInteractionFixture fixture;
+    QVERIFY2(prepareDocumentInteractionAt(fixture, 3), qPrintable(fixture.error));
+    QSignalSpy editor_key_spy(fixture.canvas, &caret::DocumentCanvas::editorKeyRequested);
+    QVERIFY(editor_key_spy.isValid());
+    QTest::keyClick(&fixture.window, Qt::Key_Backspace);
     QTRY_COMPARE_WITH_TIMEOUT(editor_key_spy.size(), 1, 3000);
     QCOMPARE(editor_key_spy.takeFirst().at(0).toString(), QStringLiteral("backspace"));
-    QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->documentGeneration(), QStringLiteral("4"), 3000);
-    QCOMPARE(layout_view_model->paragraphLayouts().size(), 1);
-    QCOMPARE(layout_view_model->paragraphLayouts()
+    QTRY_COMPARE_WITH_TIMEOUT(fixture.layout_view_model->documentGeneration(), QStringLiteral("4"),
+                              3000);
+    QCOMPARE(fixture.layout_view_model->paragraphLayouts().size(), 1);
+    QCOMPARE(fixture.layout_view_model->paragraphLayouts()
                  .first()
                  .toMap()
                  .value(QStringLiteral("text"))
                  .toString(),
              QStringLiteral("x！"));
-
-    QTest::keyClick(&window, Qt::Key_Backspace);
+    QTest::keyClick(&fixture.window, Qt::Key_Backspace);
     QTRY_COMPARE_WITH_TIMEOUT(editor_key_spy.size(), 1, 3000);
     QCOMPARE(editor_key_spy.takeFirst().at(0).toString(), QStringLiteral("backspace"));
-    QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->documentGeneration(), QStringLiteral("5"), 3000);
-    QCOMPARE(layout_view_model->paragraphLayouts()
+    QTRY_COMPARE_WITH_TIMEOUT(fixture.layout_view_model->documentGeneration(), QStringLiteral("5"),
+                              3000);
+    QCOMPARE(fixture.layout_view_model->paragraphLayouts()
                  .first()
                  .toMap()
                  .value(QStringLiteral("text"))
                  .toString(),
              QStringLiteral("x"));
-
-    QTest::keyClick(&window, Qt::Key_Backspace);
+    QTest::keyClick(&fixture.window, Qt::Key_Backspace);
     QTRY_COMPARE_WITH_TIMEOUT(editor_key_spy.size(), 1, 3000);
     QCOMPARE(editor_key_spy.takeFirst().at(0).toString(), QStringLiteral("backspace"));
-    QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->documentGeneration(), QStringLiteral("6"), 3000);
-    QCOMPARE(layout_view_model->paragraphLayouts()
+    QTRY_COMPARE_WITH_TIMEOUT(fixture.layout_view_model->documentGeneration(), QStringLiteral("6"),
+                              3000);
+    QCOMPARE(fixture.layout_view_model->paragraphLayouts()
                  .first()
                  .toMap()
                  .value(QStringLiteral("text"))
                  .toString(),
              QString());
+}
 
-    QTest::keyClick(&window, Qt::Key_Return, Qt::ShiftModifier);
+void ShellLoadTest::shiftEnterInsertsSoftBreakWithoutSplittingParagraph() {
+    DocumentInteractionFixture fixture;
+    QVERIFY2(prepareDocumentInteractionAt(fixture, 6), qPrintable(fixture.error));
+    QSignalSpy editor_key_spy(fixture.canvas, &caret::DocumentCanvas::editorKeyRequested);
+    QVERIFY(editor_key_spy.isValid());
+    QTest::keyClick(&fixture.window, Qt::Key_Return, Qt::ShiftModifier);
     QTRY_COMPARE_WITH_TIMEOUT(editor_key_spy.size(), 1, 3000);
     QCOMPARE(editor_key_spy.takeFirst().at(0).toString(), QStringLiteral("shift-enter"));
-    QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->documentGeneration(), QStringLiteral("7"), 3000);
+    QTRY_COMPARE_WITH_TIMEOUT(fixture.layout_view_model->documentGeneration(), QStringLiteral("7"),
+                              3000);
+}
 
-    const QVariantMap drag_text = layout_view_model->insertText(QStringLiteral("abc"));
+void ShellLoadTest::shiftNavigationProjectsSelectionRects() {
+    DocumentInteractionFixture fixture;
+    QVERIFY2(prepareDocumentInteractionAt(fixture, 7), qPrintable(fixture.error));
+    const QVariantMap drag_text = fixture.layout_view_model->insertText(QStringLiteral("abc"));
     QVERIFY2(drag_text.value(QStringLiteral("valid")).toBool(),
              qPrintable(drag_text.value(QStringLiteral("error")).toString()));
-    QCOMPARE(layout_view_model->documentGeneration(), QStringLiteral("8"));
-    QTest::keyClick(&window, Qt::Key_Left, Qt::ShiftModifier);
-    QTRY_COMPARE_WITH_TIMEOUT(
-        layout_view_model->inputMethodContext().value(QStringLiteral("anchorPosition")).toInt(), 4,
-        3000);
-    QTRY_COMPARE_WITH_TIMEOUT(
-        layout_view_model->inputMethodContext().value(QStringLiteral("cursorPosition")).toInt(), 3,
-        3000);
-    QTRY_VERIFY_WITH_TIMEOUT(!layout_view_model->selectionRects().isEmpty(), 3000);
-    QTest::keyClick(&window, Qt::Key_Right, Qt::ShiftModifier);
-    QTRY_COMPARE_WITH_TIMEOUT(
-        layout_view_model->inputMethodContext().value(QStringLiteral("cursorPosition")).toInt(), 4,
-        3000);
-    QTRY_VERIFY_WITH_TIMEOUT(layout_view_model->selectionRects().isEmpty(), 3000);
+    QCOMPARE(fixture.layout_view_model->documentGeneration(), QStringLiteral("8"));
+    QTest::keyClick(&fixture.window, Qt::Key_Left, Qt::ShiftModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(fixture.layout_view_model->inputMethodContext()
+                                  .value(QStringLiteral("anchorPosition"))
+                                  .toInt(),
+                              4, 3000);
+    QTRY_COMPARE_WITH_TIMEOUT(fixture.layout_view_model->inputMethodContext()
+                                  .value(QStringLiteral("cursorPosition"))
+                                  .toInt(),
+                              3, 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(!fixture.layout_view_model->selectionRects().isEmpty(), 3000);
+    QTest::keyClick(&fixture.window, Qt::Key_Right, Qt::ShiftModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(fixture.layout_view_model->inputMethodContext()
+                                  .value(QStringLiteral("cursorPosition"))
+                                  .toInt(),
+                              4, 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(fixture.layout_view_model->selectionRects().isEmpty(), 3000);
+}
 
-    const QVariantMap hit_map = layout_view_model->dragHitMap(0);
+void ShellLoadTest::dragSelectionCommitsSameRustSelectionProjection() {
+    DocumentInteractionFixture fixture;
+    QVERIFY2(prepareDocumentInteractionAt(fixture, 8), qPrintable(fixture.error));
+    const QVariantMap hit_map = fixture.layout_view_model->dragHitMap(0);
     QVERIFY2(hit_map.value(QStringLiteral("valid")).toBool(),
              qPrintable(hit_map.value(QStringLiteral("error")).toString()));
     const QVariantList stops = hit_map.value(QStringLiteral("stops")).toList();
@@ -1215,35 +1637,24 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
     QVERIFY(!drag_start.isEmpty());
     QVERIFY(!drag_preview_start.isEmpty());
     QVERIFY(!drag_end.isEmpty());
-    const auto stop_point = [canvas](const QVariantMap& stop) {
-        return canvas->documentToContent(
-            stop.value(QStringLiteral("pageIndex")).toInt(),
-            QPointF(stop.value(QStringLiteral("xPt")).toReal(),
-                    stop.value(QStringLiteral("y0Pt")).toReal() + 3.0));
-    };
-    QObject* scroller = surface->findChild<QObject*>(QStringLiteral("documentScroller"));
-    QVERIFY(scroller != nullptr);
-    QObject* selection_drag = surface->findChild<QObject*>(QStringLiteral("documentSelectionDrag"));
-    QVERIFY(selection_drag != nullptr);
-    QObject* pointer_handler =
-        surface->findChild<QObject*>(QStringLiteral("documentCanvasPointerHandler"));
-    QVERIFY(pointer_handler != nullptr);
-    const qreal drag_scroll_y = scroller->property("contentY").toReal();
-    const QPointF drag_preview_start_window =
-        canvas->mapToItem(window.contentItem(), stop_point(drag_preview_start));
-    const QPointF drag_start_window =
-        canvas->mapToItem(window.contentItem(), stop_point(drag_start));
-    const QPointF drag_end_window = canvas->mapToItem(window.contentItem(), stop_point(drag_end));
-    const QRectF ime_caret_before_drag = canvas->inputMethodQuery(Qt::ImCursorRectangle).toRectF();
-    QTest::mousePress(&window, Qt::LeftButton, Qt::NoModifier, drag_preview_start_window.toPoint());
+    QVERIFY(fixture.scroller != nullptr);
+    QVERIFY(fixture.selection_drag != nullptr);
+    QVERIFY(fixture.pointer_handler != nullptr);
+    const qreal drag_scroll_y = fixture.scroller->property("contentY").toReal();
+    const QPointF drag_preview_start_window = documentStopWindowPoint(fixture, drag_preview_start);
+    const QPointF drag_end_window = documentStopWindowPoint(fixture, drag_end);
+    const QRectF ime_caret_before_drag =
+        fixture.canvas->inputMethodQuery(Qt::ImCursorRectangle).toRectF();
+    QTest::mousePress(&fixture.window, Qt::LeftButton, Qt::NoModifier,
+                      drag_preview_start_window.toPoint());
     const QPoint drag_end_point = drag_end_window.toPoint();
     QMouseEvent drag_move(QEvent::MouseMove, drag_end_window, drag_end_window,
-                          window.mapToGlobal(drag_end_point), Qt::NoButton, Qt::LeftButton,
+                          fixture.window.mapToGlobal(drag_end_point), Qt::NoButton, Qt::LeftButton,
                           Qt::NoModifier);
-    QCoreApplication::sendEvent(&window, &drag_move);
-    QTRY_VERIFY_WITH_TIMEOUT(selection_drag->property("active").toBool(), 3000);
-    const QVariantMap preview_anchor = pointer_handler->property("dragAnchor").toMap();
-    const QVariantMap preview_focus = pointer_handler->property("dragFocus").toMap();
+    QCoreApplication::sendEvent(&fixture.window, &drag_move);
+    QTRY_VERIFY_WITH_TIMEOUT(fixture.selection_drag->property("active").toBool(), 3000);
+    const QVariantMap preview_anchor = fixture.pointer_handler->property("dragAnchor").toMap();
+    const QVariantMap preview_focus = fixture.pointer_handler->property("dragFocus").toMap();
     QVERIFY(!preview_anchor.isEmpty());
     QVERIFY(!preview_focus.isEmpty());
     QVERIFY(preview_anchor.value(QStringLiteral("position"))
@@ -1252,19 +1663,21 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
             preview_focus.value(QStringLiteral("position"))
                 .toMap()
                 .value(QStringLiteral("offsetUtf8")));
-    QTRY_COMPARE_WITH_TIMEOUT(canvas->caretPreviewGeometry().value(QStringLiteral("xPt")).toReal(),
-                              preview_focus.value(QStringLiteral("xPt")).toReal(), 3000);
-    QCOMPARE(canvas->caretPreviewGeometry().value(QStringLiteral("pageIndex")).toInt(),
+    QTRY_COMPARE_WITH_TIMEOUT(
+        fixture.canvas->caretPreviewGeometry().value(QStringLiteral("xPt")).toReal(),
+        preview_focus.value(QStringLiteral("xPt")).toReal(), 3000);
+    QCOMPARE(fixture.canvas->caretPreviewGeometry().value(QStringLiteral("pageIndex")).toInt(),
              preview_focus.value(QStringLiteral("pageIndex")).toInt());
-    QCOMPARE(canvas->inputMethodQuery(Qt::ImCursorRectangle).toRectF(), ime_caret_before_drag);
+    QCOMPARE(fixture.canvas->inputMethodQuery(Qt::ImCursorRectangle).toRectF(),
+             ime_caret_before_drag);
     // 正文拖选在拖动中直接提交同一 Rust 选区投影；预览矩形列表保持为空，画布消费
     // selectionRects，因此跨公式块/块环境也能在拖动中显示与松手后一致的高亮。
-    QTRY_VERIFY_WITH_TIMEOUT(canvas->selectionPreviewRects().isEmpty(), 3000);
-    QTRY_VERIFY_WITH_TIMEOUT(!layout_view_model->selectionRects().isEmpty(), 3000);
-    const QVariantList preview_rectangles = layout_view_model->selectionRects();
-    QTest::mouseRelease(&window, Qt::LeftButton, Qt::NoModifier, drag_end_window.toPoint());
-    QTRY_VERIFY_WITH_TIMEOUT(!layout_view_model->selectionRects().isEmpty(), 3000);
-    const QVariantList committed_rectangles = layout_view_model->selectionRects();
+    QTRY_VERIFY_WITH_TIMEOUT(fixture.canvas->selectionPreviewRects().isEmpty(), 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(!fixture.layout_view_model->selectionRects().isEmpty(), 3000);
+    const QVariantList preview_rectangles = fixture.layout_view_model->selectionRects();
+    QTest::mouseRelease(&fixture.window, Qt::LeftButton, Qt::NoModifier, drag_end_window.toPoint());
+    QTRY_VERIFY_WITH_TIMEOUT(!fixture.layout_view_model->selectionRects().isEmpty(), 3000);
+    const QVariantList committed_rectangles = fixture.layout_view_model->selectionRects();
     const auto selection_bounds = [](const QVariantList& rectangles) {
         QRectF bounds;
         for (const QVariant& value : rectangles) {
@@ -1280,95 +1693,146 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
         return bounds;
     };
     QCOMPARE(selection_bounds(preview_rectangles), selection_bounds(committed_rectangles));
-    QVERIFY(canvas->selectionPreviewRects().isEmpty());
-    QVERIFY(canvas->caretPreviewGeometry().isEmpty());
-    QCOMPARE(scroller->property("contentY").toReal(), drag_scroll_y);
-    QCOMPARE(layout_view_model->documentGeneration(), QStringLiteral("8"));
-    QCOMPARE(
-        layout_view_model->inputMethodContext().value(QStringLiteral("anchorPosition")).toInt(), 0);
-    QCOMPARE(
-        layout_view_model->inputMethodContext().value(QStringLiteral("cursorPosition")).toInt(), 4);
+    QVERIFY(fixture.canvas->selectionPreviewRects().isEmpty());
+    QVERIFY(fixture.canvas->caretPreviewGeometry().isEmpty());
+    QCOMPARE(fixture.scroller->property("contentY").toReal(), drag_scroll_y);
+    QCOMPARE(fixture.layout_view_model->documentGeneration(), QStringLiteral("8"));
+    QCOMPARE(fixture.layout_view_model->inputMethodContext()
+                 .value(QStringLiteral("anchorPosition"))
+                 .toInt(),
+             0);
+    QCOMPARE(fixture.layout_view_model->inputMethodContext()
+                 .value(QStringLiteral("cursorPosition"))
+                 .toInt(),
+             4);
+}
 
-    QTest::mousePress(&window, Qt::LeftButton, Qt::NoModifier, drag_end_window.toPoint());
+void ShellLoadTest::reverseDragMovesInputMethodCaretToFocus() {
+    DocumentInteractionFixture fixture;
+    QVERIFY2(prepareDocumentInteractionAt(fixture, 8), qPrintable(fixture.error));
+    const DocumentDragStops stops = findDocumentDragStops(fixture);
+    QVERIFY2(stops.valid, qPrintable(fixture.error));
+    const QPointF drag_preview_start_window = documentStopWindowPoint(fixture, stops.preview_start);
+    const QPointF drag_end_window = documentStopWindowPoint(fixture, stops.end);
+    QTest::mousePress(&fixture.window, Qt::LeftButton, Qt::NoModifier, drag_end_window.toPoint());
     QMouseEvent reverse_drag_move(QEvent::MouseMove, drag_preview_start_window,
                                   drag_preview_start_window,
-                                  window.mapToGlobal(drag_preview_start_window.toPoint()),
+                                  fixture.window.mapToGlobal(drag_preview_start_window.toPoint()),
                                   Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
-    QCoreApplication::sendEvent(&window, &reverse_drag_move);
-    QTRY_VERIFY_WITH_TIMEOUT(selection_drag->property("active").toBool(), 3000);
-    const QVariantMap reverse_focus = pointer_handler->property("dragFocus").toMap();
+    QCoreApplication::sendEvent(&fixture.window, &reverse_drag_move);
+    QTRY_VERIFY_WITH_TIMEOUT(fixture.selection_drag->property("active").toBool(), 3000);
+    const QVariantMap reverse_focus = fixture.pointer_handler->property("dragFocus").toMap();
     QCOMPARE(reverse_focus.value(QStringLiteral("position"))
                  .toMap()
                  .value(QStringLiteral("offsetUtf8"))
                  .toString(),
              QStringLiteral("0"));
-    QTRY_COMPARE_WITH_TIMEOUT(canvas->caretPreviewGeometry().value(QStringLiteral("xPt")).toReal(),
-                              reverse_focus.value(QStringLiteral("xPt")).toReal(), 3000);
+    QTRY_COMPARE_WITH_TIMEOUT(
+        fixture.canvas->caretPreviewGeometry().value(QStringLiteral("xPt")).toReal(),
+        reverse_focus.value(QStringLiteral("xPt")).toReal(), 3000);
     // 正文拖选在拖动中提交选区，输入法光标随之移动到反向拖动焦点，而不是冻结在原位。
-    const QPointF reverse_focus_content = stop_point(reverse_focus);
-    QTRY_COMPARE_WITH_TIMEOUT(qRound(canvas->inputMethodQuery(Qt::ImCursorRectangle).toRectF().x()),
-                              qRound(reverse_focus_content.x()), 3000);
-    QTest::mouseRelease(&window, Qt::LeftButton, Qt::NoModifier,
+    const QPointF reverse_focus_content = documentStopPoint(fixture, reverse_focus);
+    QTRY_COMPARE_WITH_TIMEOUT(
+        qRound(fixture.canvas->inputMethodQuery(Qt::ImCursorRectangle).toRectF().x()),
+        qRound(reverse_focus_content.x()), 3000);
+    QTest::mouseRelease(&fixture.window, Qt::LeftButton, Qt::NoModifier,
                         drag_preview_start_window.toPoint());
-    QTRY_COMPARE_WITH_TIMEOUT(
-        layout_view_model->inputMethodContext().value(QStringLiteral("anchorPosition")).toInt(), 4,
-        3000);
-    QTRY_COMPARE_WITH_TIMEOUT(
-        layout_view_model->inputMethodContext().value(QStringLiteral("cursorPosition")).toInt(), 0,
-        3000);
-    QVERIFY(canvas->caretPreviewGeometry().isEmpty());
-    QCOMPARE(canvas->caretGeometry().value(QStringLiteral("xPt")).toReal(),
+    QTRY_COMPARE_WITH_TIMEOUT(fixture.layout_view_model->inputMethodContext()
+                                  .value(QStringLiteral("anchorPosition"))
+                                  .toInt(),
+                              4, 3000);
+    QTRY_COMPARE_WITH_TIMEOUT(fixture.layout_view_model->inputMethodContext()
+                                  .value(QStringLiteral("cursorPosition"))
+                                  .toInt(),
+                              0, 3000);
+    QVERIFY(fixture.canvas->caretPreviewGeometry().isEmpty());
+    QCOMPARE(fixture.canvas->caretGeometry().value(QStringLiteral("xPt")).toReal(),
              reverse_focus.value(QStringLiteral("xPt")).toReal());
+}
 
-    QSignalSpy copy_key_spy(canvas, &caret::DocumentCanvas::editorKeyRequested);
+void ShellLoadTest::clipboardCopyPasteUsesRustSelectionProjection() {
+    DocumentInteractionFixture fixture;
+    QVERIFY2(prepareDocumentInteractionAt(fixture, 8), qPrintable(fixture.error));
+    const DocumentDragStops stops = findDocumentDragStops(fixture);
+    QVERIFY2(stops.valid, qPrintable(fixture.error));
+    QVERIFY(fixture.layout_view_model->setSelection(stops.preview_start, stops.end)
+                .value(QStringLiteral("valid"))
+                .toBool());
+    QSignalSpy copy_key_spy(fixture.canvas, &caret::DocumentCanvas::editorKeyRequested);
     QVERIFY(copy_key_spy.isValid());
-    QTest::keyClick(&window, Qt::Key_C, Qt::ControlModifier);
+    QTest::keyClick(&fixture.window, Qt::Key_C, Qt::ControlModifier);
     QTRY_COMPARE_WITH_TIMEOUT(copy_key_spy.size(), 1, 3000);
     QCOMPARE(copy_key_spy.takeFirst().at(0).toString(), QStringLiteral("mod-c"));
     QCOMPARE(QGuiApplication::clipboard()->text(), QStringLiteral("\nabc"));
-    QVERIFY(layout_view_model->setSelection(drag_start, drag_end)
+    QVERIFY(fixture.layout_view_model->setSelection(stops.start, stops.end)
                 .value(QStringLiteral("valid"))
                 .toBool());
-    QTest::keyClick(&window, Qt::Key_C, Qt::ControlModifier);
+    QTest::keyClick(&fixture.window, Qt::Key_C, Qt::ControlModifier);
     QTRY_COMPARE_WITH_TIMEOUT(copy_key_spy.size(), 1, 3000);
     QCOMPARE(copy_key_spy.takeFirst().at(0).toString(), QStringLiteral("mod-c"));
     QCOMPARE(QGuiApplication::clipboard()->text(), QStringLiteral("abc"));
-    QTest::keyClick(&window, Qt::Key_V, Qt::ControlModifier);
-    QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->documentGeneration(), QStringLiteral("9"), 3000);
+    QTest::keyClick(&fixture.window, Qt::Key_V, Qt::ControlModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(fixture.layout_view_model->documentGeneration(), QStringLiteral("9"),
+                              3000);
+}
 
-    QVERIFY(layout_view_model->setSelection(drag_start, drag_end)
+void ShellLoadTest::selectionDragFromExistingSelectionPublishesCanvasRects() {
+    DocumentInteractionFixture fixture;
+    QVERIFY2(prepareDocumentInteractionAt(fixture, 8), qPrintable(fixture.error));
+    const DocumentDragStops stops = findDocumentDragStops(fixture);
+    QVERIFY2(stops.valid, qPrintable(fixture.error));
+    const QPointF drag_start_window = documentStopWindowPoint(fixture, stops.start);
+    const QPointF drag_end_window = documentStopWindowPoint(fixture, stops.end);
+    QVERIFY(fixture.layout_view_model->setSelection(stops.start, stops.end)
                 .value(QStringLiteral("valid"))
                 .toBool());
-    QTest::mousePress(&window, Qt::LeftButton, Qt::NoModifier, drag_start_window.toPoint());
-    QCoreApplication::sendEvent(&window, &drag_move);
-    QTRY_VERIFY_WITH_TIMEOUT(pointer_handler->property("selectionDragActive").toBool(), 3000);
-    QVERIFY(!layout_view_model->selectionRects().isEmpty());
-    QTRY_VERIFY_WITH_TIMEOUT(!canvas->selectionRects().isEmpty(), 3000);
-    QTest::mouseRelease(&window, Qt::LeftButton, Qt::NoModifier, drag_end_window.toPoint());
-    QTRY_VERIFY_WITH_TIMEOUT(!pointer_handler->property("selectionDragActive").toBool(), 3000);
-    QTRY_VERIFY_WITH_TIMEOUT(!canvas->selectionRects().isEmpty(), 3000);
+    QTest::mousePress(&fixture.window, Qt::LeftButton, Qt::NoModifier, drag_start_window.toPoint());
+    QMouseEvent drag_move(QEvent::MouseMove, drag_end_window, drag_end_window,
+                          fixture.window.mapToGlobal(drag_end_window.toPoint()), Qt::NoButton,
+                          Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(&fixture.window, &drag_move);
+    QTRY_VERIFY_WITH_TIMEOUT(fixture.pointer_handler->property("selectionDragActive").toBool(),
+                             3000);
+    QVERIFY(!fixture.layout_view_model->selectionRects().isEmpty());
+    QTRY_VERIFY_WITH_TIMEOUT(!fixture.canvas->selectionRects().isEmpty(), 3000);
+    QTest::mouseRelease(&fixture.window, Qt::LeftButton, Qt::NoModifier, drag_end_window.toPoint());
+    QTRY_VERIFY_WITH_TIMEOUT(!fixture.pointer_handler->property("selectionDragActive").toBool(),
+                             3000);
+    QTRY_VERIFY_WITH_TIMEOUT(!fixture.canvas->selectionRects().isEmpty(), 3000);
+}
 
-    QVERIFY(layout_view_model->setSelection(drag_start, drag_end)
+void ShellLoadTest::mouseClickClearsSelectionInsideAndOutsideText() {
+    DocumentInteractionFixture fixture;
+    QVERIFY2(prepareDocumentInteractionAt(fixture, 8), qPrintable(fixture.error));
+    const DocumentDragStops stops = findDocumentDragStops(fixture);
+    QVERIFY2(stops.valid, qPrintable(fixture.error));
+    const QPointF drag_start_window = documentStopWindowPoint(fixture, stops.start);
+    QVERIFY(fixture.layout_view_model->setSelection(stops.start, stops.end)
                 .value(QStringLiteral("valid"))
                 .toBool());
-    QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, drag_start_window.toPoint());
-    QTRY_VERIFY_WITH_TIMEOUT(layout_view_model->selectionRects().isEmpty(), 3000);
-
-    QVERIFY(layout_view_model->setSelection(drag_start, drag_end)
+    QTest::mouseClick(&fixture.window, Qt::LeftButton, Qt::NoModifier, drag_start_window.toPoint());
+    QTRY_VERIFY_WITH_TIMEOUT(fixture.layout_view_model->selectionRects().isEmpty(), 3000);
+    QVERIFY(fixture.layout_view_model->setSelection(stops.start, stops.end)
                 .value(QStringLiteral("valid"))
                 .toBool());
-    QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, QPoint(1, 1));
-    QTRY_VERIFY_WITH_TIMEOUT(layout_view_model->selectionRects().isEmpty(), 3000);
+    QTest::mouseClick(&fixture.window, Qt::LeftButton, Qt::NoModifier, QPoint(1, 1));
+    QTRY_VERIFY_WITH_TIMEOUT(fixture.layout_view_model->selectionRects().isEmpty(), 3000);
+}
 
-    QVERIFY(layout_view_model->setSelection(drag_start, drag_end)
+void ShellLoadTest::multilinePasteSplitsParagraphs() {
+    DocumentInteractionFixture fixture;
+    QVERIFY2(prepareDocumentInteractionAt(fixture, 9), qPrintable(fixture.error));
+    const DocumentDragStops stops = findDocumentDragStops(fixture);
+    QVERIFY2(stops.valid, qPrintable(fixture.error));
+    QVERIFY(fixture.layout_view_model->setSelection(stops.start, stops.end)
                 .value(QStringLiteral("valid"))
                 .toBool());
-    const QString text_before_multiline_paste = layout_view_model->paragraphLayouts()
+    const QString text_before_multiline_paste = fixture.layout_view_model->paragraphLayouts()
                                                     .at(0)
                                                     .toMap()
                                                     .value(QStringLiteral("text"))
                                                     .toString();
-    const auto drag_start_offset = drag_start.value(QStringLiteral("position"))
+    const auto drag_start_offset = stops.start.value(QStringLiteral("position"))
                                        .toMap()
                                        .value(QStringLiteral("offsetUtf8"))
                                        .toString()
@@ -1377,25 +1841,30 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
         QString::fromUtf8(text_before_multiline_paste.toUtf8().first(drag_start_offset)) +
         QStringLiteral("left");
     QGuiApplication::clipboard()->setText(QStringLiteral("left\nright"));
-    QTest::keyClick(&window, Qt::Key_V, Qt::ControlModifier);
-    QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->documentGeneration(), QStringLiteral("10"), 3000);
-    QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->paragraphLayouts().size(), 2, 3000);
-    QCOMPARE(layout_view_model->paragraphLayouts()
+    QTest::keyClick(&fixture.window, Qt::Key_V, Qt::ControlModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(fixture.layout_view_model->documentGeneration(), QStringLiteral("10"),
+                              3000);
+    QTRY_COMPARE_WITH_TIMEOUT(fixture.layout_view_model->paragraphLayouts().size(), 2, 3000);
+    QCOMPARE(fixture.layout_view_model->paragraphLayouts()
                  .at(0)
                  .toMap()
                  .value(QStringLiteral("text"))
                  .toString(),
              expected_first_paragraph);
-    QCOMPARE(layout_view_model->paragraphLayouts()
+    QCOMPARE(fixture.layout_view_model->paragraphLayouts()
                  .at(1)
                  .toMap()
                  .value(QStringLiteral("text"))
                  .toString(),
              QStringLiteral("right"));
+}
 
-    const QVariantMap replacement_hit_map = layout_view_model->dragHitMap(0);
+void ShellLoadTest::insertReplacementClearsSelectionAndPublishesInteractionChange() {
+    DocumentInteractionFixture fixture;
+    QVERIFY2(prepareDocumentInteractionAt(fixture, 10), qPrintable(fixture.error));
+    const QVariantMap replacement_hit_map = fixture.layout_view_model->dragHitMap(0);
     QVERIFY(replacement_hit_map.value(QStringLiteral("valid")).toBool());
-    const QString replacement_source = layout_view_model->paragraphLayouts()
+    const QString replacement_source = fixture.layout_view_model->paragraphLayouts()
                                            .first()
                                            .toMap()
                                            .value(QStringLiteral("text"))
@@ -1418,68 +1887,77 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
     }
     QVERIFY(!replacement_start_stop.isEmpty());
     QVERIFY(!replacement_end_stop.isEmpty());
-    QVERIFY(layout_view_model->setSelection(replacement_start_stop, replacement_end_stop)
+    QVERIFY(fixture.layout_view_model->setSelection(replacement_start_stop, replacement_end_stop)
                 .value(QStringLiteral("valid"))
                 .toBool());
-    QVERIFY(!layout_view_model->selectionRects().isEmpty());
-    QSignalSpy interaction_changed_spy(layout_view_model,
+    QVERIFY(!fixture.layout_view_model->selectionRects().isEmpty());
+    QSignalSpy interaction_changed_spy(fixture.layout_view_model,
                                        &caret::LayoutViewModel::interactionChanged);
     QVERIFY(interaction_changed_spy.isValid());
-    QVERIFY(layout_view_model->insertText(QStringLiteral("replacement"))
+    QVERIFY(fixture.layout_view_model->insertText(QStringLiteral("replacement"))
                 .value(QStringLiteral("valid"))
                 .toBool());
     QVERIFY(interaction_changed_spy.size() > 0);
-    QVERIFY(layout_view_model->selectionRects().isEmpty());
-    QCOMPARE(
-        layout_view_model->inputMethodContext().value(QStringLiteral("surroundingText")).toString(),
-        QStringLiteral("replacement"));
+    QVERIFY(fixture.layout_view_model->selectionRects().isEmpty());
+    QCOMPARE(fixture.layout_view_model->inputMethodContext()
+                 .value(QStringLiteral("surroundingText"))
+                 .toString(),
+             QStringLiteral("replacement"));
+}
 
-    // 指针从第一页直接跳到第三页时，中间页也必须出现在拖选预览中。
-    QVERIFY(layout_view_model->insertText(QStringLiteral("word ").repeated(4000))
+void ShellLoadTest::crossPageDragPreviewIncludesIntermediatePages() {
+    DocumentInteractionFixture fixture;
+    QVERIFY2(prepareDocumentInteractionAt(fixture, 0), qPrintable(fixture.error));
+    QVERIFY(fixture.layout_view_model->insertText(QStringLiteral("word ").repeated(4000))
                 .value(QStringLiteral("valid"))
                 .toBool());
-    QTRY_VERIFY_WITH_TIMEOUT(canvas->pageSizesPt().size() >= 3, 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(fixture.canvas->pageSizesPt().size() >= 3, 3000);
     const QVariantList first_stops =
-        layout_view_model->dragHitMap(0).value(QStringLiteral("stops")).toList();
+        fixture.layout_view_model->dragHitMap(0).value(QStringLiteral("stops")).toList();
     const QVariantList third_stops =
-        layout_view_model->dragHitMap(2).value(QStringLiteral("stops")).toList();
+        fixture.layout_view_model->dragHitMap(2).value(QStringLiteral("stops")).toList();
     QVERIFY(!first_stops.isEmpty());
     QVERIFY(!third_stops.isEmpty());
-    pointer_handler->setProperty(
+    fixture.pointer_handler->setProperty(
         "dragSnapshot",
-        QVariantMap{{QStringLiteral("documentGeneration"), layout_view_model->documentGeneration()},
-                    {QStringLiteral("fontGeneration"), layout_view_model->fontGeneration()},
-                    {QStringLiteral("layoutRevision"),
-                     QString::number(layout_view_model->layoutRevision())}});
-    const QVariant first_point = QVariant::fromValue(stop_point(first_stops.first().toMap()));
+        QVariantMap{
+            {QStringLiteral("documentGeneration"), fixture.layout_view_model->documentGeneration()},
+            {QStringLiteral("fontGeneration"), fixture.layout_view_model->fontGeneration()},
+            {QStringLiteral("layoutRevision"),
+             QString::number(fixture.layout_view_model->layoutRevision())}});
+    const QVariant first_point =
+        QVariant::fromValue(documentStopPoint(fixture, first_stops.first().toMap()));
     const QVariantMap third_stop = third_stops.first().toMap();
-    const QVariant third_point = QVariant::fromValue(canvas->documentToContent(
+    const QVariant third_point = QVariant::fromValue(fixture.canvas->documentToContent(
         2, QPointF(third_stop.value(QStringLiteral("xPt")).toReal(),
                    third_stop.value(QStringLiteral("y0Pt")).toReal() + 3.0)));
-    QCOMPARE(canvas->hitTestPage(third_point.toPointF()).value(QStringLiteral("pageIndex")).toInt(),
+    QCOMPARE(fixture.canvas->hitTestPage(third_point.toPointF())
+                 .value(QStringLiteral("pageIndex"))
+                 .toInt(),
              2);
-    QVERIFY(QMetaObject::invokeMethod(pointer_handler, "updateDragPreview",
+    QVERIFY(QMetaObject::invokeMethod(fixture.pointer_handler, "updateDragPreview",
                                       Q_ARG(QVariant, first_point),
                                       Q_ARG(QVariant, QVariant(true))));
-    QVERIFY(QMetaObject::invokeMethod(pointer_handler, "updateDragPreview",
+    QVERIFY(QMetaObject::invokeMethod(fixture.pointer_handler, "updateDragPreview",
                                       Q_ARG(QVariant, third_point),
                                       Q_ARG(QVariant, QVariant(false))));
-    QVERIFY(!pointer_handler->property("dragAnchor").toMap().isEmpty());
+    QVERIFY(!fixture.pointer_handler->property("dragAnchor").toMap().isEmpty());
     // 正文拖选在拖动中提交同一选区投影；跨页范围直接来自 LayoutViewModel.selectionRects。
-    const QVariantList cross_page_preview = layout_view_model->selectionRects();
+    const QVariantList cross_page_preview = fixture.layout_view_model->selectionRects();
     QVERIFY(std::any_of(
         cross_page_preview.cbegin(), cross_page_preview.cend(), [](const QVariant& rectangle) {
             return rectangle.toMap().value(QStringLiteral("pageIndex")).toInt() == 1;
         }));
-    pointer_handler->setProperty("selectionDragActive", true);
-    QTRY_VERIFY_WITH_TIMEOUT(!canvas->selectionRects().isEmpty(), 3000);
-    QVERIFY(!canvas->caretPreviewGeometry().isEmpty());
-    QVERIFY(
-        layout_view_model->insertText(QStringLiteral("x")).value(QStringLiteral("valid")).toBool());
-    QTRY_VERIFY_WITH_TIMEOUT(pointer_handler->property("dragFocus").toMap().isEmpty(), 3000);
-    QVERIFY(canvas->selectionPreviewRects().isEmpty());
-    QVERIFY(canvas->caretPreviewGeometry().isEmpty());
-    delete surface;
+    fixture.pointer_handler->setProperty("selectionDragActive", true);
+    QTRY_VERIFY_WITH_TIMEOUT(!fixture.canvas->selectionRects().isEmpty(), 3000);
+    QVERIFY(!fixture.canvas->caretPreviewGeometry().isEmpty());
+    QVERIFY(fixture.layout_view_model->insertText(QStringLiteral("x"))
+                .value(QStringLiteral("valid"))
+                .toBool());
+    QTRY_VERIFY_WITH_TIMEOUT(fixture.pointer_handler->property("dragFocus").toMap().isEmpty(),
+                             3000);
+    QVERIFY(fixture.canvas->selectionPreviewRects().isEmpty());
+    QVERIFY(fixture.canvas->caretPreviewGeometry().isEmpty());
 }
 
 void ShellLoadTest::mathTextDragUsesSharedPreviewAndCommitProtocol() {
@@ -1926,109 +2404,90 @@ void ShellLoadTest::documentInputDeltaKeepsUntouchedPagesAndParagraphs() {
         QString::fromUtf8(snapshot.data(), static_cast<qsizetype>(snapshot.size()))));
     QVERIFY(caret::install_document_runtime(std::move(runtime)));
 
-    QQmlEngine engine;
-    engine.addImportPath(QString::fromUtf8(CARET_QML_IMPORT_PATH));
-    QQmlComponent component(&engine);
-    component.setData(
-        QByteArrayLiteral(
-            "import QtQuick\n"
-            "import Caret.ViewModels\n"
-            "Item {\n"
-            "    property var result\n"
-            "    property var preeditResult\n"
-            "    property var updatedPreeditResult\n"
-            "    property var commitResult\n"
-            "    property var crossSelectionResult\n"
-            "    property var crossPreeditResult\n"
-            "    property var crossCancelResult\n"
-            "    property int preeditParagraphCount: 0\n"
-            "    property int preeditRectCount: 0\n"
-            "    property int crossPreeditParagraphCount: 0\n"
-            "    property int crossCancelParagraphCount: 0\n"
-            "    property var pageSizes: LayoutViewModel.pageSizesPt\n"
-            "    property var pageGlyphRevisions: LayoutViewModel.pageGlyphRevisions\n"
-            "    property var pageLayouts: LayoutViewModel.pageLayouts\n"
-            "    property var paragraphs: LayoutViewModel.paragraphLayouts\n"
-            "    property var initialPageGlyphRevisions\n"
-            "    property var postInsertPageGlyphRevisions\n"
-            "    Component.onCompleted: {\n"
-            "        const initialParagraphList = LayoutViewModel.paragraphLayouts\n"
-            "        const lastParagraph = initialParagraphList[initialParagraphList.length - 1]\n"
-            "        const lastPage = LayoutViewModel.pageSizesPt.length - 1\n"
-            "        const stops = LayoutViewModel.dragHitMap(lastPage).stops\n"
-            "        const endOffset = String(lastParagraph.text.length)\n"
-            "        let endStop = null\n"
-            "        for (let index = 0; index < stops.length; ++index) {\n"
-            "            const position = stops[index].position\n"
-            "            if (position.paragraphId === lastParagraph.paragraphId &&\n"
-            "                    position.offsetUtf8 === endOffset) {\n"
-            "                endStop = stops[index]\n"
-            "                break\n"
-            "            }\n"
-            "        }\n"
-            "        if (endStop === null)\n"
-            "            throw new Error(\"Unable to find the final caret stop\")\n"
-            "        const selectionResult = LayoutViewModel.setSelection(endStop, endStop)\n"
-            "        if (!selectionResult.valid)\n"
-            "            throw new Error(selectionResult.error)\n"
-            "        initialPageGlyphRevisions = LayoutViewModel.pageGlyphRevisions.slice()\n"
-            "        result = LayoutViewModel.insertText(\"x\")\n"
-            "        postInsertPageGlyphRevisions = LayoutViewModel.pageGlyphRevisions.slice()\n"
-            "        preeditResult = LayoutViewModel.inputMethodEvent(\"n\", \"\", 0, 0, 1)\n"
-            "        preeditParagraphCount = LayoutViewModel.paragraphLayouts.length\n"
-            "        preeditRectCount = LayoutViewModel.compositionRects.length\n"
-            "        updatedPreeditResult = LayoutViewModel.inputMethodEvent(\"ni\", \"\", 0, 0, "
-            "2)\n"
-            "        commitResult = LayoutViewModel.inputMethodEvent(\"\", \"你\", 0, 0, 0)\n"
-            "        const paragraphs = LayoutViewModel.paragraphLayouts\n"
-            "        crossSelectionResult = LayoutViewModel.setSelection(\n"
-            "            { position: { paragraphId: paragraphs[98].paragraphId, offsetUtf8: \"0\", "
-            "affinity: \"downstream\" }, visualAffinity: \"downstream\" },\n"
-            "            { position: { paragraphId: paragraphs[99].paragraphId, offsetUtf8: \"0\", "
-            "affinity: \"upstream\" }, visualAffinity: \"upstream\" })\n"
-            "        crossPreeditResult = LayoutViewModel.inputMethodEvent(\"x\", \"\", 0, 0, 1)\n"
-            "        crossPreeditParagraphCount = LayoutViewModel.paragraphLayouts.length\n"
-            "        crossCancelResult = LayoutViewModel.inputMethodEvent(\"\", \"\", 0, 0, 0)\n"
-            "        crossCancelParagraphCount = LayoutViewModel.paragraphLayouts.length\n"
-            "    }\n"
-            "}\n"),
-        QUrl());
-    QVERIFY2(component.isReady(), qPrintable(component.errorString()));
-    QObject* probe = component.create();
-    QVERIFY(probe != nullptr);
-    const QVariantMap result = probe->property("result").toMap();
+    // 直接用 LayoutViewModel 的公开命令验证输入增量，不把测试逻辑放进内嵌 QML/JS。
+    caret::LayoutViewModel view_model;
+    const QVariantList initial_paragraphs = view_model.paragraphLayouts();
+    QVERIFY2(initial_paragraphs.size() == 100, "初始快照应包含 paste 产生的 100 个段落");
+    const QVariantMap last_paragraph = initial_paragraphs.last().toMap();
+    const QVariantList initial_page_sizes = view_model.pageSizesPt();
+    QVERIFY2(!initial_page_sizes.isEmpty(), "初始快照缺少页面尺寸");
+    const QVariantMap last_hit_map = view_model.dragHitMap(initial_page_sizes.size() - 1);
+    QVERIFY2(last_hit_map.value(QStringLiteral("valid")).toBool(),
+             qPrintable(last_hit_map.value(QStringLiteral("error")).toString()));
+    const QString end_offset =
+        QString::number(last_paragraph.value(QStringLiteral("text")).toString().length());
+    QVariantMap end_stop;
+    for (const QVariant& stop_value : last_hit_map.value(QStringLiteral("stops")).toList()) {
+        const QVariantMap stop = stop_value.toMap();
+        const QVariantMap position = stop.value(QStringLiteral("position")).toMap();
+        if (position.value(QStringLiteral("paragraphId")).toString() ==
+                last_paragraph.value(QStringLiteral("paragraphId")).toString() &&
+            position.value(QStringLiteral("offsetUtf8")).toString() == end_offset) {
+            end_stop = stop;
+            break;
+        }
+    }
+    QVERIFY2(!end_stop.isEmpty(), "Unable to find the final caret stop");
+    const QVariantMap selection_result = view_model.setSelection(end_stop, end_stop);
+    QVERIFY2(selection_result.value(QStringLiteral("valid")).toBool(),
+             qPrintable(selection_result.value(QStringLiteral("error")).toString()));
+    const QVariantList initial_glyph_revisions = view_model.pageGlyphRevisions();
+    const QVariantMap result = view_model.insertText(QStringLiteral("x"));
+    const QVariantList post_insert_glyph_revisions = view_model.pageGlyphRevisions();
+    const QVariantMap preedit_result =
+        view_model.inputMethodEvent(QStringLiteral("n"), QString(), 0, 0, 1);
+    const int preedit_paragraph_count = view_model.paragraphLayouts().size();
+    const int preedit_rect_count = view_model.compositionRects().size();
+    const QVariantMap updated_preedit_result =
+        view_model.inputMethodEvent(QStringLiteral("ni"), QString(), 0, 0, 2);
+    const QVariantMap commit_result =
+        view_model.inputMethodEvent(QString(), QStringLiteral("你"), 0, 0, 0);
+    const QVariantList paragraphs_after_commit = view_model.paragraphLayouts();
+    QVERIFY2(paragraphs_after_commit.size() >= 100, "输入法提交后段落数不应减少");
+    const QVariantMap cross_anchor{
+        {QStringLiteral("position"),
+         QVariantMap{{QStringLiteral("paragraphId"),
+                      paragraphs_after_commit.at(98).toMap().value(QStringLiteral("paragraphId"))},
+                     {QStringLiteral("offsetUtf8"), QStringLiteral("0")},
+                     {QStringLiteral("affinity"), QStringLiteral("downstream")}}},
+        {QStringLiteral("visualAffinity"), QStringLiteral("downstream")}};
+    const QVariantMap cross_focus{
+        {QStringLiteral("position"),
+         QVariantMap{{QStringLiteral("paragraphId"),
+                      paragraphs_after_commit.at(99).toMap().value(QStringLiteral("paragraphId"))},
+                     {QStringLiteral("offsetUtf8"), QStringLiteral("0")},
+                     {QStringLiteral("affinity"), QStringLiteral("upstream")}}},
+        {QStringLiteral("visualAffinity"), QStringLiteral("upstream")}};
+    const QVariantMap cross_selection_result = view_model.setSelection(cross_anchor, cross_focus);
+    const QVariantMap cross_preedit_result =
+        view_model.inputMethodEvent(QStringLiteral("x"), QString(), 0, 0, 1);
+    const int cross_preedit_paragraph_count = view_model.paragraphLayouts().size();
+    const QVariantMap cross_cancel_result =
+        view_model.inputMethodEvent(QString(), QString(), 0, 0, 0);
+    const int cross_cancel_paragraph_count = view_model.paragraphLayouts().size();
+
     QVERIFY2(result.value(QStringLiteral("valid")).toBool(),
              qPrintable(result.value(QStringLiteral("error")).toString()));
-    const QVariantMap preedit_result = probe->property("preeditResult").toMap();
     QVERIFY2(preedit_result.value(QStringLiteral("valid")).toBool(),
              qPrintable(preedit_result.value(QStringLiteral("error")).toString()));
-    QCOMPARE(probe->property("preeditParagraphCount").toInt(), 100);
-    QVERIFY(probe->property("preeditRectCount").toInt() > 0);
-    const QVariantMap updated_preedit_result = probe->property("updatedPreeditResult").toMap();
+    QCOMPARE(preedit_paragraph_count, 100);
+    QVERIFY(preedit_rect_count > 0);
     QVERIFY2(updated_preedit_result.value(QStringLiteral("valid")).toBool(),
              qPrintable(updated_preedit_result.value(QStringLiteral("error")).toString()));
-    const QVariantMap commit_result = probe->property("commitResult").toMap();
     QVERIFY2(commit_result.value(QStringLiteral("valid")).toBool(),
              qPrintable(commit_result.value(QStringLiteral("error")).toString()));
-    const QVariantMap cross_selection_result = probe->property("crossSelectionResult").toMap();
     QVERIFY2(cross_selection_result.value(QStringLiteral("valid")).toBool(),
              qPrintable(cross_selection_result.value(QStringLiteral("error")).toString()));
-    const QVariantMap cross_preedit_result = probe->property("crossPreeditResult").toMap();
     QVERIFY2(cross_preedit_result.value(QStringLiteral("valid")).toBool(),
              qPrintable(cross_preedit_result.value(QStringLiteral("error")).toString()));
-    QCOMPARE(probe->property("crossPreeditParagraphCount").toInt(), 99);
-    const QVariantMap cross_cancel_result = probe->property("crossCancelResult").toMap();
+    QCOMPARE(cross_preedit_paragraph_count, 99);
     QVERIFY2(cross_cancel_result.value(QStringLiteral("valid")).toBool(),
              qPrintable(cross_cancel_result.value(QStringLiteral("error")).toString()));
-    QCOMPARE(probe->property("crossCancelParagraphCount").toInt(), 100);
-    const QVariantList pages = probe->property("pageSizes").toList();
-    const QVariantList initial_glyph_revisions =
-        probe->property("initialPageGlyphRevisions").toList();
-    const QVariantList glyph_revisions = probe->property("pageGlyphRevisions").toList();
-    const QVariantList post_insert_glyph_revisions =
-        probe->property("postInsertPageGlyphRevisions").toList();
-    const QVariantList page_layouts = probe->property("pageLayouts").toList();
-    const QVariantList paragraphs = probe->property("paragraphs").toList();
+    QCOMPARE(cross_cancel_paragraph_count, 100);
+    const QVariantList pages = view_model.pageSizesPt();
+    const QVariantList glyph_revisions = view_model.pageGlyphRevisions();
+    const QVariantList page_layouts = view_model.pageLayouts();
+    const QVariantList paragraphs = view_model.paragraphLayouts();
     QVERIFY(pages.size() > 1);
     QCOMPARE(initial_glyph_revisions.size(), pages.size());
     QCOMPARE(post_insert_glyph_revisions.size(), pages.size());
@@ -2047,7 +2506,6 @@ void ShellLoadTest::documentInputDeltaKeepsUntouchedPagesAndParagraphs() {
                 .value(QStringLiteral("text"))
                 .toString()
                 .endsWith(QStringLiteral("x你")));
-    delete probe;
 }
 
 void ShellLoadTest::invalidDocumentFileStatusPreservesThePublishedProjection() {

@@ -51,6 +51,26 @@ class ShellLoadTest : public QObject {
 #endif
 #ifdef CARET_ENABLE_APP
     void documentHitTestReturnsRustPosition();
+    void documentCanvasClickAndTypingPublishRustSnapshot();
+    void documentCanvasRasterizesTypedGlyphWithInk();
+    void documentFontFallbackPreservesLatinBaseline();
+    void returnSplitsParagraphAndForwardsEditorKey();
+    void inputMethodCompositionUnderlineTracksPageTransforms();
+    void mixedCompositionPublishesOneUnderlinePerRect();
+    void cancelledCompositionClearsPreeditAndCompositionRects();
+    void escapeClosesCommandLineWithoutEditingTheDocument();
+    void inputMethodContextTracksCaretNavigation();
+    void backspaceMergesParagraphsAndDeletesText();
+    void shiftEnterInsertsSoftBreakWithoutSplittingParagraph();
+    void shiftNavigationProjectsSelectionRects();
+    void dragSelectionCommitsSameRustSelectionProjection();
+    void reverseDragMovesInputMethodCaretToFocus();
+    void clipboardCopyPasteUsesRustSelectionProjection();
+    void selectionDragFromExistingSelectionPublishesCanvasRects();
+    void mouseClickClearsSelectionInsideAndOutsideText();
+    void multilinePasteSplitsParagraphs();
+    void insertReplacementClearsSelectionAndPublishesInteractionChange();
+    void crossPageDragPreviewIncludesIntermediatePages();
     void mathTextDragUsesSharedPreviewAndCommitProtocol();
     void documentInputDeltaKeepsUntouchedPagesAndParagraphs();
     void documentFileFlowPreservesSaveStateAndReopens();
