@@ -3415,15 +3415,18 @@ fn collect_math_projections(
                         let Some(math_id) = paragraph.inline_math_ids.get(index) else {
                             continue;
                         };
+                        let Some(baseline_y_pt) = paragraph.layout.page_local_baseline_pt(
+                            line_index,
+                            line_top,
+                            inline_box.y + inline_box.baseline.unwrap_or(inline_box.height),
+                        ) else {
+                            continue;
+                        };
                         projections.push(MathPageProjection {
                             math_id: math_id.clone(),
                             page_index,
                             object_x_pt: page.margin_left_pt + f64::from(inline_box.x),
-                            baseline_y_pt: line_top
-                                + f64::from(inline_box.y)
-                                + f64::from(inline_box.baseline.unwrap_or(inline_box.height))
-                                - f64::from(*raw_top)
-                                + f64::from(*adjustment),
+                            baseline_y_pt,
                             caret_line_top_pt: line_top,
                             caret_baseline_y_pt: line_top
                                 + f64::from(paragraph.math_caret_baseline_pt),

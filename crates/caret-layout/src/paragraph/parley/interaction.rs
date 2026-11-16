@@ -21,6 +21,25 @@ impl ParleyParagraphLayout {
         f64::from(baseline) - f64::from(offset) - f64::from(line_top) + f64::from(adjustment)
     }
 
+    /// 将 Parley 行内基线换算成页面局部 Y。
+    ///
+    /// 正文 glyph 与行内公式盒共用这条映射：先消去 Parley 全局行顶，再在 f64 中加入
+    /// 局部基线，避免超长段落的全局 f32 baseline 吞掉局部偏移。两个消费者必须走同一
+    /// 公式，否则公式页面基线会与相邻正文错开。行索引缺少行顶或基线调整量时返回 `None`。
+    pub fn page_local_baseline_pt(
+        &self,
+        line_index: usize,
+        page_line_top_pt: f64,
+        parley_baseline_pt: f32,
+    ) -> Option<f64> {
+        let raw_top_pt = *self.parley_line_tops_pt.get(line_index)?;
+        let baseline_adjustment_pt = *self.baseline_adjustments_pt.get(line_index)?;
+        Some(
+            page_line_top_pt + f64::from(parley_baseline_pt) - f64::from(raw_top_pt)
+                + f64::from(baseline_adjustment_pt),
+        )
+    }
+
     /// 从已塑形的 glyph run 提取持久下划线几何，不包含输入法预编辑装饰。
     pub fn underline_geometry_for_line(
         &self,

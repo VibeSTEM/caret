@@ -423,11 +423,10 @@ impl DocumentLayoutSnapshot {
                         )?;
                         continue;
                     };
-                    // 先消去 Parley 全局行顶，再在 f64 中加入局部 glyph y；避免超长段落
-                    // 的全局 f32 baseline 吞掉组合附标的局部偏移。
-                    let run_baseline_y_pt = page_line_top_pt + f64::from(glyph_run.baseline())
-                        - raw_top_pt
-                        + baseline_adjustment_pt;
+                    let run_baseline_y_pt = paragraph
+                        .layout
+                        .page_local_baseline_pt(line_index, page_line_top_pt, glyph_run.baseline())
+                        .ok_or(PageGlyphError::InvalidLineGeometry)?;
                     if let Some(run) = page_run_from_positioned_glyphs(
                         &item,
                         PageGlyphRunOrigin {
