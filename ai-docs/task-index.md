@@ -1,6 +1,6 @@
 # Task 索引
 
-更新日期：2026-11-16。非平凡改动先从[模板](task/_template.md)建 task，在本索引登记，然后再动代码。行为规格在[架构](architecture/README.md)和[规范](standards/README.md)。2026-10-25 删去未执行的旧队列，现行任务从 001 重新编号。
+更新日期：2026-11-17。非平凡改动先从[模板](task/_template.md)建 task，在本索引登记，然后再动代码。行为规格在[架构](architecture/README.md)和[规范](standards/README.md)。2026-10-25 删去未执行的旧队列，现行任务从 001 重新编号。
 
 ## 使用方式
 
@@ -124,5 +124,15 @@
 | 090 | 画布交互 | [拖选跨公式块/块环境的实时预览](task/090-drag-selection-live-preview.md) | P1 | 027、031、044、083 | M | implemented |
 | 091 | 剪贴板 | [富剪贴板与数学片段接入](task/091-rich-clipboard-integration.md) | P1 | 083、092 | M | planned |
 | 092 | 数学排版 | [共享数学片段转换接口](task/092-checked-math-fragment-converter.md) | P1 | 043 | M | ready |
+| 093 | 质量清理 | [全仓 Brooks Sweep 质量清理记录](task/093-brooks-sweep-quality-cleanup.md) | P2 | — | L | done |
+| 094 | 测试 | [关闭已编辑文档事务的行为测试](task/094-close-with-unsaved-changes-tests.md) | P0 | 093 | M | ready |
+| 095 | 架构 | [caret-engine 会话与数学编辑模块拆分](task/095-engine-session-math-edit-split.md) | P1 | 093 | L | planned |
+| 096 | 架构 | [caret-engine 布局模块生产/查询拆分](task/096-engine-layout-produce-query-split.md) | P1 | 093 | L | planned |
+| 097 | 数学 | [跨 crate 数学符号与属性单一来源](task/097-math-symbol-single-source.md) | P1 | 093、084 | M | planned |
+| 098 | QML 架构 | [QML 状态机与跨语言契约收敛](task/098-qml-state-and-cross-language-contracts.md) | P2 | 093、083 | L | planned |
+| 099 | 测试 | [ShellLoadTest 单类按域拆分](task/099-shell-load-test-split.md) | P2 | 093 | M | planned |
+| 100 | 测试 | [测试确定性与诊断基础设施](task/100-test-determinism-and-diagnostics.md) | P2 | 093 | L | planned |
+| 101 | native 架构 | [native 边界协议与渲染期重复校验收敛](task/101-native-protocol-and-render-revalidation.md) | P2 | 093 | L | planned |
+| 102 | 质量清理 | [Brooks sweep 后续收敛项](task/102-sweep-followup-convergence.md) | P2 | 093、095 | M | planned |
 
 分类描述任务主题；里程碑和实施边界写在对应任务中。任务拆分、状态变更及执行记录以各任务文档为准。
