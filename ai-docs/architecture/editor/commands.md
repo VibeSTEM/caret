@@ -1,6 +1,6 @@
 # 命令
 
-更新日期：2026-10-30。执行规则见[运行时](../core/runtime.md)。`\` 的交互见[命令输入](command-input.md)。
+更新日期：2026-11-16。执行规则见[运行时](../core/runtime.md)。`\` 的交互见[命令输入](command-input.md)。
 
 ## 注册表
 
@@ -19,7 +19,7 @@ id 用小写点分段，段内使用 snake_case：`text.insert`、`para.heading`
 | `text.insert` / `text.insert.one_character_width_space` / `text.insert.two_character_width_space` / `text.delete` | 在插入点输入、插入空格或删除；Tab 与 `\doublecharspace` 共用插入两个字符宽空格动作；`\singlecharspace` / `\doublecharspace` 表示字符宽度，不表示 U+0020 空格个数；Backspace 在完整块环境结构选区上删除环境子树 | 打字合并成一步；结构删除一步 |
 | `text.soft_break` / `text.split_paragraph` | 插入软换行 / 拆分或合并段落 | 一步 |
 | `caret.move` / `selection.set` | 移动插入点 / 设置选区 | 纯命令 |
-| `clipboard.copy` / `clipboard.paste` | 复制所选纯文本 / 以单一 Rust 事务粘贴系统剪贴板文本 | 复制纯命令；粘贴一次文档变更 |
+| `clipboard.copy` / `clipboard.paste` | 当前复制所选纯文本 / 以单一 Rust 事务粘贴系统剪贴板文本；目标格式契约见[剪贴板](clipboard.md) | 复制纯命令；粘贴一次文档变更 |
 | `ime.update` / `ime.commit` / `ime.cancel` | 更新、提交或取消输入法组字 | 仅提交正文时一步 |
 | `page.geometry.set` | 设置整份文档的纸型、方向和边距 | 一步 |
 | `para.heading` | 设大纲级别 | 一步 |
@@ -46,4 +46,4 @@ id 用小写点分段，段内使用 snake_case：`text.insert`、`para.heading`
 
 编辑器按键从 Qt 以 `EditorKey` 意图进入 Rust Session；Session 是命令输入、IME、选区和文档结构状态的唯一权威。按键分发目录、行为优先级、Qt 焦点作用域和扩展规则见[键盘路由](../interface/keyboard-routing.md)。
 
-M0 的 `clipboard.copy` 只导出选区纯文本；多段选区用换行分隔。`clipboard.paste` 读取系统剪贴板后由 Rust 负责规范换行、替换当前选区并提交一次事务。当前不支持的结构或未知字段必须在写入前拒绝，保留原文与选区。撤销系统接入后，整次粘贴应作为一个撤销单元。
+当前 M0 剪贴板仅读写纯文本；富 MIME、TeX 回退和片段事务是目标契约，详见[剪贴板](clipboard.md)与实现任务 091。
