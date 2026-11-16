@@ -69,4 +69,11 @@ class ShellLoadTest : public QObject {
     void textFontWarningStatusBarTracksLayoutDiagnostics();
     void missingRecoveryEntryFailsWithoutReplacingTheOpenDocument();
 #endif
+
+  private:
+#ifdef CARET_ENABLE_APP
+    // 文档 runtime 相关用例共用的空白会话与恢复目录设置。
+    static bool configureDocumentRecovery(const QString& recovery_root);
+    static bool installBlankDocumentRuntime();
+#endif
 };
