@@ -152,12 +152,16 @@ pub fn calculate_line_metrics_with_grid(
             .iter()
             .map(|object| object.descent_pt)
             .fold(0.0_f32, f32::max);
-        let extra_top = (object_ascent - base.baseline_pt).max(0.0);
-        let extra_bottom = (object_descent - (base.height_pt - base.baseline_pt)).max(0.0);
-        metrics.height_pt = metrics
-            .height_pt
-            .max(base.height_pt + extra_top + extra_bottom);
-        metrics.baseline_pt = base.baseline_pt + extra_top;
+        let Some((height_pt, baseline_pt)) = caret_grid_layout::expand_row_to_fit(
+            f64::from(base.height_pt),
+            f64::from(base.baseline_pt),
+            f64::from(object_ascent),
+            f64::from(object_descent),
+        ) else {
+            return Err(LineMetricsError::InvalidFontMetrics);
+        };
+        metrics.height_pt = metrics.height_pt.max(height_pt as f32);
+        metrics.baseline_pt = baseline_pt as f32;
         metrics.content_metrics_overflow_line_box = false;
     }
     if !metrics.height_pt.is_finite()

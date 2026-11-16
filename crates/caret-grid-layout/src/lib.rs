@@ -550,12 +550,11 @@ pub fn calculate_row_frame_with_content_leading(
             && base_baseline.is_finite()
             && base_baseline >= 0.0 =>
         {
-            let extra_top = (content_ascent - base_baseline).max(0.0);
-            let extra_bottom = (content_descent - (base_height - base_baseline)).max(0.0);
-            let expanded = base_height + extra_top + extra_bottom;
-            if !expanded.is_finite() {
+            let Some((expanded, _)) =
+                expand_row_to_fit(base_height, base_baseline, content_ascent, content_descent)
+            else {
                 return Err(GridLayoutError::NonFiniteResult);
-            }
+            };
             expanded
         }
         _ => return Err(GridLayoutError::InvalidMetric),
@@ -596,6 +595,32 @@ pub fn calculate_row_frame_with_content_leading(
         content_overflow,
         clip_content: matches!(spacing, RowSpacing::Exactly { .. }),
     })
+}
+
+/// 按 `ExpandToFit` 规则把内容上升/下降扩展到基础行框，返回扩展后的（高度, 基线）。
+///
+/// 顶部与底部只补足内容超出的部分，基线随顶部扩展下移。正文行内对象与网格单元格
+/// 必须共用这一规则，否则同一行框会得到不同高度或基线。输入无效时返回 `None`。
+pub fn expand_row_to_fit(
+    base_height: f64,
+    base_baseline: f64,
+    content_ascent: f64,
+    content_descent: f64,
+) -> Option<(f64, f64)> {
+    if !base_height.is_finite()
+        || base_height <= 0.0
+        || !base_baseline.is_finite()
+        || base_baseline < 0.0
+        || !content_ascent.is_finite()
+        || !content_descent.is_finite()
+    {
+        return None;
+    }
+    let extra_top = (content_ascent - base_baseline).max(0.0);
+    let extra_bottom = (content_descent - (base_height - base_baseline)).max(0.0);
+    let height = base_height + extra_top + extra_bottom;
+    let baseline = base_baseline + extra_top;
+    (height.is_finite() && baseline.is_finite()).then_some((height, baseline))
 }
 
 #[cfg(test)]
