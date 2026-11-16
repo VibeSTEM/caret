@@ -23,6 +23,8 @@ qt_add_qml_module(
   document_canvas.cpp
   document_canvas/caret.cpp
   document_canvas/geometry.cpp
+  document_canvas/glyph_frame_wire.cpp
+  document_canvas/glyph_frame_wire.hpp
   document_canvas/glyph_frames.cpp
   document_canvas/input.cpp
   document_canvas/keyboard.cpp
