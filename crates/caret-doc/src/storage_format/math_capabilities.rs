@@ -46,7 +46,8 @@ pub(super) fn raw_math_capabilities(raw: &Value) -> BTreeSet<&'static str> {
             match object.get("type").and_then(Value::as_str) {
                 Some("math") => {
                     // 与类型解码器共用同一节点判定；解码器不能解释的节点不产生语法要求。
-                    let Some(kind) = MathNodeKind::supported_from_storage(object, parent) else {
+                    let Some(kind) = MathNodeKind::supported_for_capability_scan(object, parent)
+                    else {
                         return;
                     };
                     let has_attributes = object

@@ -541,7 +541,7 @@ fn inspect_math_flow_encoding_with_parent(
             match object.get("type").and_then(Value::as_str) {
                 Some("math") => {
                     // 只检查当前解码器能解释的节点，避免把不透明子树里的 vendor 字段当成已退役字段。
-                    let Some(kind) = MathNodeKind::supported_from_storage(object, parent) else {
+                    let Some(kind) = MathNodeKind::supported_for_raw_scan(object, parent) else {
                         continue;
                     };
                     if object.contains_key("sourceRange") {
@@ -582,7 +582,7 @@ fn inspect_math_content_encoding(value: &Value) -> Result<(), DocumentError> {
     match object.get("type").and_then(Value::as_str) {
         Some("math") => {
             // 只检查当前解码器能解释的节点，避免把不透明子树里的 vendor 字段当成已退役字段。
-            let Some(kind) = MathNodeKind::supported_from_storage(object, None) else {
+            let Some(kind) = MathNodeKind::supported_for_raw_scan(object, None) else {
                 return Ok(());
             };
             if object.contains_key("sourceRange") {

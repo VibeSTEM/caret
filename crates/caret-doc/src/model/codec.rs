@@ -220,14 +220,93 @@ impl super::MathTree {
     }
 }
 
+/// 类型解码器与 raw 扫描对畸形数学 JSON 的既有容忍边界。
+///
+/// 两条路径历史上对同一份 JSON 可能给出不同结论：类型解码器把非字符串 `text`
+/// 视为缺失，但要求操作数流能给出确定的类别；raw 扫描把非字符串 `text` 视为
+/// 不可解释，却把类别无法确定的单元素操作数流按 `Row` 继续检查。共享实现必须
+/// 保留这两套输入边界，由调用方显式选择，不能向任何一侧对齐。
+#[derive(Clone, Copy)]
+struct MathNodeSupportPolicy {
+    text: MathTextPolicy,
+    flows: MathFlowKindPolicy,
+}
+
+/// `text` 字段的既有容忍边界。
+#[derive(Clone, Copy)]
+enum MathTextPolicy {
+    /// 类型解码器：非字符串 `text` 按缺失处理。
+    Lenient,
+    /// raw 扫描：非字符串 `text` 视为不可解释。
+    Strict,
+}
+
+/// 操作数流 primary kind 的既有推断方式。
+#[derive(Clone, Copy)]
+enum MathFlowKindPolicy {
+    /// 类型解码器：任一操作数流无法确定 primary kind 即视为不可解释。
+    Decoder,
+    /// raw 退役字段扫描：类别无法确定的单元素操作数流按 `Row` 继续检查。
+    RawScan,
+    /// raw 能力扫描：按流中首个数学内容宽松推断，无法确定时按 `Row`。
+    RawCapability,
+}
+
+impl MathNodeSupportPolicy {
+    const DECODER: Self = Self {
+        text: MathTextPolicy::Lenient,
+        flows: MathFlowKindPolicy::Decoder,
+    };
+    const RAW_SCAN: Self = Self {
+        text: MathTextPolicy::Strict,
+        flows: MathFlowKindPolicy::RawScan,
+    };
+    const RAW_CAPABILITY: Self = Self {
+        text: MathTextPolicy::Strict,
+        flows: MathFlowKindPolicy::RawCapability,
+    };
+}
+
 impl super::MathNodeKind {
-    /// 判定单个原始数学节点自身是否为当前解码器可解释的形态。
+    /// 判定单个原始数学节点是否为类型解码器可解释的形态。
     ///
-    /// 返回值是该节点的类别；`None` 表示只能按不透明数据处理。raw 扫描与类型解码器
-    /// 共用此判定，避免对同一份 JSON 给出不同的支持结论。操作数由调用方递归检查。
+    /// 返回值是该节点的类别；`None` 表示只能按不透明数据处理。与 raw 扫描共用同一
+    /// 属性/结构实现，但保留类型解码器的既有输入边界（见 `MathNodeSupportPolicy`）。
     pub(crate) fn supported_from_storage(
         object: &Map<String, Value>,
         parent: Option<Self>,
+    ) -> Option<Self> {
+        Self::supported_with_policy(object, parent, MathNodeSupportPolicy::DECODER)
+    }
+
+    /// 判定单个原始数学节点是否为 raw 退役字段扫描可解释的形态。
+    ///
+    /// 保留旧 raw 检查的既有边界：非字符串 `text` 视为不可解释；类别无法确定的
+    /// 单元素操作数流按 `Row` 处理，以便继续检查节点自身的退役字段。
+    pub(crate) fn supported_for_raw_scan(
+        object: &Map<String, Value>,
+        parent: Option<Self>,
+    ) -> Option<Self> {
+        Self::supported_with_policy(object, parent, MathNodeSupportPolicy::RAW_SCAN)
+    }
+
+    /// 判定单个原始数学节点是否为 raw 能力扫描可解释的形态。
+    ///
+    /// 保留旧能力扫描的既有边界：非字符串 `text` 视为不可解释；操作数类别按流中
+    /// 首个数学内容宽松推断，推断失败时按 `Row` 处理。
+    pub(crate) fn supported_for_capability_scan(
+        object: &Map<String, Value>,
+        parent: Option<Self>,
+    ) -> Option<Self> {
+        Self::supported_with_policy(object, parent, MathNodeSupportPolicy::RAW_CAPABILITY)
+    }
+
+    /// 属性/结构判定的共享实现；输入容忍边界完全由策略决定，三条调用路径各自
+    /// 传入与自己旧实现一致的政策。
+    fn supported_with_policy(
+        object: &Map<String, Value>,
+        parent: Option<Self>,
+        policy: MathNodeSupportPolicy,
     ) -> Option<Self> {
         let kind_name = object.get("kind").and_then(Value::as_str)?;
         let kind: Self = serde_json::from_value(Value::String(kind_name.to_owned())).ok()?;
@@ -242,11 +321,18 @@ impl super::MathNodeKind {
             None => Vec::new(),
             Some(Value::Array(children)) => children
                 .iter()
-                .map(math_flow_primary_kind)
+                .map(|flow| math_flow_primary_kind(flow, policy.flows))
                 .collect::<Option<Vec<_>>>()?,
             Some(_) => return None,
         };
-        let text = object.get("text").and_then(Value::as_str);
+        let text = match policy.text {
+            MathTextPolicy::Lenient => object.get("text").and_then(Value::as_str),
+            MathTextPolicy::Strict => match object.get("text") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(text)) => Some(text.as_str()),
+                Some(_) => return None,
+            },
+        };
         (math_node_attributes_supported(kind, text, &attributes)
             && math_node_structure_supported(parent, kind, text, &child_flows))
         .then_some(kind)
@@ -269,7 +355,17 @@ fn supported_math_node(value: &Value, parent: Option<super::MathNodeKind>) -> bo
     })
 }
 
-fn math_flow_primary_kind(flow: &Value) -> Option<super::MathNodeKind> {
+/// 按调用方的既有边界推断操作数流的 primary kind。
+fn math_flow_primary_kind(flow: &Value, policy: MathFlowKindPolicy) -> Option<super::MathNodeKind> {
+    match policy {
+        MathFlowKindPolicy::Decoder => decoder_flow_primary_kind(flow),
+        MathFlowKindPolicy::RawScan => raw_scan_flow_primary_kind(flow),
+        MathFlowKindPolicy::RawCapability => Some(raw_capability_flow_primary_kind(flow)),
+    }
+}
+
+/// 类型解码器：单元素流必须能给出确定的类别，否则视为不可解释。
+fn decoder_flow_primary_kind(flow: &Value) -> Option<super::MathNodeKind> {
     let content = flow.as_object()?.get("content")?.as_array()?;
     if content.len() == 1 {
         let item = content[0].as_object()?;
@@ -287,6 +383,51 @@ fn math_flow_primary_kind(flow: &Value) -> Option<super::MathNodeKind> {
         }
     }
     Some(super::MathNodeKind::Row)
+}
+
+/// raw 退役字段扫描：类别无法确定的单元素流按 `Row` 继续检查。
+fn raw_scan_flow_primary_kind(flow: &Value) -> Option<super::MathNodeKind> {
+    let content = flow.as_object()?.get("content")?.as_array()?;
+    if let [item] = content.as_slice()
+        && let Some(item) = item.as_object()
+        && item.get("type").and_then(Value::as_str) == Some("math")
+    {
+        let kind = item
+            .get("kind")?
+            .as_str()
+            .and_then(|kind| serde_json::from_value(Value::String(kind.to_owned())).ok())?;
+        return Some(match kind {
+            super::MathNodeKind::Placeholder
+            | super::MathNodeKind::Hline
+            | super::MathNodeKind::Intertext => kind,
+            _ => super::MathNodeKind::Row,
+        });
+    }
+    Some(super::MathNodeKind::Row)
+}
+
+/// raw 能力扫描：按流中首个数学内容宽松推断，推断失败时按 `Row`。
+fn raw_capability_flow_primary_kind(flow: &Value) -> super::MathNodeKind {
+    let first_math = flow
+        .get("content")
+        .and_then(Value::as_array)
+        .and_then(|content| {
+            content
+                .iter()
+                .find(|item| item.get("type").and_then(Value::as_str) == Some("math"))
+        });
+    match first_math
+        .and_then(|item| item.get("kind"))
+        .and_then(Value::as_str)
+        .and_then(|name| serde_json::from_value(Value::String(name.to_owned())).ok())
+    {
+        Some(
+            special @ (super::MathNodeKind::Placeholder
+            | super::MathNodeKind::Hline
+            | super::MathNodeKind::Intertext),
+        ) => special,
+        _ => super::MathNodeKind::Row,
+    }
 }
 
 fn parse_block_environment(value: Value) -> Result<Block, ModelError> {
