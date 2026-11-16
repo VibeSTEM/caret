@@ -9,8 +9,8 @@ use super::{
 use caret_doc::NodeId;
 use caret_engine::{
     Affinity, CompositionRange, DocumentLayoutDeltaView, MathEditTarget, MathTextInputContext,
-    MathTreePosition, PageCaretGeometry, Pos, Selection, StructureClass, StructureKind,
-    StructurePosition,
+    MathTreePosition, PageCaretGeometry, PageSelectionRect, Pos, Selection, StructureClass,
+    StructureKind, StructurePosition,
 };
 use serde_json::{Value, json};
 
@@ -205,20 +205,7 @@ fn math_text_selection_json(
     let rectangles = snapshot
         .math_text_selection_geometry(target, anchor, focus)
         .ok_or_else(|| "layout.invalid_math_selection_geometry".to_owned())?;
-    Ok(Value::Array(
-        rectangles
-            .into_iter()
-            .map(|rectangle| {
-                json!({
-                    "pageIndex": rectangle.page_index,
-                    "x0Pt": rectangle.x0_pt,
-                    "y0Pt": rectangle.y0_pt,
-                    "x1Pt": rectangle.x1_pt,
-                    "y1Pt": rectangle.y1_pt,
-                })
-            })
-            .collect(),
-    ))
+    Ok(rectangle_values(rectangles))
 }
 
 /// 将公式树内部同一序列的锚点/焦点范围投影为页面矩形，并按页面边界裁切。
@@ -251,23 +238,16 @@ fn math_tree_selection_json(
             y0 = y0.clamp(0.0, page.height_pt);
             x1 = x1.clamp(0.0, page.width_pt);
             y1 = y1.clamp(0.0, page.height_pt);
-            (x1 > x0 && y1 > y0).then_some((rectangle.page_index, x0, y0, x1, y1))
+            (x1 > x0 && y1 > y0).then_some(PageSelectionRect {
+                page_index: rectangle.page_index,
+                x0_pt: x0,
+                y0_pt: y0,
+                x1_pt: x1,
+                y1_pt: y1,
+            })
         })
         .collect::<Vec<_>>();
-    Ok(Value::Array(
-        rectangles
-            .into_iter()
-            .map(|(page_index, x0_pt, y0_pt, x1_pt, y1_pt)| {
-                json!({
-                    "pageIndex": page_index,
-                    "x0Pt": x0_pt,
-                    "y0Pt": y0_pt,
-                    "x1Pt": x1_pt,
-                    "y1Pt": y1_pt,
-                })
-            })
-            .collect(),
-    ))
+    Ok(rectangle_values(rectangles))
 }
 
 /// 发布前校验：选区与高亮几何只能来自当前会话、文档代际与字体代际。
@@ -286,22 +266,26 @@ fn require_current_snapshot(
         .ok_or_else(|| "layout.stale_highlight_snapshot".to_owned())
 }
 
+/// 页面局部矩形在界面 JSON 中的共享字段；矩形键名、顺序与数值格式的唯一来源。
+///
+/// 选区、高亮、组合下划线与拖选命中条目都复用这五个字段；需要把矩形并入
+/// 更大 JSON 对象时，调用方直接把返回的映射并入目标对象。
+pub(super) fn rectangle_fields(rectangle: PageSelectionRect) -> serde_json::Map<String, Value> {
+    serde_json::Map::from_iter([
+        ("pageIndex".to_owned(), json!(rectangle.page_index)),
+        ("x0Pt".to_owned(), json!(rectangle.x0_pt)),
+        ("y0Pt".to_owned(), json!(rectangle.y0_pt)),
+        ("x1Pt".to_owned(), json!(rectangle.x1_pt)),
+        ("y1Pt".to_owned(), json!(rectangle.y1_pt)),
+    ])
+}
+
 /// 将页面局部矩形序列化为选区/高亮层共享的界面结构。
-fn rectangle_values(
-    rectangles: impl IntoIterator<Item = caret_engine::PageSelectionRect>,
-) -> Value {
+fn rectangle_values(rectangles: impl IntoIterator<Item = PageSelectionRect>) -> Value {
     Value::Array(
         rectangles
             .into_iter()
-            .map(|rectangle| {
-                json!({
-                    "pageIndex": rectangle.page_index,
-                    "x0Pt": rectangle.x0_pt,
-                    "y0Pt": rectangle.y0_pt,
-                    "x1Pt": rectangle.x1_pt,
-                    "y1Pt": rectangle.y1_pt,
-                })
-            })
+            .map(|rectangle| Value::Object(rectangle_fields(rectangle)))
             .collect(),
     )
 }
@@ -355,21 +339,18 @@ fn block_environment_highlight_rects(
     let Some(environment_id) = environment_id else {
         return Value::Array(Vec::new());
     };
-    Value::Array(
+    rectangle_values(
         snapshot
             .environment_ranges
             .iter()
             .filter(|range| &range.environment_id == environment_id)
-            .map(|range| {
-                json!({
-                    "pageIndex": range.page_index,
-                    "x0Pt": range.x0_pt,
-                    "y0Pt": range.y0_pt,
-                    "x1Pt": range.x1_pt,
-                    "y1Pt": range.y1_pt,
-                })
-            })
-            .collect(),
+            .map(|range| PageSelectionRect {
+                page_index: range.page_index,
+                x0_pt: range.x0_pt,
+                y0_pt: range.y0_pt,
+                x1_pt: range.x1_pt,
+                y1_pt: range.y1_pt,
+            }),
     )
 }
 
@@ -420,23 +401,16 @@ fn math_text_highlight_rects(
             let y0 = y0.clamp(0.0, page.height_pt);
             let x1 = x1.clamp(0.0, page.width_pt);
             let y1 = y1.clamp(0.0, page.height_pt);
-            (x1 > x0 && y1 > y0).then_some((rectangle.page_index, x0, y0, x1, y1))
+            (x1 > x0 && y1 > y0).then_some(PageSelectionRect {
+                page_index: rectangle.page_index,
+                x0_pt: x0,
+                y0_pt: y0,
+                x1_pt: x1,
+                y1_pt: y1,
+            })
         })
         .collect::<Vec<_>>();
-    Value::Array(
-        rectangles
-            .into_iter()
-            .map(|(page_index, x0_pt, y0_pt, x1_pt, y1_pt)| {
-                json!({
-                    "pageIndex": page_index,
-                    "x0Pt": x0_pt,
-                    "y0Pt": y0_pt,
-                    "x1Pt": x1_pt,
-                    "y1Pt": y1_pt,
-                })
-            })
-            .collect(),
-    )
+    rectangle_values(rectangles)
 }
 
 /// 行内环境/空公式高亮输入：文本范围、空宿主标记与公式 caret 插入槽。
@@ -464,18 +438,18 @@ fn inline_environment_highlight_rects(
     // 共享 caret/行框插入槽，避免零宽对象或无意义范围高亮。
     if empty_inline_host {
         if let Some((caret, font_size)) = math_caret {
-            return insertion_slot_rect_from_caret(caret, font_size, snapshot);
+            return rectangle_values(insertion_slot_rect_from_caret(caret, font_size, snapshot));
         }
-        return insertion_slot_rect(focus, visual_affinity, snapshot);
+        return rectangle_values(insertion_slot_rect(focus, visual_affinity, snapshot));
     }
     let Some(range) = range else {
         if pending_style {
-            return insertion_slot_rect(focus, visual_affinity, snapshot);
+            return rectangle_values(insertion_slot_rect(focus, visual_affinity, snapshot));
         }
         return Value::Array(Vec::new());
     };
     if range.start_utf8 == range.end_utf8 {
-        return insertion_slot_rect(focus, visual_affinity, snapshot);
+        return rectangle_values(insertion_slot_rect(focus, visual_affinity, snapshot));
     }
     let selection = Selection {
         anchor: Pos {
@@ -491,26 +465,11 @@ fn inline_environment_highlight_rects(
             affinity: Affinity::Upstream,
         },
     };
-    let mut rectangles = snapshot
-        .selection_geometry(&selection)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|rectangle| {
-            json!({
-                "pageIndex": rectangle.page_index,
-                "x0Pt": rectangle.x0_pt,
-                "y0Pt": rectangle.y0_pt,
-                "x1Pt": rectangle.x1_pt,
-                "y1Pt": rectangle.y1_pt,
-            })
-        })
-        .collect::<Vec<_>>();
-    if pending_style
-        && let Some(slot) = insertion_slot_rect(focus, visual_affinity, snapshot).as_array()
-    {
-        rectangles.extend(slot.iter().cloned());
+    let mut rectangles = snapshot.selection_geometry(&selection).unwrap_or_default();
+    if pending_style {
+        rectangles.extend(insertion_slot_rect(focus, visual_affinity, snapshot));
     }
-    Value::Array(rectangles)
+    rectangle_values(rectangles)
 }
 
 /// 以当前行高和字号为零长度格式范围生成可见插入槽高亮。
@@ -518,12 +477,12 @@ fn insertion_slot_rect(
     focus: &Pos,
     visual_affinity: caret_engine::VisualAffinity,
     snapshot: &caret_engine::DocumentLayoutSnapshot,
-) -> Value {
+) -> Vec<PageSelectionRect> {
     let Some(caret) = snapshot.caret_geometry(focus, visual_affinity) else {
-        return Value::Array(Vec::new());
+        return Vec::new();
     };
     let Some(font_size) = snapshot.font_size_centipoints_at(focus, visual_affinity) else {
-        return Value::Array(Vec::new());
+        return Vec::new();
     };
     insertion_slot_rect_from_caret(caret, font_size, snapshot)
 }
@@ -533,9 +492,9 @@ fn insertion_slot_rect_from_caret(
     caret: caret_engine::PageCaretGeometry,
     font_size: u16,
     snapshot: &caret_engine::DocumentLayoutSnapshot,
-) -> Value {
+) -> Vec<PageSelectionRect> {
     let Some(page) = snapshot.pages.get(caret.page_index) else {
-        return Value::Array(Vec::new());
+        return Vec::new();
     };
     let width = (f64::from(font_size) / 100.0 * 0.5)
         .max(4.0)
@@ -545,15 +504,15 @@ fn insertion_slot_rect_from_caret(
     let y0 = caret.y0_pt.clamp(0.0, page.height_pt);
     let y1 = caret.y1_pt.clamp(0.0, page.height_pt);
     if ![x0, y0, x1, y1].into_iter().all(f64::is_finite) || x1 <= x0 || y1 <= y0 {
-        return Value::Array(Vec::new());
+        return Vec::new();
     }
-    Value::Array(vec![json!({
-        "pageIndex": caret.page_index,
-        "x0Pt": x0,
-        "y0Pt": y0,
-        "x1Pt": x1,
-        "y1Pt": y1,
-    })])
+    vec![PageSelectionRect {
+        page_index: caret.page_index,
+        x0_pt: x0,
+        y0_pt: y0,
+        x1_pt: x1,
+        y1_pt: y1,
+    }]
 }
 
 /// 在字形视觉光标两侧居中放置空槽，并在页面边缘整体内移。
@@ -779,7 +738,8 @@ impl DocumentViewRuntime {
                 );
         }
         let composition_rectangles = if composing {
-            self.composition_range
+            let rectangles = self
+                .composition_range
                 .as_ref()
                 .and_then(|range| match range {
                     CompositionRange::Paragraph(selection) => {
@@ -791,27 +751,14 @@ impl DocumentViewRuntime {
                         })
                     }
                 })
-                .unwrap_or_default()
-                .into_iter()
-                .map(|rectangle| {
-                    serde_json::json!({
-                        "pageIndex": rectangle.page_index,
-                        "x0Pt": rectangle.x0_pt,
-                        "y0Pt": rectangle.y0_pt,
-                        "x1Pt": rectangle.x1_pt,
-                        "y1Pt": rectangle.y1_pt,
-                    })
-                })
-                .collect()
+                .unwrap_or_default();
+            rectangle_values(rectangles)
         } else {
-            Vec::new()
+            Value::Array(Vec::new())
         };
         view.as_object_mut()
             .ok_or_else(|| "layout.invalid_view_object".to_owned())?
-            .insert(
-                "compositionRects".to_owned(),
-                serde_json::Value::Array(composition_rectangles),
-            );
+            .insert("compositionRects".to_owned(), composition_rectangles);
         let math_context = self.session.math_text_input_context();
         let logical_selection = self.session.selection();
         let (surrounding_text, cursor_position, anchor_position) = if let Some(context) =

@@ -164,10 +164,7 @@ impl DocumentViewRuntime {
             .map_err(|error| format!("selection.set: {error}"))?;
         self.preferred_visual_x_pt = None;
         if effect.composition_changed {
-            self.composition_id = None;
-            self.composition_preview_session = None;
-            self.composition_snapshot = None;
-            self.composition_range = None;
+            self.clear_composition_state();
         }
         let mut result = serde_json::to_value(result)
             .map_err(|error| format!("layout.place_caret_serialize: {error}"))?;

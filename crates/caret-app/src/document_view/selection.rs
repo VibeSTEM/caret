@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use super::DocumentViewRuntime;
+use super::{DocumentViewRuntime, snapshot::rectangle_fields};
 use caret_engine::{
     Affinity, DocumentLayoutSnapshot, LaidOutParagraph, MathEditTarget, MathPositionAffinity,
     MathTextFlowPathStep, MathTextPosition, PageCaretGeometry, PageMathTextDragStop,
@@ -331,10 +331,7 @@ impl DocumentViewRuntime {
                     .map_err(|error| format!("selection.set: {error}"))?;
                 self.preferred_visual_x_pt = None;
                 if effect.composition_changed {
-                    self.composition_id = None;
-                    self.composition_preview_session = None;
-                    self.composition_snapshot = None;
-                    self.composition_range = None;
+                    self.clear_composition_state();
                     return self.layout_snapshot_json_after_composition_cancel();
                 }
             }
@@ -430,10 +427,7 @@ impl DocumentViewRuntime {
                     .map_err(|error| format!("selection.math_text: {error}"))?;
                 self.preferred_visual_x_pt = None;
                 if effect.composition_changed {
-                    self.composition_id = None;
-                    self.composition_preview_session = None;
-                    self.composition_snapshot = None;
-                    self.composition_range = None;
+                    self.clear_composition_state();
                     return self.layout_snapshot_json_after_composition_cancel();
                 }
             }
@@ -451,10 +445,7 @@ impl DocumentViewRuntime {
             .map_err(|error| format!("selection.clear: {error}"))?;
         self.preferred_visual_x_pt = None;
         if effect.composition_changed {
-            self.composition_id = None;
-            self.composition_preview_session = None;
-            self.composition_snapshot = None;
-            self.composition_range = None;
+            self.clear_composition_state();
             return self.layout_snapshot_json_after_composition_cancel();
         }
         self.interaction_state_json()
@@ -612,9 +603,8 @@ fn body_segment_json(
     end: usize,
     rectangle: PageSelectionRect,
 ) -> serde_json::Value {
-    serde_json::json!({
+    let mut segment = serde_json::json!({
         "domainId": "body",
-        "pageIndex": context.page_index,
         "paragraphIndex": context.paragraph_order,
         "startUtf8": start.to_string(),
         "endUtf8": end.to_string(),
@@ -630,11 +620,11 @@ fn body_segment_json(
             "offsetUtf8": end.to_string(),
             "orderUtf8": end.to_string(),
         },
-        "x0Pt": rectangle.x0_pt,
-        "y0Pt": rectangle.y0_pt,
-        "x1Pt": rectangle.x1_pt,
-        "y1Pt": rectangle.y1_pt,
-    })
+    });
+    if let Some(object) = segment.as_object_mut() {
+        object.extend(rectangle_fields(rectangle));
+    }
+    segment
 }
 
 /// 为正文片段的每个字素停靠偏移生成两种逻辑亲和性与两种视觉亲和性的光标停靠条目。
@@ -826,23 +816,19 @@ fn math_pair_segments(
     rectangles
         .into_iter()
         .filter(|rectangle| rectangle.page_index == page_index)
-        .map(|rectangle| {
-            math_segment_json(domain_id, page_index, *start_offset, *end_offset, rectangle)
-        })
+        .map(|rectangle| math_segment_json(domain_id, *start_offset, *end_offset, rectangle))
         .collect()
 }
 
 /// 构造单条数学文本选区矩形命中条目，字段名、类型与数值格式遵循拖选协议。
 fn math_segment_json(
     domain_id: &str,
-    page_index: usize,
     start_offset: usize,
     end_offset: usize,
     rectangle: PageSelectionRect,
 ) -> serde_json::Value {
-    serde_json::json!({
+    let mut segment = serde_json::json!({
         "domainId": domain_id,
-        "pageIndex": page_index,
         "startUtf8": start_offset.to_string(),
         "endUtf8": end_offset.to_string(),
         "startPosition": {
@@ -853,11 +839,11 @@ fn math_segment_json(
             "kind": "math",
             "orderUtf8": end_offset.to_string(),
         },
-        "x0Pt": rectangle.x0_pt,
-        "y0Pt": rectangle.y0_pt,
-        "x1Pt": rectangle.x1_pt,
-        "y1Pt": rectangle.y1_pt,
-    })
+    });
+    if let Some(object) = segment.as_object_mut() {
+        object.extend(rectangle_fields(rectangle));
+    }
+    segment
 }
 
 fn math_text_domain_id(target: &MathEditTarget, token: u64) -> String {
