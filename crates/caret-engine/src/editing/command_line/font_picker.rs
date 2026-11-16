@@ -4,6 +4,7 @@
 // 署名：Yuki Lu
 
 use super::CommandLineMode;
+use crate::editing::command::command_ids;
 use crate::editing::command_registry::CommandCandidate;
 use caret_doc::{DocumentFontTarget, is_valid_language_tag};
 use std::borrow::Cow;
@@ -124,7 +125,7 @@ impl FontPicker {
                 .filter(|family| family.to_lowercase().starts_with(&query.to_lowercase()))
                 .map(|family| CommandCandidate {
                     alias: Cow::Owned(family.clone()),
-                    command_id: "text.format.font_family",
+                    command_id: command_ids::TEXT_FORMAT_FONT_FAMILY,
                     label: Cow::Borrowed("Font family"),
                     available: true,
                     value: Some(family.clone()),
