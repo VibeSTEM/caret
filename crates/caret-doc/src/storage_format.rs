@@ -540,7 +540,8 @@ fn inspect_math_flow_encoding_with_parent(
             };
             match object.get("type").and_then(Value::as_str) {
                 Some("math") => {
-                    // 只检查当前解码器能解释的节点，避免把不透明子树里的 vendor 字段当成已退役字段。
+                    // raw 扫描保留自己的宽松边界（与解码器不同）：跳过 raw 无法解释的节点，
+                    // 避免把不透明子树里的 vendor 字段当成已退役字段。不要替换为解码器判定。
                     let Some(kind) = MathNodeKind::supported_for_raw_scan(object, parent) else {
                         continue;
                     };
@@ -581,7 +582,8 @@ fn inspect_math_content_encoding(value: &Value) -> Result<(), DocumentError> {
     };
     match object.get("type").and_then(Value::as_str) {
         Some("math") => {
-            // 只检查当前解码器能解释的节点，避免把不透明子树里的 vendor 字段当成已退役字段。
+            // raw 扫描保留自己的宽松边界（与解码器不同）：跳过 raw 无法解释的节点，
+            // 避免把不透明子树里的 vendor 字段当成已退役字段。不要替换为解码器判定。
             let Some(kind) = MathNodeKind::supported_for_raw_scan(object, None) else {
                 return Ok(());
             };

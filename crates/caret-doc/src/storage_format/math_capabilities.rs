@@ -45,7 +45,8 @@ pub(super) fn raw_math_capabilities(raw: &Value) -> BTreeSet<&'static str> {
             };
             match object.get("type").and_then(Value::as_str) {
                 Some("math") => {
-                    // 与类型解码器共用同一节点判定；解码器不能解释的节点不产生语法要求。
+                    // raw 能力扫描保留自己的节点边界（与解码器不同）：按首个数学内容宽松推断类别，
+                    // 解码器不能解释的节点不产生语法要求。不要替换为解码器判定。
                     let Some(kind) = MathNodeKind::supported_for_capability_scan(object, parent)
                     else {
                         return;
