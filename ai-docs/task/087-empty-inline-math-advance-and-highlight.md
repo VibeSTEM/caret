@@ -3,7 +3,7 @@
 - 状态：implemented
 - 依赖：044、072、074
 - 优先级：P1
-- 创建 / 更新：2026-11-12 / 2026-11-12
+- 创建 / 更新：2026-11-12 / 2026-11-16
 
 ## 目标与背景
 
@@ -48,8 +48,8 @@
 
 ## 验收标准
 
-- [ ] 空 InlineMath 在正文中 advance 为 0；相邻字符位置与空 InlineEnvironment 一致，无非可见墨迹的额外间隙。
-- [ ] 聚焦空 InlineMath 的粉色高亮与其他空 inline 插入槽同宽、同居中规则；非空公式与块公式几何不变。
+- [x] 空 InlineMath 在正文中 advance 为 0；相邻字符位置与空 InlineEnvironment 一致，无非可见墨迹的额外间隙。
+- [x] 聚焦空 InlineMath 的粉色高亮与其他空 inline 插入槽同宽、同居中规则；非空公式与块公式几何不变。
 - [ ] 空公式仍可点击进入并编辑，命中槽不吞右侧文本；caret、删除、Undo/Redo、IME 回归通过。
 - [ ] 0.9/12/20pt 字号与 zoom≠1 矩阵、Qt 截图核验；格式/lint/测试/独立评审通过。
 
@@ -60,7 +60,9 @@
 | 2026-11-12 | 只读调查（临时 engine/app 探针） | 定位 advance/高亮来源并验证可行 | 已确认（数值见目标与背景） |
 | 2026-11-12 | `cargo test --locked -p caret-math -p caret-engine -p caret-app` | 行内推进/高亮/命中/删除/Undo 回归 | 通过：math 136、engine 843、app 314，0 failed；空公式 IME 未单独覆盖（既有非空数学 IME 用例通过） |
 | 2026-11-12 | `cargo test --workspace --locked`、workspace clippy `-D warnings`、fmt check | 全量无回归 | 通过（exit 0） |
-| — | Qt 桌面截图（颜色/padding/radius/zoom≠1） | 空公式粉色槽与空 Bold 视觉一致 | 未执行（本环境无窗口） |
+| 2026-11-16 | `cargo test --locked -p caret-layout -p caret-math -p caret-engine -p caret-app`；`cargo fmt --all --check` | 空宿主推进、插入槽几何、命中与编辑回归 | 全部通过（exit 0）；9/12/20pt 数值用例通过 |
+| 2026-11-16 | `cargo clippy --locked -p caret-layout -p caret-math -p caret-engine -p caret-app --all-targets -- -D warnings` | 相关 crate 的 lint 无警告 | 通过（exit 0） |
+| 2026-11-16 | Qt 桌面截图（颜色/padding/radius/zoom≠1） | 空公式粉色槽与空 Bold 视觉一致，并检查非 1 倍缩放 | 未完成：Caret 窗口可读到无障碍树，但 ScreenCaptureKit 截图失败，后续 UI 输入报无可用窗口，无法确认实际像素与缩放效果 |
 
 ## 风险与回退
 
@@ -77,3 +79,4 @@
 - 2026-11-12：B1 修复后的短增量独立复核结论 mergeable：caret-layout 补框跳过零宽对象、engine 投影过滤零宽、app Source 分支退回插入槽三条均落地；独立 probe 复测 `A{math}B` 选区 1..4、段落首 0..3 现在返回空矩形而非零宽，相邻文字正常选区不变；caret-math/engine/app 全绿，Qt codec 的 x1<=x0 拒绝分支不可再达。残留：engine/app 的插入槽与正文优先规则仍两份实现，建议后续下沉为单一 helper；Qt 桌面截图与 zoom≠1 未验证。
 
 - 2026-11-12：复查反馈建议：engine 的空宿主插入槽与“正文优先”判定和 app 各有一份实现，与单一权威原则有偏差；按复查意见先合并，后续由 [088](088-unify-empty-inline-math-hit-slot.md) 跟踪下沉为共享 helper，本任务不继续扩大实现范围。
+- 2026-11-16：四个相关 crate 的测试、格式和 clippy 均通过。现有数值用例覆盖 9/12/20pt，未覆盖任务要求的 0.9pt/4pt 下限；空公式 IME 与 Redo 尚缺直接回归，zoom≠1 和 Qt 截图未能完成。本次 Terra/medium 只读审查建议保持 `implemented`；桌面截屏接口失败，待可用 Qt 窗口环境再验收。

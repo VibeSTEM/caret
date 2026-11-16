@@ -3,7 +3,7 @@
 - 状态：implemented
 - 依赖：027、031、044、083
 - 优先级：P1
-- 创建 / 更新：2026-11-12 / 2026-11-12
+- 创建 / 更新：2026-11-12 / 2026-11-16
 
 ## 目标与背景
 
@@ -17,8 +17,8 @@
 
 ## 必读
 
-- [画布与交互背景](../../architecture/interface/canvas-highlighting.md)、[块宿主交互](../../architecture/editor/document-model/block-interaction.md)
-- [验证与评审](../../standards/validation-and-review.md)、[测试规范](../../standards/testing.md)
+- [画布与交互背景](../architecture/interface/canvas-highlighting.md)、[块宿主交互](../architecture/editor/document-model/block-interaction.md)
+- [验证与评审](../standards/validation-and-review.md)、[测试规范](../standards/testing.md)
 - [083](083-cross-host-selection-and-transactions.md)、[027](027-canvas-and-hit-testing.md)
 
 ## 范围与非目标
@@ -45,7 +45,7 @@
 
 ## 验收标准
 
-- [x] body 拖选跨 Equation/Align 与块环境时，拖动中出现与松手一致的高亮矩形；未跨对象时不出现额外矩形。
+- [ ] body 拖选跨 Equation/Align 与块环境时，拖动中出现与松手一致的高亮矩形；未跨对象时不出现额外矩形。（Align 缺少 app 级预览矩形断言。）
 - [x] 公式文本岛拖选仍使用片段预览，松手提交；native 测试覆盖跨页预览。
 - [x] QML lint、app 测试、native CTest、workspace 测试通过；性能与 Qt 实机手感记录为未验证/待观察。
 
@@ -67,3 +67,4 @@
 ## 决策与工作记录
 
 - 2026-11-12：从桌面测试发现中拆出并实现；选择复用 `setSelection` 而非新增 preview-only 接口，避免扩大 FFI/native 桥；性能与中断语义留待实机/后续任务评估。
+- 2026-11-16：只读领域复核 QML body/MathText 路由、PageSurface 绘制、app/native 测试及结构选区分类。实现与共享几何路径一致；限制：未找到 Align 拖选预览的 app 级专门断言，现有跨正文结构选区测试覆盖 Equation/Align 分类，但不直接验证 Align 预览矩形。因此保持 `implemented`，补齐 Align 端到端预览证据后再考虑 `done`。本次未运行测试；性能与真实桌面手感仍待观察。

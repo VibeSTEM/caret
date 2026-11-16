@@ -1,9 +1,9 @@
 # 086 — 行内对象边界选区几何修正
 
-- 状态：implemented
+- 状态：done
 - 依赖：030、044、068
 - 优先级：P1
-- 创建 / 更新：2026-11-12 / 2026-11-12
+- 创建 / 更新：2026-11-12 / 2026-11-16
 
 ## 目标与背景
 
@@ -32,7 +32,7 @@
 ## 前置条件与待决策
 
 - 已确认根因与原型（2026-11-12 只读调查）：修正后粉色高亮在 math-then-bold 场景 x0 从 72 变为 78、带前缀从 78.59 变为 84.59；蓝选区 x0 同步；math 位于 Bold 内时保持整框。
-- 需确认 RTL、跨行、同簇多对象邻接场景的裁切规则；选区矩形由 Parley 返回 `Vec<PageSelectionRect>`（页面坐标）。
+- RTL、跨行和多对象裁切现由合成平台测试及 2–5 行自动换行测试覆盖；零宽对象由 087 的回归覆盖。选区矩形由 Parley 返回 `Vec<PageSelectionRect>`（页面坐标）。
 
 ## 实施步骤
 
@@ -47,9 +47,9 @@
 
 ## 验收标准
 
-- [ ] 选区/高亮矩形在对象之后开始时不再覆盖对象盒；对象被完整选中时仍覆盖。
-- [ ] RTL、跨行、多对象邻接与空对象行为有回归；旧行为断言同步更新。
-- [ ] 格式、lint、相关 crate 测试与独立评审通过。
+- [x] 选区/高亮矩形在对象之后开始时不再覆盖对象盒；对象被完整选中时仍覆盖。
+- [x] RTL、跨行、多对象邻接与空对象行为有回归；旧行为断言同步更新。
+- [x] 格式、lint、相关 crate 测试与独立评审通过。
 
 ## 验证计划与结果
 
@@ -59,7 +59,10 @@
 | 2026-11-12 | `cargo test --locked -p caret-layout` | LTR/bidi/完整覆盖/邻接对象回归 | 通过：133 passed / 0 failed（新增 3 条） |
 | 2026-11-12 | `cargo test --locked -p caret-app` | 粉色高亮/普通选区不覆盖相邻 InlineMath | 通过：313 passed / 0 failed（新增 2 条） |
 | 2026-11-12 | `cargo test --workspace --locked`、workspace clippy `-D warnings`、fmt check | 全量无回归 | 通过（exit 0） |
-| — | Qt 桌面截图/窗口验证 | 粉色与选区绘制观感 | 未执行（本环境无窗口） |
+| 2026-11-12 | Qt 桌面截图/窗口验证 | 粉色与选区绘制观感 | 未执行（当时没有可用窗口） |
+| 2026-11-16 | `cargo test --locked -p caret-layout -p caret-math -p caret-engine -p caret-app`；`cargo fmt --all --check` | 对最终跨行/RTL/零宽修复复验 | 全部通过（exit 0） |
+| 2026-11-16 | `cargo clippy --locked -p caret-layout -p caret-math -p caret-engine -p caret-app --all-targets -- -D warnings` | 相关 crate 的 lint 无警告 | 通过（exit 0） |
+| 2026-11-16 | Terra/medium 领域复核最终归一化与跨行修复 | 检查对象边界、RTL、跨行、零宽回归及是否满足 done | 支持转 done；无阻断发现。未运行测试；Qt 截图非本任务验收项，本次窗口截图尝试受 ScreenCaptureKit 错误阻止 |
 
 ## 风险与回退
 
@@ -75,3 +78,4 @@
 - 2026-11-12：用户环境反馈“选中行内公式出现两个重叠高亮框，其中一个多出后一字素宽度”；确认 086 只对未完整覆盖对象裁盒、已选中对象仅做 containment 去重，Parley 把对象 advance 折进后一字素簇时仍可能输出两个重叠矩形（mac 上 Parley 合并为单矩形故旧测试通过）。修复为统一归一化：每个非零宽 inline object 盒区间始终从同 line 选区矩形裁除（可拆左右段），仅对被完整选中的对象补一次整盒，最后合并同 line 相邻矩形；新增合成平台差异输入、前后文本、反向选区、RTL 与零宽对象回归。旧 086 场景成为该规则特例，全部兼容。
 
 - 2026-11-12：keep 侧判定二次修正：跨自动换行的多行选区不能用首尾光标全局视觉 span 判定中间行对象左右文本（末行较短会误丢对象所在行右侧合法选中文本，ui 高亮断档）；改为逻辑偏移 + 对象 run 的 RTL 方向：keep_left = if rtl { end > object.end } else { start < object.start }，keep_right = if rtl { start < object.start } else { end > object.end }，与行数无关。补自动换行 2–5 行 + 行内公式 + 末行较短的全选回归（逐行矩形并集覆盖整行、对象区间只在所在行一次）与 bidi/RTL 多行变体；`duplicate_platform_rectangles_collapse_to_one_object_interval` 期望由“对象+后一字素宽”修正为对象区间。
+- 2026-11-16：四个相关 crate 的测试、格式和 clippy 均通过。最终只读领域复核确认现有覆盖包含跨行 2–5 行、RTL/bidi、多对象及零宽对象，支持完成验收。Qt 截图尝试未成功（ScreenCaptureKit 无法启动）；手动观感记录留空，不影响此 task 的验收标准。
