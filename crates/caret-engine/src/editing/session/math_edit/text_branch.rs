@@ -9,14 +9,14 @@ use super::super::super::flow_format::InheritedInlineStyle;
 use super::super::super::grapheme::GraphemeMap;
 use super::super::history::{self, DocumentPatch, EditGroup};
 use super::super::{Affinity, Direction, EditError, Effect};
+use super::Session;
 use super::navigation::{next_grapheme_end, previous_grapheme_start};
 use super::{
     MathEdit, MathEditBranch, MathEditTarget, MathPositionAffinity, MathPositionHost,
-    MathSequencePath, MathSequenceStep, MathTextFlowPath, MathTextPosition, MathTreePosition,
-    history_position, math_text_selection_range,
+    MathTextPosition, MathTreePosition, first_placeholder_position, history_position,
+    math_position_affinity_to_affinity, math_text_selection_range,
 };
-use super::{Session, optional_placeholder_operand};
-use caret_doc::{Block, MathContent, MathNodeKind};
+use caret_doc::Block;
 
 pub(super) mod format_tree_edit;
 mod split_tree_edit;
@@ -30,13 +30,6 @@ pub(super) use format_tree_edit::{
 };
 pub(super) use split_tree_edit::apply_math_text_split_tree_edit;
 use std::ops::Range;
-
-#[derive(Debug, Clone)]
-pub(super) struct MathTextEdit {
-    pub(super) path: MathTextFlowPath,
-    pub(super) range: Range<usize>,
-    pub(super) split_math_contents: Vec<MathContent>,
-}
 
 #[derive(Clone, Copy)]
 pub(super) enum PendingStylePolicy {
@@ -593,10 +586,7 @@ impl Session {
         } else {
             focus_position
         };
-        let insertion_affinity = match insertion_position.affinity {
-            MathPositionAffinity::Upstream => Affinity::Upstream,
-            MathPositionAffinity::Downstream => Affinity::Downstream,
-        };
+        let insertion_affinity = math_position_affinity_to_affinity(insertion_position.affinity);
         let insertion_global = range.start;
         let requested_global_cursor = insertion_global
             .checked_add(inserted.len())
@@ -804,11 +794,6 @@ impl Session {
         let (next_path, local_cursor) = preferred_cursor
             .or_else(|| island.path_at_offset(global_cursor, true))
             .ok_or(EditError::InvalidPosition)?;
-        let next_position = MathTextPosition::new(
-            next_path.clone(),
-            local_cursor,
-            MathPositionAffinity::Downstream,
-        );
         target_tree
             .validate()
             .map_err(|error| EditError::InvalidMath(error.to_string()))?;
@@ -816,13 +801,12 @@ impl Session {
             edit,
             target_tree,
             MathTextTreeCommit {
-                branch: MathEditBranch::Text {
-                    path: next_path.clone(),
-                    anchor: next_position,
-                    focus_affinity: MathPositionAffinity::Downstream,
-                    anchor_visual_affinity: crate::VisualAffinity::Downstream,
-                    visual_affinity: crate::VisualAffinity::Downstream,
-                },
+                branch: MathEditBranch::text(
+                    next_path.clone(),
+                    local_cursor,
+                    MathPositionAffinity::Downstream,
+                    crate::VisualAffinity::Downstream,
+                ),
                 align_cell: next_path.align_cell(),
                 cursor: local_cursor,
                 merge_group: Some(EditGroup::InsertText),
@@ -933,11 +917,6 @@ impl Session {
             .checked_sub(updated_flow_ranges[focus_index].start)
             .ok_or(EditError::InvalidPosition)?;
         let next_path = edit_path.clone();
-        let next_position = MathTextPosition::new(
-            next_path.clone(),
-            next_cursor,
-            MathPositionAffinity::Downstream,
-        );
         target_tree
             .validate()
             .map_err(|error| EditError::InvalidMath(error.to_string()))?;
@@ -945,13 +924,12 @@ impl Session {
             edit,
             target_tree,
             MathTextTreeCommit {
-                branch: MathEditBranch::Text {
-                    path: next_path.clone(),
-                    anchor: next_position,
-                    focus_affinity: MathPositionAffinity::Downstream,
-                    anchor_visual_affinity: crate::VisualAffinity::Downstream,
-                    visual_affinity: crate::VisualAffinity::Downstream,
-                },
+                branch: MathEditBranch::text(
+                    next_path,
+                    next_cursor,
+                    MathPositionAffinity::Downstream,
+                    crate::VisualAffinity::Downstream,
+                ),
                 align_cell: edit_path.align_cell(),
                 cursor: next_cursor,
                 merge_group: Some(match direction {
@@ -1010,68 +988,4 @@ fn math_position_host(
         }
         _ => Err(EditError::InvalidPosition),
     }
-}
-
-fn first_placeholder_position(
-    tree: &caret_doc::MathTree,
-    path: &MathSequencePath,
-    range: Range<usize>,
-) -> Option<(MathSequencePath, usize)> {
-    let mut contents = tree.root.content.as_slice();
-    for step in path.steps() {
-        contents = match *step {
-            MathSequenceStep::Operand {
-                content_index,
-                operand_index,
-            } => match contents.get(content_index)? {
-                MathContent::Math(node) => &node.children.get(operand_index)?.content,
-                _ => return None,
-            },
-            MathSequenceStep::EnvironmentChildren { content_index } => {
-                match contents.get(content_index)? {
-                    MathContent::Environment(environment) => &environment.children,
-                    _ => return None,
-                }
-            }
-        };
-    }
-    for content_index in range {
-        match contents.get(content_index)? {
-            MathContent::Math(node) if node.kind == MathNodeKind::Placeholder => {
-                return Some((path.clone(), content_index));
-            }
-            MathContent::Math(node) => {
-                for (operand_index, flow) in node.children.iter().enumerate() {
-                    if optional_placeholder_operand(node, operand_index) {
-                        continue;
-                    }
-                    let mut steps = path.steps().to_vec();
-                    steps.push(MathSequenceStep::Operand {
-                        content_index,
-                        operand_index,
-                    });
-                    if let Some(position) = first_placeholder_position(
-                        tree,
-                        &MathSequencePath::new(steps),
-                        0..flow.content.len(),
-                    ) {
-                        return Some(position);
-                    }
-                }
-            }
-            MathContent::Environment(environment) => {
-                let mut steps = path.steps().to_vec();
-                steps.push(MathSequenceStep::EnvironmentChildren { content_index });
-                if let Some(position) = first_placeholder_position(
-                    tree,
-                    &MathSequencePath::new(steps),
-                    0..environment.children.len(),
-                ) {
-                    return Some(position);
-                }
-            }
-            MathContent::Text(_) | MathContent::SoftBreak(_) | MathContent::Opaque(_) => {}
-        }
-    }
-    None
 }

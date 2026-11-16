@@ -451,37 +451,19 @@ fn math_layout_target_at_path<'a>(
     Some(target)
 }
 
-fn math_sequence_path_for_flow(steps: &[MathPathStep]) -> Option<MathSequencePath> {
-    let mut sequence = Vec::with_capacity(steps.len() / 2);
-    let mut content_index = None;
-    for step in steps {
-        match *step {
-            MathPathStep::Content(index) => {
-                if content_index.replace(index).is_some() {
-                    return None;
-                }
-            }
-            MathPathStep::Operand(operand_index) => {
-                sequence.push(MathSequenceStep::Operand {
-                    content_index: content_index.take()?,
-                    operand_index,
-                });
-            }
-            MathPathStep::EnvironmentChild(index) => {
-                sequence.push(MathSequenceStep::EnvironmentChildren {
-                    content_index: content_index.take()?,
-                });
-                content_index = Some(index);
-            }
-        }
-    }
-    content_index
-        .is_none()
-        .then(|| MathSequencePath::new(sequence))
+/// 序列路径末尾的显式补充步类型。
+#[derive(Clone, Copy)]
+enum MathSequenceEnd {
+    /// 路径止于当前 Content，要求所有步骤恰好成对消费。
+    Content,
+    /// 节点自身是环境子序列，在末尾追加环境子节点步。
+    EnvironmentChildren,
 }
 
-fn math_sequence_path_for_environment_children(steps: &[MathPathStep]) -> Option<MathSequencePath> {
-    let mut sequence = Vec::with_capacity(steps.len() / 2 + 1);
+/// 把布局路径折算为公式结构序列；`end` 显式给出末尾补充步。
+fn math_sequence_path(steps: &[MathPathStep], end: MathSequenceEnd) -> Option<MathSequencePath> {
+    let has_environment_end = matches!(end, MathSequenceEnd::EnvironmentChildren);
+    let mut sequence = Vec::with_capacity(steps.len() / 2 + usize::from(has_environment_end));
     let mut content_index = None;
     for step in steps {
         match *step {
@@ -504,9 +486,11 @@ fn math_sequence_path_for_environment_children(steps: &[MathPathStep]) -> Option
             }
         }
     }
-    sequence.push(MathSequenceStep::EnvironmentChildren {
-        content_index: content_index.take()?,
-    });
+    if has_environment_end {
+        sequence.push(MathSequenceStep::EnvironmentChildren {
+            content_index: content_index.take()?,
+        });
+    }
     content_index
         .is_none()
         .then(|| MathSequencePath::new(sequence))
@@ -1344,7 +1328,36 @@ impl DocumentLayoutSnapshot {
         if x_pt < 0.0 || y_pt < 0.0 || x_pt > page.width_pt || y_pt > page.height_pt {
             return None;
         }
-        let mut best: Option<(f64, u8, f64, usize, PageMathStructureHit)> = None;
+        // 结构命中的排序键：strict 命中优先，strict 内按面积/深度/距离，loose 命中按距离优先。
+        #[derive(Clone, Copy)]
+        struct MathStructureHitRank {
+            distance_pt: f64,
+            strict: bool,
+            area_pt2: f64,
+            depth: usize,
+        }
+
+        impl MathStructureHitRank {
+            fn better_than(self, other: Self) -> bool {
+                if self.strict != other.strict {
+                    return self.strict;
+                }
+                if self.strict {
+                    self.area_pt2 < other.area_pt2
+                        || (self.area_pt2 == other.area_pt2
+                            && (self.depth > other.depth
+                                || (self.depth == other.depth
+                                    && self.distance_pt < other.distance_pt)))
+                } else {
+                    self.distance_pt < other.distance_pt
+                        || (self.distance_pt == other.distance_pt
+                            && (self.area_pt2 < other.area_pt2
+                                || (self.area_pt2 == other.area_pt2 && self.depth > other.depth)))
+                }
+            }
+        }
+
+        let mut best: Option<(MathStructureHitRank, PageMathStructureHit)> = None;
         for projection in self.math_projections_on_page(page_index) {
             if !projection.contains_y(y_pt) {
                 continue;
@@ -1376,7 +1389,8 @@ impl DocumentLayoutSnapshot {
                     let Some(flow) = math_flow_at_layout_path(root, &node.path) else {
                         continue;
                     };
-                    let Some(path) = math_sequence_path_for_flow(&node.path) else {
+                    let Some(path) = math_sequence_path(&node.path, MathSequenceEnd::Content)
+                    else {
                         continue;
                     };
                     (path, flow.content.as_slice(), false)
@@ -1385,7 +1399,9 @@ impl DocumentLayoutSnapshot {
                     else {
                         continue;
                     };
-                    let Some(path) = math_sequence_path_for_environment_children(&node.path) else {
+                    let Some(path) =
+                        math_sequence_path(&node.path, MathSequenceEnd::EnvironmentChildren)
+                    else {
                         continue;
                     };
                     (path, environment.children.as_slice(), true)
@@ -1431,7 +1447,7 @@ impl DocumentLayoutSnapshot {
                 if !strict_hit && (y_pt < hit_y0_pt || y_pt > hit_y1_pt) {
                     continue;
                 }
-                if empty_inline_host && self.point_inside_body_text(page_index, x_pt, y_pt) {
+                if empty_inline_host && self.body_text_contains_point(page_index, x_pt, y_pt) {
                     continue;
                 }
                 let child_step = |index| {
@@ -1505,41 +1521,29 @@ impl DocumentLayoutSnapshot {
                     position,
                     caret,
                 };
-                let priority = u8::from(!strict_hit);
-                let distance = (y_pt - (y0_pt + y1_pt) / 2.0).abs();
-                let area = width_pt * height_pt;
-                let depth = node.path.len();
-                if best.as_ref().is_none_or(
-                    |(best_distance, best_priority, best_area, best_depth, _)| {
-                        priority < *best_priority
-                            || (priority == *best_priority
-                                && if priority == 0 {
-                                    area < *best_area
-                                        || (area == *best_area
-                                            && (depth > *best_depth
-                                                || (depth == *best_depth
-                                                    && distance < *best_distance)))
-                                } else {
-                                    distance < *best_distance
-                                        || (distance == *best_distance
-                                            && (area < *best_area
-                                                || (area == *best_area && depth > *best_depth)))
-                                })
-                    },
-                ) {
-                    best = Some((distance, priority, area, depth, hit));
+                let rank = MathStructureHitRank {
+                    distance_pt: (y_pt - (y0_pt + y1_pt) / 2.0).abs(),
+                    strict: strict_hit,
+                    area_pt2: width_pt * height_pt,
+                    depth: node.path.len(),
+                };
+                if best
+                    .as_ref()
+                    .is_none_or(|(best_rank, _)| rank.better_than(*best_rank))
+                {
+                    best = Some((rank, hit));
                 }
             }
         }
-        best.map(|(_, _, _, _, hit)| hit)
+        best.map(|(_, hit)| hit)
     }
 
     /// 判断页面点是否落在正宽正文/文本岛字素内部。
     ///
-    /// 与 app 命中测试使用同一内缩规则：正文保留正宽字素内部区域，字素间的重合边界
-    /// 留给零宽公式 caret。空 InlineMath 的插入槽与相邻文字重叠时据此让正文优先，
-    /// 避免吞掉邻字点击。
-    fn point_inside_body_text(&self, page_index: usize, x_pt: f64, y_pt: f64) -> bool {
+    /// 正文保留正宽字素内部区域，字素间的重合边界留给零宽公式 caret；空 InlineMath
+    /// 的插入槽与相邻文字重叠时据此让正文优先，避免吞掉邻字点击。app 命中裁决也复用
+    /// 本查询，保持与公式插入槽相同的内缩规则。
+    pub fn body_text_contains_point(&self, page_index: usize, x_pt: f64, y_pt: f64) -> bool {
         let Some(hit) = self.hit_test(page_index, x_pt, y_pt) else {
             return false;
         };
@@ -1616,7 +1620,7 @@ impl DocumentLayoutSnapshot {
             let root = self.math_scope_root(projection, &node.scope_id)?;
             let flow = math_flow_at_layout_path(root, &node.path)?;
             Some((
-                math_sequence_path_for_flow(&node.path)?,
+                math_sequence_path(&node.path, MathSequenceEnd::Content)?,
                 flow.content.len(),
                 false,
             ))
@@ -1624,7 +1628,7 @@ impl DocumentLayoutSnapshot {
             let root = self.math_scope_root(projection, &node.scope_id)?;
             let environment = math_environment_at_layout_path(root, &node.path)?;
             Some((
-                math_sequence_path_for_environment_children(&node.path)?,
+                math_sequence_path(&node.path, MathSequenceEnd::EnvironmentChildren)?,
                 environment.children.len(),
                 true,
             ))
@@ -1696,12 +1700,15 @@ impl DocumentLayoutSnapshot {
                         .find(|child| child.scope_id == node.scope_id && child.path == child_path)
                     {
                         if child.is_container {
-                            let nested_position = self
-                                .math_scope_root(projection, &node.scope_id)
-                                .and_then(|root| {
-                                    math_environment_at_layout_path(root, &child.path).and_then(
-                                        |environment| {
-                                            math_sequence_path_for_environment_children(&child.path)
+                            let nested_position =
+                                self.math_scope_root(projection, &node.scope_id)
+                                    .and_then(|root| {
+                                        math_environment_at_layout_path(root, &child.path).and_then(
+                                            |environment| {
+                                                math_sequence_path(
+                                                    &child.path,
+                                                    MathSequenceEnd::EnvironmentChildren,
+                                                )
                                                 .map(|path| {
                                                     let at_start = child_index == position.offset;
                                                     MathTreePosition {
@@ -1719,9 +1726,9 @@ impl DocumentLayoutSnapshot {
                                                         },
                                                     }
                                                 })
-                                        },
-                                    )
-                                });
+                                            },
+                                        )
+                                    });
                             if let Some(caret) = nested_position
                                 .as_ref()
                                 .and_then(|nested| self.math_tree_caret(target, nested))
@@ -3084,109 +3091,65 @@ impl DocumentLayoutService {
             }));
         }
 
-        let mut pagination_items = Vec::with_capacity(ordered_inputs.len());
-        let mut paragraph_index = 0;
-        let math_blocks = ordered_inputs
-            .iter()
-            .filter_map(|item| match item {
-                LayoutInput::MathBlock {
-                    math_id, layout, ..
-                } => Some((math_id.clone(), Arc::clone(layout))),
-                LayoutInput::Paragraph { .. } | LayoutInput::ExplicitBreak => None,
-            })
-            .collect::<HashMap<_, _>>();
-        let math_block_environment_ids = ordered_inputs
-            .iter()
-            .filter_map(|item| match item {
-                LayoutInput::MathBlock {
-                    math_id,
-                    environment_ids,
-                    ..
-                } => Some((math_id.clone(), environment_ids.clone())),
-                LayoutInput::Paragraph { .. } | LayoutInput::ExplicitBreak => None,
-            })
-            .collect::<HashMap<_, _>>();
-        let math_block_text_layouts = ordered_inputs
-            .iter()
-            .filter_map(|item| match item {
-                LayoutInput::MathBlock {
-                    math_id,
-                    text_layouts,
-                    ..
-                } => Some((math_id.clone(), text_layouts.clone())),
-                LayoutInput::Paragraph { .. } | LayoutInput::ExplicitBreak => None,
-            })
-            .collect::<HashMap<_, _>>();
-        let math_block_sources = ordered_inputs
-            .iter()
-            .filter_map(|item| match item {
-                LayoutInput::MathBlock {
-                    math_id, source, ..
-                } => Some((math_id.clone(), source.as_ref().clone())),
-                LayoutInput::Paragraph { .. } | LayoutInput::ExplicitBreak => None,
-            })
-            .collect::<HashMap<_, _>>();
-        for item in ordered_inputs {
-            match item {
-                LayoutInput::ExplicitBreak => {
-                    pagination_items.push(PaginationItem::ExplicitPageBreak);
-                }
-                LayoutInput::Paragraph { .. } => {
-                    let paragraph = paragraphs.get(paragraph_index).ok_or_else(|| {
-                        DocumentLayoutError::InvalidDocument("missing laid out paragraph".into())
-                    })?;
-                    let style = resolved_styles.get(paragraph_index).ok_or_else(|| {
-                        DocumentLayoutError::InvalidDocument("missing paragraph style".into())
-                    })?;
-                    pagination_items.push(PaginationItem::Paragraph(
-                        ParagraphPaginationInput::with_style(
-                            &paragraph.id,
-                            &paragraph.layout.paragraph,
-                            *style,
-                        ),
-                    ));
-                    paragraph_index += 1;
-                }
-                LayoutInput::MathBlock {
-                    math_id,
-                    x_offset_pt,
-                    width_pt,
-                    height_pt,
-                    baseline_pt,
-                    caret_baseline_pt,
-                    caret_height_pt,
-                    clip_ink_to_line_height,
-                    space_before_pt,
-                    space_after_pt,
-                    ..
-                } => {
-                    let math_id_ref = math_blocks
-                        .get_key_value(&math_id)
-                        .map(|(id, _)| id)
-                        .ok_or_else(|| {
+        let page_layouts = {
+            let mut pagination_items = Vec::with_capacity(ordered_inputs.len());
+            let mut paragraph_index = 0;
+            for item in &ordered_inputs {
+                match item {
+                    LayoutInput::ExplicitBreak => {
+                        pagination_items.push(PaginationItem::ExplicitPageBreak);
+                    }
+                    LayoutInput::Paragraph { .. } => {
+                        let paragraph = paragraphs.get(paragraph_index).ok_or_else(|| {
                             DocumentLayoutError::InvalidDocument(
-                                "missing block math layout".to_owned(),
+                                "missing laid out paragraph".into(),
                             )
                         })?;
-                    pagination_items.push(PaginationItem::MathBlock(
-                        caret_layout::MathBlockPaginationInput {
-                            math_id: math_id_ref,
-                            x_offset_pt,
-                            width_pt,
-                            height_pt,
-                            baseline_pt,
-                            caret_baseline_pt,
-                            caret_height_pt,
-                            clip_ink_to_line_height,
-                            space_before_pt,
-                            space_after_pt,
-                        },
-                    ));
+                        let style = resolved_styles.get(paragraph_index).ok_or_else(|| {
+                            DocumentLayoutError::InvalidDocument("missing paragraph style".into())
+                        })?;
+                        pagination_items.push(PaginationItem::Paragraph(
+                            ParagraphPaginationInput::with_style(
+                                &paragraph.id,
+                                &paragraph.layout.paragraph,
+                                *style,
+                            ),
+                        ));
+                        paragraph_index += 1;
+                    }
+                    LayoutInput::MathBlock {
+                        math_id,
+                        x_offset_pt,
+                        width_pt,
+                        height_pt,
+                        baseline_pt,
+                        caret_baseline_pt,
+                        caret_height_pt,
+                        clip_ink_to_line_height,
+                        space_before_pt,
+                        space_after_pt,
+                        ..
+                    } => {
+                        pagination_items.push(PaginationItem::MathBlock(
+                            caret_layout::MathBlockPaginationInput {
+                                math_id,
+                                x_offset_pt: *x_offset_pt,
+                                width_pt: *width_pt,
+                                height_pt: *height_pt,
+                                baseline_pt: *baseline_pt,
+                                caret_baseline_pt: *caret_baseline_pt,
+                                caret_height_pt: *caret_height_pt,
+                                clip_ink_to_line_height: *clip_ink_to_line_height,
+                                space_before_pt: *space_before_pt,
+                                space_after_pt: *space_after_pt,
+                            },
+                        ));
+                    }
                 }
             }
-        }
-        let page_layouts = paginate_paragraphs(&pagination_items, content_height_pt as f32)
-            .map_err(|error| DocumentLayoutError::Pagination(error.to_string()))?;
+            paginate_paragraphs(&pagination_items, content_height_pt as f32)
+                .map_err(|error| DocumentLayoutError::Pagination(error.to_string()))?
+        };
         let pages: Vec<_> = page_layouts
             .into_iter()
             .map(|layout| PageLayoutSnapshot {
@@ -3199,6 +3162,29 @@ impl DocumentLayoutService {
                 layout,
             })
             .collect();
+        // 消费布局输入，单次派生全部块级公式映射；值字段直接移动，只有四张映射各自的
+        // 键需要克隆三次。
+        let mut math_blocks = HashMap::new();
+        let mut math_block_environment_ids = HashMap::new();
+        let mut math_block_text_layouts = HashMap::new();
+        let mut math_block_sources = HashMap::new();
+        for item in ordered_inputs {
+            let LayoutInput::MathBlock {
+                math_id,
+                source,
+                layout,
+                text_layouts,
+                environment_ids,
+                ..
+            } = item
+            else {
+                continue;
+            };
+            math_blocks.insert(math_id.clone(), layout);
+            math_block_environment_ids.insert(math_id.clone(), environment_ids);
+            math_block_text_layouts.insert(math_id.clone(), text_layouts);
+            math_block_sources.insert(math_id, *source);
+        }
         let paragraph_lookup: HashMap<_, _> = paragraphs
             .iter()
             .enumerate()
@@ -3400,11 +3386,7 @@ fn collect_math_projections(
                     continue;
                 };
                 let height = f64::from(line_box.metrics.height_pt);
-                if let (Some(line), Some(raw_top), Some(adjustment)) = (
-                    paragraph.layout.layout.get(line_index),
-                    paragraph.layout.parley_line_tops_pt.get(line_index),
-                    paragraph.layout.baseline_adjustments_pt.get(line_index),
-                ) {
+                if let Some(line) = paragraph.layout.layout.get(line_index) {
                     for item in line.items() {
                         let PositionedGlyphLayoutItem::InlineBox(inline_box) = item else {
                             continue;
@@ -3415,15 +3397,18 @@ fn collect_math_projections(
                         let Some(math_id) = paragraph.inline_math_ids.get(index) else {
                             continue;
                         };
+                        let Some(baseline_y_pt) = paragraph.layout.page_local_baseline_pt(
+                            line_index,
+                            line_top,
+                            inline_box.y + inline_box.baseline.unwrap_or(inline_box.height),
+                        ) else {
+                            continue;
+                        };
                         projections.push(MathPageProjection {
                             math_id: math_id.clone(),
                             page_index,
                             object_x_pt: page.margin_left_pt + f64::from(inline_box.x),
-                            baseline_y_pt: line_top
-                                + f64::from(inline_box.y)
-                                + f64::from(inline_box.baseline.unwrap_or(inline_box.height))
-                                - f64::from(*raw_top)
-                                + f64::from(*adjustment),
+                            baseline_y_pt,
                             caret_line_top_pt: line_top,
                             caret_baseline_y_pt: line_top
                                 + f64::from(paragraph.math_caret_baseline_pt),
@@ -4995,27 +4980,6 @@ fn collect_blocks<'a>(
                             .map_err(|error| DocumentLayoutError::Math(error.to_string()))?,
                         ),
                         shaper.into_sidecars(),
-                    )
-                } else if !context.settings.inline_environment_templates().is_empty() {
-                    (
-                        Arc::new(
-                            caret_math::layout::layout_align_with_host_row_grid(
-                                engine.font(),
-                                align,
-                                DocumentUnits::centipoints_to_points(u32::from(
-                                    context.font_size_centipoints,
-                                )),
-                                context.settings.inline_environment_templates(),
-                                None,
-                                math_host_row_grid(
-                                    context.line_grid_metrics,
-                                    context.caret_metrics,
-                                    context.line_spacing,
-                                )?,
-                            )
-                            .map_err(|error| DocumentLayoutError::Math(error.to_string()))?,
-                        ),
-                        HashMap::new(),
                     )
                 } else {
                     (

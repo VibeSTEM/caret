@@ -4,7 +4,7 @@
 // 署名：Yuki Lu
 
 use super::DocumentViewRuntime;
-use caret_engine::Command;
+use caret_engine::{Command, CompositionRange, DocumentLayoutSnapshot, Session};
 
 struct ImeCommitCheckpoint {
     session: caret_engine::SessionCheckpoint,
@@ -51,6 +51,36 @@ impl ImeCommitCheckpoint {
         runtime.composition_snapshot = self.composition_snapshot;
         runtime.composition_range = self.composition_range;
         runtime.last_interaction_context = self.last_interaction_context;
+    }
+}
+
+impl DocumentViewRuntime {
+    /// 一次性安装四个 composition 字段；组合状态只允许以完整形式存在。
+    ///
+    /// 预编辑会话、预览快照与组合范围必须与 composition id 同生共死，
+    /// 因此安装入口只提供整组写入，不暴露逐字段赋值。
+    pub(super) fn set_composition_state(
+        &mut self,
+        id: u64,
+        preview_session: Session,
+        snapshot: DocumentLayoutSnapshot,
+        range: CompositionRange,
+    ) {
+        self.composition_id = Some(id);
+        self.composition_preview_session = Some(preview_session);
+        self.composition_snapshot = Some(snapshot);
+        self.composition_range = Some(range);
+    }
+
+    /// 一次性清空四个 composition 字段；不触发额外信号，也不改动其它布局缓存。
+    ///
+    /// 清空后各字段与初始状态逐项一致（均为 `None`），调用方负责随后发布
+    /// 取消快照或增量布局。
+    pub(super) fn clear_composition_state(&mut self) {
+        self.composition_id = None;
+        self.composition_preview_session = None;
+        self.composition_snapshot = None;
+        self.composition_range = None;
     }
 }
 
@@ -215,10 +245,7 @@ impl DocumentViewRuntime {
             } else {
                 self.commit_ime_replacement(replacement_start, replacement_length, &commit, None)?;
             }
-            self.composition_id = None;
-            self.composition_preview_session = None;
-            self.composition_snapshot = None;
-            self.composition_range = None;
+            self.clear_composition_state();
             self.preferred_visual_x_pt = None;
         }
 
@@ -297,16 +324,12 @@ impl DocumentViewRuntime {
             self.session
                 .run(Command::CancelComposition { id })
                 .map_err(|error| format!("ime.cancel: {error}"))?;
-            self.composition_id = None;
-            self.composition_preview_session = None;
-            self.composition_snapshot = None;
-            self.composition_range = None;
+            self.clear_composition_state();
         }
 
         self.preedit_cursor_position_utf16 = cursor_position_utf16;
-        self.composition_preview_session = None;
-        self.composition_snapshot = None;
-        self.composition_range = None;
+        // 所有预编辑结果均已提交或取消，预览缓存不再有效。
+        self.clear_composition_state();
         if commit_current || replacement_length != 0 || had_composition {
             if let Some((paragraph_id, page_start_index, base_generation)) = committed_delta {
                 self.layout_snapshot_json_with_delta(Some((
@@ -387,10 +410,7 @@ impl DocumentViewRuntime {
         self.session
             .install_composition_candidate(candidate)
             .map_err(|error| format!("ime.install_candidate: {error}"))?;
-        self.composition_id = Some(id);
-        self.composition_preview_session = Some(preview);
-        self.composition_snapshot = Some(snapshot);
-        self.composition_range = Some(range);
+        self.set_composition_state(id, preview, snapshot, range);
         self.preedit_cursor_position_utf16 = cursor_position_utf16;
         #[cfg(test)]
         if FAIL_NEXT_IME_PREVIEW_PUBLISH.with(|fail| fail.replace(false)) {

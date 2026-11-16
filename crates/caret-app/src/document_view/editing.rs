@@ -24,10 +24,7 @@ impl DocumentViewRuntime {
             return Ok(state.to_string());
         }
         if effect.composition_changed {
-            self.composition_id = None;
-            self.composition_preview_session = None;
-            self.composition_snapshot = None;
-            self.composition_range = None;
+            self.clear_composition_state();
             return self.layout_snapshot_json_after_composition_cancel();
         }
         if effect.selection_changed {
@@ -310,10 +307,7 @@ impl DocumentViewRuntime {
             .run(command)
             .map_err(|error| format!("{error_context}: {error}"))?;
         if effect.composition_changed {
-            self.composition_id = None;
-            self.composition_preview_session = None;
-            self.composition_snapshot = None;
-            self.composition_range = None;
+            self.clear_composition_state();
         }
         self.preferred_visual_x_pt = None;
         let mut delete_delta = None;

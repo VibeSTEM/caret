@@ -2,17 +2,6 @@
 
 use super::*;
 
-fn paragraph_with_text(text: &str) -> caret_doc::Paragraph {
-    let mut paragraph = caret_doc::Paragraph::empty(caret_doc::NodeId::generate());
-    paragraph.inlines.push(text_flow(Run {
-        text: text.to_owned(),
-        language: None,
-        props: Default::default(),
-        extra: Default::default(),
-    }));
-    paragraph
-}
-
 fn paragraph_text(paragraph: &caret_doc::Paragraph) -> String {
     paragraph
         .inlines

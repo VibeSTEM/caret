@@ -12,7 +12,7 @@ use super::super::{
 use super::Session;
 use super::formatting::PendingInlineStyle;
 use super::history::{
-    self, DocumentPatch, MathEditPosition, SessionHistoryEdit, SessionHistoryState,
+    self, DocumentEditSnapshot, DocumentPatch, MathEditPosition, SessionHistoryState,
 };
 use super::math_edit::{MathEditBranch, MathEditTarget, MathPositionAffinity, MathTextPosition};
 use crate::editing::StructureSelection;
@@ -268,10 +268,6 @@ impl Session {
             None
         };
         let before_math_position = MathEditPosition::from_edit(&original_math_edit);
-        let after_math_position = candidate
-            .math_edit
-            .as_ref()
-            .map(MathEditPosition::from_edit);
         let before_selection = self.selection.clone();
         let before_anchor_visual_affinity = self.selection_anchor_visual_affinity;
         let before_visual_affinity = self.selection_visual_affinity;
@@ -283,31 +279,17 @@ impl Session {
         candidate.history_merge_epoch = original_history_merge_epoch;
         if let Some(patch) = patch {
             candidate.advance_history_merge_epoch();
-            let after_state_id = candidate.allocate_history_state_id();
-            let edit = SessionHistoryEdit::new(
-                patch,
-                SessionHistoryState::new(
-                    before_selection,
-                    before_visual_affinity,
-                    before_pending_style.clone(),
-                    original_history_state_id,
-                )
-                .with_anchor_visual_affinity(before_anchor_visual_affinity)
-                .with_math_edit(Some(before_math_position)),
-                SessionHistoryState::new(
-                    candidate.selection.clone(),
-                    candidate.selection_visual_affinity,
-                    candidate.pending_inline_style.clone(),
-                    after_state_id,
-                )
-                .with_anchor_visual_affinity(candidate.selection_anchor_visual_affinity)
-                .with_math_edit(after_math_position),
-            );
-            candidate.record_history_edit(edit);
-            candidate.history_state_id = after_state_id;
             candidate.session_id = original_session_id;
             candidate.document_generation = original_generation;
-            candidate.advance_document_generation();
+            let before_state = SessionHistoryState::new(
+                before_selection,
+                before_visual_affinity,
+                before_pending_style,
+                original_history_state_id,
+            )
+            .with_anchor_visual_affinity(before_anchor_visual_affinity)
+            .with_math_edit(Some(before_math_position));
+            candidate.commit_document_edit(patch, before_state, DocumentEditSnapshot::Inline);
             candidate.advance_history_merge_epoch();
         } else {
             candidate.history_state_id = original_history_state_id;
@@ -431,7 +413,6 @@ impl Session {
             candidate.document_generation = self.document_generation;
             candidate.next_history_state_id = self.next_history_state_id;
             candidate.history_state_id = self.history_state_id;
-            let after_state_id = candidate.allocate_history_state_id();
             let mut changed_ids = before_paragraph_states
                 .iter()
                 .map(|state| state.id.clone())
@@ -449,32 +430,22 @@ impl Session {
                 self.edit_history = mem::replace(&mut candidate.edit_history, history::history());
                 return Err(EditError::InvalidPosition);
             }
-            let edit = SessionHistoryEdit::new(
-                DocumentPatch::Paragraphs {
-                    before: before_paragraph_states,
-                    after: after_paragraph_states,
-                    merge_group: None,
-                    merge_epoch: candidate.history_merge_epoch,
-                },
-                SessionHistoryState::new(
-                    before_selection,
-                    before_visual_affinity,
-                    self.pending_inline_style.clone(),
-                    before_state_id,
-                )
-                .with_anchor_visual_affinity(before_anchor_visual_affinity),
-                SessionHistoryState::new(
-                    candidate.selection.clone(),
-                    candidate.selection_visual_affinity,
-                    candidate.pending_inline_style.clone(),
-                    after_state_id,
-                )
-                .with_anchor_visual_affinity(candidate.selection_anchor_visual_affinity),
-            );
-            candidate.record_history_edit(edit);
+            let patch = DocumentPatch::Paragraphs {
+                before: before_paragraph_states,
+                after: after_paragraph_states,
+                merge_group: None,
+                merge_epoch: candidate.history_merge_epoch,
+            };
+            let before_state = SessionHistoryState::new(
+                before_selection,
+                before_visual_affinity,
+                self.pending_inline_style.clone(),
+                before_state_id,
+            )
+            .with_anchor_visual_affinity(before_anchor_visual_affinity);
             candidate.session_id = original_session_id;
             candidate.document_generation = original_generation;
-            candidate.advance_document_generation();
+            candidate.commit_document_edit(patch, before_state, DocumentEditSnapshot::Inline);
         }
         *self = candidate;
         Ok(effect)

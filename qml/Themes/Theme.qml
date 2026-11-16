@@ -74,6 +74,8 @@ QtObject {
     // 弹窗与表单控件（逻辑像素）
     readonly property int dialogActionWidth: ThemeViewModel.tokens.dialogActionWidth
     readonly property int dialogActionSpacing: ThemeViewModel.tokens.dialogActionSpacing
+    // 三个操作按钮并排的确认对话框宽度；各对话框共用同一按内容推导的公式。
+    readonly property int actionDialogWidth: dialogActionWidth * 3 + dialogActionSpacing * 2 + spacingLarge * 2
     readonly property int settingsDialogWidth: ThemeViewModel.tokens.settingsDialogWidth
     readonly property int settingsDialogHeight: ThemeViewModel.tokens.settingsDialogHeight
     readonly property int settingsDialogSidebarWidth: ThemeViewModel.tokens.settingsDialogSidebarWidth

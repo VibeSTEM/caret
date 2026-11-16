@@ -51,6 +51,26 @@ class ShellLoadTest : public QObject {
 #endif
 #ifdef CARET_ENABLE_APP
     void documentHitTestReturnsRustPosition();
+    void documentCanvasClickAndTypingPublishRustSnapshot();
+    void documentCanvasRasterizesTypedGlyphWithInk();
+    void documentFontFallbackPreservesLatinBaseline();
+    void returnSplitsParagraphAndForwardsEditorKey();
+    void inputMethodCompositionUnderlineTracksPageTransforms();
+    void mixedCompositionPublishesOneUnderlinePerRect();
+    void cancelledCompositionClearsPreeditAndCompositionRects();
+    void escapeClosesCommandLineWithoutEditingTheDocument();
+    void inputMethodContextTracksCaretNavigation();
+    void backspaceMergesParagraphsAndDeletesText();
+    void shiftEnterInsertsSoftBreakWithoutSplittingParagraph();
+    void shiftNavigationProjectsSelectionRects();
+    void dragSelectionCommitsSameRustSelectionProjection();
+    void reverseDragMovesInputMethodCaretToFocus();
+    void clipboardCopyPasteUsesRustSelectionProjection();
+    void selectionDragFromExistingSelectionPublishesCanvasRects();
+    void mouseClickClearsSelectionInsideAndOutsideText();
+    void multilinePasteSplitsParagraphs();
+    void insertReplacementClearsSelectionAndPublishesInteractionChange();
+    void crossPageDragPreviewIncludesIntermediatePages();
     void mathTextDragUsesSharedPreviewAndCommitProtocol();
     void documentInputDeltaKeepsUntouchedPagesAndParagraphs();
     void documentFileFlowPreservesSaveStateAndReopens();
@@ -68,5 +88,12 @@ class ShellLoadTest : public QObject {
     void mathFontFallbackDiagnosticProjectsToViewModel();
     void textFontWarningStatusBarTracksLayoutDiagnostics();
     void missingRecoveryEntryFailsWithoutReplacingTheOpenDocument();
+#endif
+
+  private:
+#ifdef CARET_ENABLE_APP
+    // 文档 runtime 相关用例共用的空白会话与恢复目录设置。
+    static bool configureDocumentRecovery(const QString& recovery_root);
+    static bool installBlankDocumentRuntime();
 #endif
 };

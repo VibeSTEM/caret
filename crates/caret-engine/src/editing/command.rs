@@ -10,6 +10,27 @@ use caret_doc::{
 use super::{EnvironmentKind, MathTextPosition, Pos, Selection};
 use caret_layout::VisualAffinity;
 
+/// 命令稳定 ID 的单一来源：`Command::id`、候选表、命令行分派与字体选择器共用同一符号，
+/// 避免同一 ID 在多个模块各写一份字面量后静默漂移。
+pub(crate) mod command_ids {
+    pub(crate) const TEXT_SOFT_BREAK: &str = "text.soft_break";
+    pub(crate) const TEXT_SPLIT_PARAGRAPH: &str = "text.split_paragraph";
+    pub(crate) const TEXT_INSERT_ONE_CHARACTER_WIDTH_SPACE: &str =
+        "text.insert.one_character_width_space";
+    pub(crate) const TEXT_INSERT_TWO_CHARACTER_WIDTH_SPACE: &str =
+        "text.insert.two_character_width_space";
+    pub(crate) const INSERT_INLINE_MATH: &str = "insert.inline_math";
+    pub(crate) const INSERT_EQUATION: &str = "insert.equation";
+    pub(crate) const INSERT_ALIGN: &str = "insert.align";
+    pub(crate) const STRUCT_SECTION_CREATE: &str = "struct.section.create";
+    pub(crate) const TEXT_FORMAT_BOLD: &str = "text.format.bold";
+    pub(crate) const TEXT_FORMAT_ITALIC: &str = "text.format.italic";
+    pub(crate) const TEXT_FORMAT_UNDERLINE: &str = "text.format.underline";
+    pub(crate) const TEXT_FORMAT_FONT: &str = "text.format.font";
+    pub(crate) const TEXT_FORMAT_FONT_FAMILY: &str = "text.format.font_family";
+    pub(crate) const PARAGRAPH_FIRST_LINE_INDENT_SET: &str = "paragraph.first_line_indent.set";
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
     Backward,
@@ -162,14 +183,18 @@ impl Command {
         match self {
             Self::TextInput(_) => "text.input",
             Self::InsertText(_) => "text.insert",
-            Self::InsertOneCharacterWidthSpace => "text.insert.one_character_width_space",
-            Self::InsertTwoCharacterWidthSpace => "text.insert.two_character_width_space",
+            Self::InsertOneCharacterWidthSpace => {
+                command_ids::TEXT_INSERT_ONE_CHARACTER_WIDTH_SPACE
+            }
+            Self::InsertTwoCharacterWidthSpace => {
+                command_ids::TEXT_INSERT_TWO_CHARACTER_WIDTH_SPACE
+            }
             Self::PasteText(_) => "clipboard.paste",
-            Self::InsertSoftBreak => "text.soft_break",
-            Self::InsertInlineMath(_) => "insert.inline_math",
+            Self::InsertSoftBreak => command_ids::TEXT_SOFT_BREAK,
+            Self::InsertInlineMath(_) => command_ids::INSERT_INLINE_MATH,
             Self::EnterMath(_) => "math.enter",
             Self::SetMathTextSelection { .. } => "math.text_selection.set",
-            Self::InsertParagraphBreak => "text.split_paragraph",
+            Self::InsertParagraphBreak => command_ids::TEXT_SPLIT_PARAGRAPH,
             Self::Delete(_) => "text.delete",
             Self::MoveCaret(_) => "caret.move",
             Self::MoveStructure(Direction::Forward) => "struct.next",
@@ -185,14 +210,20 @@ impl Command {
             }
             Self::ExpandStructureSelection => "selection.expand_structure",
             Self::ExitStructure => "struct.exit",
-            Self::CreateBlockEnvironment(BlockEnvironmentKind::Section) => "struct.section.create",
+            Self::CreateBlockEnvironment(BlockEnvironmentKind::Section) => {
+                command_ids::STRUCT_SECTION_CREATE
+            }
             Self::CreateBlockEnvironment(BlockEnvironmentKind::Custom) => "struct.custom.create",
-            Self::ToggleInlineFormat(InlineEnvironmentKind::Bold) => "text.format.bold",
-            Self::ToggleInlineFormat(InlineEnvironmentKind::Italic) => "text.format.italic",
-            Self::ToggleInlineFormat(InlineEnvironmentKind::Font) => "text.format.font",
-            Self::ToggleRunUnderline => "text.format.underline",
-            Self::SetInlineFontFamily(_) => "text.format.font_family",
-            Self::SetParagraphFirstLineIndentChars(_) => "paragraph.first_line_indent.set",
+            Self::ToggleInlineFormat(InlineEnvironmentKind::Bold) => command_ids::TEXT_FORMAT_BOLD,
+            Self::ToggleInlineFormat(InlineEnvironmentKind::Italic) => {
+                command_ids::TEXT_FORMAT_ITALIC
+            }
+            Self::ToggleInlineFormat(InlineEnvironmentKind::Font) => command_ids::TEXT_FORMAT_FONT,
+            Self::ToggleRunUnderline => command_ids::TEXT_FORMAT_UNDERLINE,
+            Self::SetInlineFontFamily(_) => command_ids::TEXT_FORMAT_FONT_FAMILY,
+            Self::SetParagraphFirstLineIndentChars(_) => {
+                command_ids::PARAGRAPH_FIRST_LINE_INDENT_SET
+            }
             Self::SetDefaultFontFamily(_) => "document.default_font_family.set",
             Self::SetDocumentFontFamily { .. } => "document.font_family.set",
             Self::EditorKey(EditorKey::Escape) => "interaction.escape",

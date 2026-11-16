@@ -2,7 +2,8 @@
 
 use super::{
     FontLineMetrics, InkBounds, InlineObjectMetrics, LineMetricsError, LineSpacing,
-    calculate_line_metrics, calculate_line_metrics_with_grid, row_spacing_for_content_line_spacing,
+    calculate_content_line_metrics_with_grid, calculate_line_metrics,
+    calculate_line_metrics_with_grid, row_spacing_for_content_line_spacing,
 };
 use std::ops::Range;
 
@@ -304,4 +305,131 @@ fn malformed_inline_object_geometry_is_rejected_before_line_layout() {
         assert_eq!(error, LineMetricsError::InvalidObjectMetrics);
         assert_eq!(error.to_string(), "layout.invalid_object_metrics");
     }
+}
+
+#[test]
+fn content_line_metrics_reuse_grid_row_spacing_semantics() -> Result<(), Box<dyn std::error::Error>>
+{
+    let line_grid = metrics(8.0, 2.0, 1.0);
+
+    // ExpandToFit：保留正文基线，只补足内容越出基础行框的上下边缘。
+    let natural =
+        calculate_content_line_metrics_with_grid(line_grid, 5.0, 3.0, LineSpacing::Natural)?;
+    assert_eq!(natural.height_pt, 11.5);
+    assert_eq!(natural.baseline_pt, 8.5);
+    assert!(!natural.content_metrics_overflow_line_box);
+    assert!(!natural.object_ink_overflows_line_box);
+    assert!(!natural.clip_ink_to_line_height);
+
+    // 内容 descent 恰好等于行框基线下方距离时不算 ink 溢出。
+    let descending =
+        calculate_content_line_metrics_with_grid(line_grid, 5.0, 30.0, LineSpacing::Natural)?;
+    assert_eq!(descending.height_pt, 38.5);
+    assert_eq!(descending.baseline_pt, 8.5);
+    assert!(!descending.object_ink_overflows_line_box);
+
+    // 有符号内容度量先夹到 0：负 ascent/descent 不收缩正文行框。
+    let negative =
+        calculate_content_line_metrics_with_grid(line_grid, -5.0, -4.0, LineSpacing::Natural)?;
+    assert_eq!(negative.height_pt, 11.0);
+    assert_eq!(negative.baseline_pt, 8.5);
+    assert!(!negative.content_metrics_overflow_line_box);
+    assert!(!negative.object_ink_overflows_line_box);
+
+    // AtLeast 先解析正文基础行框，再由 ExpandToFit 扩展内容边缘。
+    let at_least = calculate_content_line_metrics_with_grid(
+        line_grid,
+        100.0,
+        0.0,
+        LineSpacing::AtLeast {
+            min_centipoints: 1400,
+        },
+    )?;
+    assert_eq!(at_least.height_pt, 104.0);
+    assert_eq!(at_least.baseline_pt, 100.0);
+    assert!(!at_least.content_metrics_overflow_line_box);
+    assert!(!at_least.clip_ink_to_line_height);
+    Ok(())
+}
+
+#[test]
+fn content_line_metrics_keep_fixed_spacing_clipping_and_ink_flags()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exactly = calculate_content_line_metrics_with_grid(
+        metrics(8.0, 2.0, 1.0),
+        20.0,
+        10.0,
+        LineSpacing::Exactly { centipoints: 1200 },
+    )?;
+    assert_eq!(exactly.height_pt, 12.0);
+    assert_eq!(exactly.baseline_pt, 9.5);
+    assert!(exactly.content_metrics_overflow_line_box);
+    assert!(exactly.object_ink_overflows_line_box);
+    assert!(exactly.clip_ink_to_line_height);
+
+    // 固定行距允许基线与行框为负；ink 溢出只按原 signed 内容度量报告。
+    let negative_baseline = calculate_content_line_metrics_with_grid(
+        metrics(10.0, 10.0, 0.0),
+        -20.0,
+        -20.0,
+        LineSpacing::Exactly { centipoints: 100 },
+    )?;
+    assert_eq!(negative_baseline.height_pt, 1.0);
+    assert_eq!(negative_baseline.baseline_pt, -9.0);
+    assert!(negative_baseline.content_metrics_overflow_line_box);
+    assert!(!negative_baseline.object_ink_overflows_line_box);
+    assert!(negative_baseline.clip_ink_to_line_height);
+    Ok(())
+}
+
+#[test]
+fn content_line_metrics_preserve_invalid_input_error_paths() {
+    // Multiple 缩小的行框低于正文基线时，共享网格拒绝越界的 ExpandToFit 基础行框。
+    assert_eq!(
+        calculate_content_line_metrics_with_grid(
+            metrics(10.0, 0.0, 0.0),
+            0.0,
+            0.0,
+            LineSpacing::Multiple { percent: 50 },
+        ),
+        Err(LineMetricsError::InvalidObjectMetrics)
+    );
+    // 内容度量在进入行距解析前即被拒绝。
+    assert_eq!(
+        calculate_content_line_metrics_with_grid(
+            metrics(8.0, 2.0, 1.0),
+            f32::NAN,
+            0.0,
+            LineSpacing::Natural,
+        ),
+        Err(LineMetricsError::InvalidObjectMetrics)
+    );
+    // 字体度量、行距与行框求和非有限值仍走正文行框入口。
+    assert_eq!(
+        calculate_content_line_metrics_with_grid(
+            metrics(f32::NAN, 2.0, 1.0),
+            0.0,
+            0.0,
+            LineSpacing::Natural,
+        ),
+        Err(LineMetricsError::InvalidFontMetrics)
+    );
+    assert_eq!(
+        calculate_content_line_metrics_with_grid(
+            metrics(f32::MAX, f32::MAX, 0.0),
+            0.0,
+            0.0,
+            LineSpacing::Natural,
+        ),
+        Err(LineMetricsError::InvalidFontMetrics)
+    );
+    assert_eq!(
+        calculate_content_line_metrics_with_grid(
+            metrics(8.0, 2.0, 1.0),
+            0.0,
+            0.0,
+            LineSpacing::Exactly { centipoints: 0 },
+        ),
+        Err(LineMetricsError::InvalidLineSpacing)
+    );
 }

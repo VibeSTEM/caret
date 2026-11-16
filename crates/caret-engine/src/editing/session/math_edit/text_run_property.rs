@@ -8,13 +8,13 @@ use super::super::super::environment::inline_adapter::{
 };
 use super::super::super::flow_format::{format_flow_run_property, run_property_range_state};
 use super::super::history::{DocumentPatch, MathEditPosition, SessionHistoryEdit};
-use super::super::{Affinity, EditError, Effect};
+use super::super::{EditError, Effect};
 use super::{
-    MathEdit, MathEditBranch, MathPositionAffinity, Session, history_position,
-    math_text_selection_range,
+    MathEdit, MathEditBranch, MathTextPosition, Session, history_position,
+    math_position_affinity_to_affinity, math_text_selection_range,
 };
 use crate::editing::session::history::SessionHistoryState;
-use caret_doc::{Block, FlowContent, MathNode, MathTree, TextFlow};
+use caret_doc::{FlowContent, MathNode, TextFlow};
 
 impl Session {
     pub(super) fn toggle_math_text_run_property(
@@ -90,13 +90,12 @@ impl Session {
             edit,
             updated_tree,
             super::text_branch::MathTextTreeCommit {
-                branch: super::MathEditBranch::Text {
-                    path: path.clone(),
+                branch: super::MathEditBranch::text_selection(
                     anchor,
-                    focus_affinity,
+                    MathTextPosition::new(path.clone(), cursor, focus_affinity),
                     anchor_visual_affinity,
                     visual_affinity,
-                },
+                ),
                 align_cell: path.align_cell(),
                 cursor,
                 merge_group: None,
@@ -114,10 +113,9 @@ impl Session {
         offset: usize,
     ) -> Result<Effect, EditError> {
         let affinity = match &edit.branch {
-            MathEditBranch::Text { focus_affinity, .. } => match focus_affinity {
-                MathPositionAffinity::Upstream => Affinity::Upstream,
-                MathPositionAffinity::Downstream => Affinity::Downstream,
-            },
+            MathEditBranch::Text { focus_affinity, .. } => {
+                math_position_affinity_to_affinity(*focus_affinity)
+            }
             MathEditBranch::Source | MathEditBranch::Tree { .. } => {
                 return Err(EditError::InvalidPosition);
             }
@@ -184,19 +182,6 @@ pub(super) fn apply_pending_run_properties(
         edit_text_flow_property(text, start..end, *descriptor, Some(*enabled))?;
     }
     Ok(())
-}
-
-pub(super) fn block_math_tree_mut(
-    block: &mut Block,
-    cell: Option<(usize, usize)>,
-) -> Option<&mut MathTree> {
-    match (block, cell) {
-        (Block::Equation(equation), None) => Some(&mut equation.math_tree),
-        (Block::Align(align), Some((row, column))) => {
-            align.rows.get_mut(row)?.cells.get_mut(column)
-        }
-        _ => None,
-    }
 }
 
 fn text_range_has_disabled_property(

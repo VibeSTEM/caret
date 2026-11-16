@@ -3,7 +3,7 @@
 use super::*;
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, InlineEnvironment,
-    InlineEnvironmentKind, MathContent, NodeId, Paragraph, ParagraphContent, Run,
+    InlineEnvironmentKind, MathContent, NodeId, ParagraphContent, Run,
 };
 use caret_engine::Command;
 use std::collections::BTreeMap;
@@ -145,17 +145,6 @@ fn clipped_math_text_selection_collapses_by_unclipped_visual_line_order() -> Res
         .ok_or_else(|| "collapsed selection lost math text focus".to_owned())?;
     assert_eq!(collapsed.focus.offset, 6);
     Ok(())
-}
-
-fn paragraph_with_text(text: &str) -> Paragraph {
-    let mut paragraph = Paragraph::empty(NodeId::generate());
-    paragraph.inlines.push(text_flow(Run {
-        text: text.to_owned(),
-        language: None,
-        props: BTreeMap::new(),
-        extra: BTreeMap::new(),
-    }));
-    paragraph
 }
 
 fn section_with_body(title: &str, body: &str) -> (Block, NodeId) {

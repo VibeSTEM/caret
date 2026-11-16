@@ -5,6 +5,8 @@
 
 use std::borrow::Cow;
 
+use super::command::command_ids;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandCandidate {
     pub alias: Cow<'static, str>,
@@ -45,7 +47,7 @@ const CANDIDATES: &[RegisteredCandidate] = &[
     },
     RegisteredCandidate {
         alias: "\\section",
-        command_id: "struct.section.create",
+        command_id: command_ids::STRUCT_SECTION_CREATE,
         label: "Section",
         available: true,
     },
@@ -81,19 +83,19 @@ const CANDIDATES: &[RegisteredCandidate] = &[
     },
     RegisteredCandidate {
         alias: "\\math",
-        command_id: "insert.inline_math",
+        command_id: command_ids::INSERT_INLINE_MATH,
         label: "Inline math",
         available: true,
     },
     RegisteredCandidate {
         alias: "\\equation",
-        command_id: "insert.equation",
+        command_id: command_ids::INSERT_EQUATION,
         label: "Single-line equation",
         available: true,
     },
     RegisteredCandidate {
         alias: "\\align",
-        command_id: "insert.align",
+        command_id: command_ids::INSERT_ALIGN,
         label: "Multiline equation",
         available: true,
     },
@@ -105,55 +107,55 @@ const CANDIDATES: &[RegisteredCandidate] = &[
     },
     RegisteredCandidate {
         alias: "\\newline",
-        command_id: "text.soft_break",
+        command_id: command_ids::TEXT_SOFT_BREAK,
         label: "Line break",
         available: true,
     },
     RegisteredCandidate {
         alias: "\\newparagraph",
-        command_id: "text.split_paragraph",
+        command_id: command_ids::TEXT_SPLIT_PARAGRAPH,
         label: "New paragraph",
         available: true,
     },
     RegisteredCandidate {
         alias: "\\singlecharspace",
-        command_id: "text.insert.one_character_width_space",
+        command_id: command_ids::TEXT_INSERT_ONE_CHARACTER_WIDTH_SPACE,
         label: "One-character-width space",
         available: true,
     },
     RegisteredCandidate {
         alias: "\\doublecharspace",
-        command_id: "text.insert.two_character_width_space",
+        command_id: command_ids::TEXT_INSERT_TWO_CHARACTER_WIDTH_SPACE,
         label: "Two-character-width space",
         available: true,
     },
     RegisteredCandidate {
         alias: "\\firstlineindent",
-        command_id: "paragraph.first_line_indent.set",
+        command_id: command_ids::PARAGRAPH_FIRST_LINE_INDENT_SET,
         label: "First-line indent",
         available: true,
     },
     RegisteredCandidate {
         alias: "\\bold",
-        command_id: "text.format.bold",
+        command_id: command_ids::TEXT_FORMAT_BOLD,
         label: "Bold",
         available: true,
     },
     RegisteredCandidate {
         alias: "\\italic",
-        command_id: "text.format.italic",
+        command_id: command_ids::TEXT_FORMAT_ITALIC,
         label: "Italic",
         available: true,
     },
     RegisteredCandidate {
         alias: "\\underline",
-        command_id: "text.format.underline",
+        command_id: command_ids::TEXT_FORMAT_UNDERLINE,
         label: "Underline",
         available: true,
     },
     RegisteredCandidate {
         alias: "\\font",
-        command_id: "text.format.font",
+        command_id: command_ids::TEXT_FORMAT_FONT,
         label: "Font family",
         available: true,
     },
@@ -231,7 +233,9 @@ pub fn math_candidates() -> Vec<CommandCandidate> {
         .filter(|candidate| {
             matches!(
                 candidate.command_id,
-                "text.format.bold" | "text.format.italic" | "text.format.underline"
+                command_ids::TEXT_FORMAT_BOLD
+                    | command_ids::TEXT_FORMAT_ITALIC
+                    | command_ids::TEXT_FORMAT_UNDERLINE
             )
         })
         .collect::<Vec<_>>();

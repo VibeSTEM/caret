@@ -7,7 +7,7 @@ use crate::model::{Block, Document, MathNodeKind, Media, ModelError};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 mod math_capabilities;
-use math_capabilities::validate_raw_math_feature_declarations;
+use math_capabilities::{missing_math_capability, validate_raw_math_feature_declarations};
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 
@@ -27,11 +27,11 @@ const KNOWN_FEATURES: &[&str] = &[
     "caret.env.custom",
     "caret.env.templates",
     "caret.font.family-preferences",
-    "caret.math.align",
-    "caret.math.content-flow.v2",
-    "caret.math.equation",
-    "caret.math.inline",
-    "caret.math.syntax.v1",
+    Document::MATH_FEATURE_ALIGN,
+    Document::MATH_FEATURE_CONTENT_FLOW_V2,
+    Document::MATH_FEATURE_EQUATION,
+    Document::MATH_FEATURE_INLINE,
+    Document::MATH_FEATURE_SYNTAX_V1,
     "caret.paragraph.content-flow.v1",
     "caret.paragraph.layout-settings",
     "caret.text.default-font-size",
@@ -40,18 +40,14 @@ const KNOWN_FEATURES: &[&str] = &[
     "caret.theme.snapshot",
 ];
 
+/// 必须由 envelope 显式声明、否则拒绝打开的能力；数学部分复用统一策略。
 fn requires_explicit_feature_declaration(feature: &str) -> bool {
     matches!(
         feature,
         "caret.paragraph.content-flow.v1"
             | "caret.env.inline-text-templates.v1"
             | "caret.text.underline"
-            | "caret.math.inline"
-            | "caret.math.equation"
-            | "caret.math.align"
-            | "caret.math.syntax.v1"
-            | "caret.math.content-flow.v2"
-    )
+    ) || Document::requires_explicit_math_declaration(feature)
 }
 
 /// 可供编辑并保存的当前 `.cdoc` 文档。
@@ -378,10 +374,8 @@ pub fn open(bytes: &[u8]) -> Result<OpenedDocument, DocumentError> {
         if requires_explicit_feature_declaration(&feature)
             && !declared_features.contains(feature.as_str())
         {
-            if feature.starts_with("caret.math.") {
-                return Err(DocumentError::InvalidDocument(format!(
-                    "required math capability is missing: {feature}"
-                )));
+            if Document::requires_explicit_math_declaration(&feature) {
+                return Err(missing_math_capability(&feature));
             }
             reasons.push(PreviewReason::MissingRequiredFeature(feature.clone()));
         } else if !KNOWN_FEATURES.contains(&feature.as_str())
@@ -546,16 +540,17 @@ fn inspect_math_flow_encoding_with_parent(
             };
             match object.get("type").and_then(Value::as_str) {
                 Some("math") => {
-                    if !supported_raw_math_node(object, parent) {
+                    // raw 扫描保留自己的宽松边界（与解码器不同）：跳过 raw 无法解释的节点，
+                    // 避免把不透明子树里的 vendor 字段当成已退役字段。不要替换为解码器判定。
+                    let Some(kind) = MathNodeKind::supported_for_raw_scan(object, parent) else {
                         continue;
-                    }
+                    };
                     if object.contains_key("sourceRange") {
                         return Err(retired_math_field("MathNode.sourceRange"));
                     }
                     if let Some(children) = object.get("children").and_then(Value::as_array) {
                         for child in children {
-                            let kind = raw_math_node_kind(object);
-                            inspect_math_flow_encoding_with_parent(Some(child), kind)?;
+                            inspect_math_flow_encoding_with_parent(Some(child), Some(kind))?;
                         }
                     }
                 }
@@ -587,16 +582,17 @@ fn inspect_math_content_encoding(value: &Value) -> Result<(), DocumentError> {
     };
     match object.get("type").and_then(Value::as_str) {
         Some("math") => {
-            if !supported_raw_math_node(object, None) {
+            // raw 扫描保留自己的宽松边界（与解码器不同）：跳过 raw 无法解释的节点，
+            // 避免把不透明子树里的 vendor 字段当成已退役字段。不要替换为解码器判定。
+            let Some(kind) = MathNodeKind::supported_for_raw_scan(object, None) else {
                 return Ok(());
-            }
+            };
             if object.contains_key("sourceRange") {
                 return Err(retired_math_field("MathNode.sourceRange"));
             }
             if let Some(children) = object.get("children").and_then(Value::as_array) {
                 for child in children {
-                    let kind = raw_math_node_kind(object);
-                    inspect_math_flow_encoding_with_parent(Some(child), kind)?;
+                    inspect_math_flow_encoding_with_parent(Some(child), Some(kind))?;
                 }
             }
             Ok(())
@@ -619,73 +615,6 @@ fn inspect_math_content_encoding(value: &Value) -> Result<(), DocumentError> {
         }
         _ => Ok(()),
     }
-}
-
-fn raw_math_node_kind(object: &serde_json::Map<String, Value>) -> Option<MathNodeKind> {
-    object
-        .get("kind")
-        .and_then(Value::as_str)
-        .and_then(|name| serde_json::from_value(Value::String(name.to_owned())).ok())
-}
-
-// 只检查当前解码器能解释的节点，避免把不透明子树里的 vendor 字段当成已退役字段。
-fn supported_raw_math_node(
-    object: &serde_json::Map<String, Value>,
-    parent: Option<MathNodeKind>,
-) -> bool {
-    let Some(kind) = raw_math_node_kind(object) else {
-        return false;
-    };
-    let mut attributes = std::collections::BTreeMap::new();
-    if let Some(values) = object.get("attributes") {
-        let Some(values) = values.as_object() else {
-            return false;
-        };
-        for (key, value) in values {
-            let Some(value) = value.as_str() else {
-                return false;
-            };
-            attributes.insert(key.clone(), value.to_owned());
-        }
-    }
-    let text = match object.get("text") {
-        None | Some(Value::Null) => None,
-        Some(Value::String(text)) => Some(text.as_str()),
-        _ => return false,
-    };
-    let children = match object.get("children") {
-        None => &[][..],
-        Some(Value::Array(children)) => children.as_slice(),
-        _ => return false,
-    };
-    let child_kinds = children
-        .iter()
-        .map(|flow| {
-            let content = flow.as_object()?.get("content")?.as_array()?;
-            let kind = if let [item] = content.as_slice()
-                && let Some(item) = item.as_object()
-                && item.get("type").and_then(Value::as_str) == Some("math")
-            {
-                let kind = raw_math_node_kind(item)?;
-                if matches!(
-                    kind,
-                    MathNodeKind::Placeholder | MathNodeKind::Hline | MathNodeKind::Intertext
-                ) {
-                    kind
-                } else {
-                    MathNodeKind::Row
-                }
-            } else {
-                MathNodeKind::Row
-            };
-            Some(kind)
-        })
-        .collect::<Option<Vec<_>>>();
-    let Some(child_kinds) = child_kinds else {
-        return false;
-    };
-    crate::model::math_node_attributes_supported(kind, text, &attributes)
-        && crate::model::math_node_structure_supported(parent, kind, text, &child_kinds)
 }
 
 pub(super) fn is_known_inline_environment(object: &serde_json::Map<String, Value>) -> bool {

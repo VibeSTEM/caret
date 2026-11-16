@@ -22,21 +22,32 @@
 #include <string_view>
 #include <utility>
 
+bool ShellLoadTest::configureDocumentRecovery(const QString& recovery_root) {
+    const QByteArray root = recovery_root.toUtf8();
+    return caret::ffi::configure_document_recovery(
+               rust::String(root.constData(), static_cast<std::size_t>(root.size())))
+        .empty();
+}
+
+bool ShellLoadTest::installBlankDocumentRuntime() {
+    auto runtime = caret::ffi::new_blank_document_runtime();
+    const rust::String snapshot = caret::ffi::layout_snapshot_json(*runtime);
+    if (std::string_view(snapshot.data(), snapshot.size()).starts_with("error:")) {
+        return false;
+    }
+    if (!caret::install_layout_snapshot(
+            QString::fromUtf8(snapshot.data(), static_cast<qsizetype>(snapshot.size())))) {
+        return false;
+    }
+    return caret::install_document_runtime(std::move(runtime));
+}
+
 void ShellLoadTest::documentFileFlowPreservesSaveStateAndReopens() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
 
-    const QByteArray recovery_root = directory.path().toUtf8();
-    const rust::String recovery_configuration = caret::ffi::configure_document_recovery(
-        rust::String(recovery_root.constData(), static_cast<std::size_t>(recovery_root.size())));
-    QVERIFY(recovery_configuration.empty());
-
-    auto runtime = caret::ffi::new_blank_document_runtime();
-    const rust::String blank_snapshot = caret::ffi::layout_snapshot_json(*runtime);
-    QVERIFY(!std::string_view(blank_snapshot.data(), blank_snapshot.size()).starts_with("error:"));
-    QVERIFY(caret::install_layout_snapshot(
-        QString::fromUtf8(blank_snapshot.data(), static_cast<qsizetype>(blank_snapshot.size()))));
-    QVERIFY(caret::install_document_runtime(std::move(runtime)));
+    QVERIFY(configureDocumentRecovery(directory.path()));
+    QVERIFY(installBlankDocumentRuntime());
 
     caret::LayoutViewModel view_model;
     QSignalSpy operation_spy(&view_model, &caret::LayoutViewModel::documentFileOperationFinished);
@@ -210,17 +221,8 @@ void ShellLoadTest::documentFileFlowPreservesSaveStateAndReopens() {
 void ShellLoadTest::saveConflictCannotReplaceAPreviousDocumentAfterSaveAs() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
-    const QByteArray recovery_root = directory.path().toUtf8();
-    const rust::String recovery_configuration = caret::ffi::configure_document_recovery(
-        rust::String(recovery_root.constData(), static_cast<std::size_t>(recovery_root.size())));
-    QVERIFY(recovery_configuration.empty());
-
-    auto runtime = caret::ffi::new_blank_document_runtime();
-    const rust::String blank_snapshot = caret::ffi::layout_snapshot_json(*runtime);
-    QVERIFY(!std::string_view(blank_snapshot.data(), blank_snapshot.size()).starts_with("error:"));
-    QVERIFY(caret::install_layout_snapshot(
-        QString::fromUtf8(blank_snapshot.data(), static_cast<qsizetype>(blank_snapshot.size()))));
-    QVERIFY(caret::install_document_runtime(std::move(runtime)));
+    QVERIFY(configureDocumentRecovery(directory.path()));
+    QVERIFY(installBlankDocumentRuntime());
 
     caret::LayoutViewModel view_model;
     QSignalSpy operation_spy(&view_model, &caret::LayoutViewModel::documentFileOperationFinished);
@@ -292,10 +294,7 @@ void ShellLoadTest::saveConflictCannotReplaceAPreviousDocumentAfterSaveAs() {
     QVERIFY(!missing_conflict.at(3).toBool());
     QVERIFY(!view_model.saveConflictCanReplace());
 
-    const QByteArray invalid_root = original_path.toUtf8();
-    const rust::String invalid_configuration = caret::ffi::configure_document_recovery(
-        rust::String(invalid_root.constData(), static_cast<std::size_t>(invalid_root.size())));
-    QVERIFY(invalid_configuration.empty());
+    QVERIFY(configureDocumentRecovery(original_path));
     QVERIFY(view_model.saveDocument().value(QStringLiteral("valid")).toBool());
     const QList<QVariant> failed_recovery = wait_for_operation();
     QVERIFY(!failed_recovery.at(0).toBool());
@@ -320,17 +319,8 @@ void ShellLoadTest::saveConflictCannotReplaceAPreviousDocumentAfterSaveAs() {
 void ShellLoadTest::confirmedConflictReplacementWritesCurrentDocument() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
-    const QByteArray recovery_root = directory.path().toUtf8();
-    const rust::String recovery_configuration = caret::ffi::configure_document_recovery(
-        rust::String(recovery_root.constData(), static_cast<std::size_t>(recovery_root.size())));
-    QVERIFY(recovery_configuration.empty());
-
-    auto runtime = caret::ffi::new_blank_document_runtime();
-    const rust::String blank_snapshot = caret::ffi::layout_snapshot_json(*runtime);
-    QVERIFY(!std::string_view(blank_snapshot.data(), blank_snapshot.size()).starts_with("error:"));
-    QVERIFY(caret::install_layout_snapshot(
-        QString::fromUtf8(blank_snapshot.data(), static_cast<qsizetype>(blank_snapshot.size()))));
-    QVERIFY(caret::install_document_runtime(std::move(runtime)));
+    QVERIFY(configureDocumentRecovery(directory.path()));
+    QVERIFY(installBlankDocumentRuntime());
 
     caret::LayoutViewModel view_model;
     QSignalSpy operation_spy(&view_model, &caret::LayoutViewModel::documentFileOperationFinished);
@@ -391,12 +381,7 @@ void ShellLoadTest::confirmedConflictReplacementWritesCurrentDocument() {
 
 #ifdef CARET_ENABLE_APP
 void ShellLoadTest::documentHistoryUndoRedoTracksRustSession() {
-    auto runtime = caret::ffi::new_blank_document_runtime();
-    const rust::String blank_snapshot = caret::ffi::layout_snapshot_json(*runtime);
-    QVERIFY(!std::string_view(blank_snapshot.data(), blank_snapshot.size()).starts_with("error:"));
-    QVERIFY(caret::install_layout_snapshot(
-        QString::fromUtf8(blank_snapshot.data(), static_cast<qsizetype>(blank_snapshot.size()))));
-    QVERIFY(caret::install_document_runtime(std::move(runtime)));
+    QVERIFY(installBlankDocumentRuntime());
 
     caret::LayoutViewModel view_model;
     QVERIFY(!view_model.canUndo());

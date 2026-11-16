@@ -3,12 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use super::DocumentViewRuntime;
+use super::{DocumentViewRuntime, snapshot::rectangle_fields};
 use caret_engine::{
-    Affinity, MathEditTarget, MathPositionAffinity, MathTextFlowPathStep, MathTextPosition, Pos,
-    Selection, VisualAffinity, utf16_offset_to_utf8,
+    Affinity, DocumentLayoutSnapshot, LaidOutParagraph, MathEditTarget, MathPositionAffinity,
+    MathTextFlowPathStep, MathTextPosition, PageCaretGeometry, PageMathTextDragStop,
+    PageSelectionRect, Pos, Selection, VisualAffinity, utf16_offset_to_utf8,
 };
-use std::{collections::HashMap, convert::TryFrom};
+use std::{
+    collections::{HashMap, HashSet},
+    convert::TryFrom,
+    ops::Range,
+};
 use unicode_segmentation::UnicodeSegmentation;
 
 type MathTextDragIsland = (MathEditTarget, Vec<(usize, MathTextPosition)>);
@@ -64,225 +69,37 @@ impl DocumentViewRuntime {
             .ok_or_else(|| "selection.invalid_page_index".to_owned())?;
         let mut stops = Vec::new();
         let mut segments = Vec::new();
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::new();
         for fragment in &page.layout.fragments {
-            let Some((paragraph_order, paragraph)) = snapshot
-                .paragraphs
-                .iter()
-                .enumerate()
-                .find(|(_, paragraph)| paragraph.id == fragment.paragraph_id)
+            let Some((paragraph_order, paragraph)) =
+                body_fragment_paragraph(snapshot, &fragment.paragraph_id)
             else {
                 continue;
             };
-            let mut grapheme_offsets = paragraph
-                .text
-                .grapheme_indices(true)
-                .map(|(offset, _)| offset)
-                .collect::<Vec<_>>();
-            grapheme_offsets.push(paragraph.text.len());
-            let mut offsets = Vec::new();
-            for line_index in fragment.line_range.clone() {
-                let Some(line) = paragraph.layout.paragraph.lines.get(line_index) else {
-                    continue;
-                };
-                let first_boundary =
-                    grapheme_offsets.partition_point(|offset| *offset < line.source_bytes.start);
-                offsets.extend(
-                    grapheme_offsets[first_boundary..]
-                        .iter()
-                        .copied()
-                        .take_while(|offset| *offset <= line.consumed_bytes.end),
-                );
-                let boundary_end =
-                    grapheme_offsets.partition_point(|offset| *offset <= line.source_bytes.end);
-                for pair in grapheme_offsets[first_boundary..boundary_end].windows(2) {
-                    let start = pair[0];
-                    let end = pair[1];
-                    let selection = Selection {
-                        anchor: Pos {
-                            story: paragraph.story.clone(),
-                            paragraph_id: paragraph.id.clone(),
-                            offset: start,
-                            affinity: Affinity::Downstream,
-                        },
-                        focus: Pos {
-                            story: paragraph.story.clone(),
-                            paragraph_id: paragraph.id.clone(),
-                            offset: end,
-                            affinity: Affinity::Downstream,
-                        },
-                    };
-                    if let Some(rectangles) = snapshot.selection_geometry(&selection) {
-                        for rectangle in rectangles {
-                            if rectangle.page_index != page_index {
-                                continue;
-                            }
-                            segments.push(serde_json::json!({
-                                "domainId": "body",
-                                "pageIndex": page_index,
-                                "paragraphIndex": paragraph_order,
-                                "startUtf8": start.to_string(),
-                                "endUtf8": end.to_string(),
-                                "startPosition": {
-                                    "kind": "body",
-                                    "paragraphIndex": paragraph_order,
-                                    "offsetUtf8": start.to_string(),
-                                    "orderUtf8": start.to_string(),
-                                },
-                                "endPosition": {
-                                    "kind": "body",
-                                    "paragraphIndex": paragraph_order,
-                                    "offsetUtf8": end.to_string(),
-                                    "orderUtf8": end.to_string(),
-                                },
-                                "x0Pt": rectangle.x0_pt,
-                                "y0Pt": rectangle.y0_pt,
-                                "x1Pt": rectangle.x1_pt,
-                                "y1Pt": rectangle.y1_pt,
-                            }));
-                        }
-                    }
-                }
-            }
-            offsets.sort_unstable();
-            offsets.dedup();
-            for offset in offsets {
-                for logical_affinity in [Affinity::Upstream, Affinity::Downstream] {
-                    for visual_affinity in [VisualAffinity::Upstream, VisualAffinity::Downstream] {
-                        let position = Pos {
-                            story: paragraph.story.clone(),
-                            paragraph_id: paragraph.id.clone(),
-                            offset,
-                            affinity: logical_affinity,
-                        };
-                        let Some(caret) = snapshot.caret_geometry(&position, visual_affinity)
-                        else {
-                            continue;
-                        };
-                        if caret.page_index != page_index {
-                            continue;
-                        }
-                        let identity = (
-                            paragraph.id.to_string(),
-                            offset,
-                            matches!(logical_affinity, Affinity::Upstream),
-                            matches!(visual_affinity, VisualAffinity::Upstream),
-                        );
-                        if !seen.insert(identity) {
-                            continue;
-                        }
-                        stops.push(serde_json::json!({
-                            "domainId": "body",
-                            "pageIndex": page_index,
-                            "xPt": caret.x_pt,
-                            "y0Pt": caret.y0_pt,
-                            "y1Pt": caret.y1_pt,
-                            "position": {
-                                "kind": "body",
-                                "domainId": "body",
-                                "paragraphId": paragraph.id.to_string(),
-                                "paragraphIndex": paragraph_order,
-                                "offsetUtf8": offset.to_string(),
-                                "orderUtf8": offset.to_string(),
-                                "affinity": if logical_affinity == Affinity::Upstream { "upstream" } else { "downstream" },
-                            },
-                            "visualAffinity": if visual_affinity == VisualAffinity::Upstream { "upstream" } else { "downstream" },
-                        }));
-                    }
-                }
-            }
+            let grapheme_offsets = body_grapheme_offsets(paragraph);
+            let context = BodyFragmentContext {
+                snapshot,
+                page_index,
+                paragraph_order,
+                paragraph,
+                grapheme_offsets: &grapheme_offsets,
+            };
+            let hits = body_fragment_hits(&context, fragment.line_range.clone());
+            segments.extend(hits.segments);
+            stops.extend(body_fragment_stops(&context, &hits.offsets, &mut seen));
         }
-        let math_stops = snapshot.math_text_drag_stops(page_index);
-        let mut math_islands: HashMap<String, MathTextDragIsland> = HashMap::new();
-        for stop in math_stops {
-            let domain_id = math_text_domain_id(&stop.target, stop.token);
-            let island = math_islands
-                .entry(domain_id)
-                .or_insert_with(|| (stop.target.clone(), Vec::new()));
-            island.1.push((stop.order_utf8, stop.position.clone()));
-            stops.push(serde_json::json!({
-                "domainId": math_text_domain_id(&stop.target, stop.token),
-                "pageIndex": page_index,
-                "xPt": stop.caret.x_pt,
-                "y0Pt": stop.caret.y0_pt,
-                "y1Pt": stop.caret.y1_pt,
-                "position": {
-                    "kind": "math",
-                    "sessionId": snapshot.session_id.as_ref().map(ToString::to_string),
-                    "domainId": math_text_domain_id(&stop.target, stop.token),
-                    "pageIndex": page_index,
-                    "xPt": stop.caret.x_pt,
-                    "yPt": (stop.caret.y0_pt + stop.caret.y1_pt) / 2.0,
-                    "documentGeneration": snapshot.document_generation.to_string(),
-                    "fontGeneration": snapshot.font_generation.to_string(),
-                    "token": stop.token,
-                    "orderUtf8": stop.order_utf8.to_string(),
-                    "offsetUtf8": stop.position.offset.to_string(),
-                    "affinity": math_affinity_name(stop.position.affinity),
-                    "visualAffinity": visual_affinity_name(stop.visual_affinity),
-                    "target": math_target_json(&stop.target),
-                    "alignCell": stop.position.path.align_cell(),
-                    "path": stop.position.path.steps().iter().map(math_path_step_json).collect::<Vec<_>>(),
-                },
-                "visualAffinity": visual_affinity_name(stop.visual_affinity),
-            }));
-        }
-        for (domain_id, (target, mut points)) in math_islands {
-            points.sort_unstable_by_key(|(offset, _)| *offset);
-            points.dedup_by_key(|(offset, _)| *offset);
-            for pair in points.windows(2) {
-                let (start_offset, start_position) = &pair[0];
-                let (end_offset, end_position) = &pair[1];
-                if start_offset == end_offset {
-                    continue;
-                }
-                let start = MathTextPosition::new(
-                    start_position.path.clone(),
-                    start_position.offset,
-                    MathPositionAffinity::Downstream,
-                );
-                let end = MathTextPosition::new(
-                    end_position.path.clone(),
-                    end_position.offset,
-                    MathPositionAffinity::Upstream,
-                );
-                let Some(rectangles) = snapshot.math_text_selection_geometry(&target, &start, &end)
-                else {
-                    continue;
-                };
-                for rectangle in rectangles {
-                    if rectangle.page_index != page_index {
-                        continue;
-                    }
-                    segments.push(serde_json::json!({
-                        "domainId": domain_id,
-                        "pageIndex": page_index,
-                        "startUtf8": start_offset.to_string(),
-                        "endUtf8": end_offset.to_string(),
-                        "startPosition": {
-                            "kind": "math",
-                            "orderUtf8": start_offset.to_string(),
-                        },
-                        "endPosition": {
-                            "kind": "math",
-                            "orderUtf8": end_offset.to_string(),
-                        },
-                        "x0Pt": rectangle.x0_pt,
-                        "y0Pt": rectangle.y0_pt,
-                        "x1Pt": rectangle.x1_pt,
-                        "y1Pt": rectangle.y1_pt,
-                    }));
-                }
-            }
-        }
-        serde_json::to_string(&serde_json::json!({
+        let (math_stops, math_islands) = math_drag_stop_entries(snapshot, page_index);
+        stops.extend(math_stops);
+        segments.extend(math_drag_segments(snapshot, page_index, math_islands));
+        let hit_map = serde_json::json!({
             "documentGeneration": snapshot.document_generation.to_string(),
             "fontGeneration": snapshot.font_generation.to_string(),
             "pageIndex": page_index,
             "stops": stops,
             "segments": segments,
-        }))
-        .map_err(|error| format!("selection.hit_map_serialize: {error}"))
+        });
+        serde_json::to_string(&hit_map)
+            .map_err(|error| format!("selection.hit_map_serialize: {error}"))
     }
 
     /// 将 Qt 拖选释放时提交的两个稳定文本端点设置为 Rust 选区。
@@ -514,10 +331,7 @@ impl DocumentViewRuntime {
                     .map_err(|error| format!("selection.set: {error}"))?;
                 self.preferred_visual_x_pt = None;
                 if effect.composition_changed {
-                    self.composition_id = None;
-                    self.composition_preview_session = None;
-                    self.composition_snapshot = None;
-                    self.composition_range = None;
+                    self.clear_composition_state();
                     return self.layout_snapshot_json_after_composition_cancel();
                 }
             }
@@ -613,10 +427,7 @@ impl DocumentViewRuntime {
                     .map_err(|error| format!("selection.math_text: {error}"))?;
                 self.preferred_visual_x_pt = None;
                 if effect.composition_changed {
-                    self.composition_id = None;
-                    self.composition_preview_session = None;
-                    self.composition_snapshot = None;
-                    self.composition_range = None;
+                    self.clear_composition_state();
                     return self.layout_snapshot_json_after_composition_cancel();
                 }
             }
@@ -634,10 +445,7 @@ impl DocumentViewRuntime {
             .map_err(|error| format!("selection.clear: {error}"))?;
         self.preferred_visual_x_pt = None;
         if effect.composition_changed {
-            self.composition_id = None;
-            self.composition_preview_session = None;
-            self.composition_snapshot = None;
-            self.composition_range = None;
+            self.clear_composition_state();
             return self.layout_snapshot_json_after_composition_cancel();
         }
         self.interaction_state_json()
@@ -659,6 +467,383 @@ impl DocumentViewRuntime {
         serde_json::to_string(&serde_json::json!({ "text": text }))
             .map_err(|error| format!("clipboard.serialize: {error}"))
     }
+}
+
+/// 正文拖选停靠点的去重身份：段落 ID、逻辑偏移、逻辑亲和性与视觉亲和性侧别。
+type BodyStopIdentity = (String, usize, bool, bool);
+
+/// 已按域归并的数学文本岛字素点，供生成岛内选区矩形条目。
+type MathDragIslands = HashMap<String, MathTextDragIsland>;
+
+/// 单个正文页面片段在命中映射各构造阶段共用的页面、段落身份与字素边界。
+struct BodyFragmentContext<'a> {
+    snapshot: &'a DocumentLayoutSnapshot,
+    page_index: usize,
+    paragraph_order: usize,
+    paragraph: &'a LaidOutParagraph,
+    grapheme_offsets: &'a [usize],
+}
+
+/// 一次字素扫描得到的正文选区矩形条目与字素停靠偏移。
+struct BodyDragHits {
+    segments: Vec<serde_json::Value>,
+    offsets: Vec<usize>,
+}
+
+/// 单行正文在段落逻辑文本中的字节范围；端点用于筛选字素边界。
+struct BodyLineBytes {
+    source_start: usize,
+    consumed_end: usize,
+    source_end: usize,
+}
+
+/// 在快照段落表中定位正文片段所属段落，返回段落序号与段落引用。
+fn body_fragment_paragraph<'a>(
+    snapshot: &'a DocumentLayoutSnapshot,
+    paragraph_id: &caret_doc::NodeId,
+) -> Option<(usize, &'a LaidOutParagraph)> {
+    snapshot
+        .paragraphs
+        .iter()
+        .enumerate()
+        .find(|(_, paragraph)| paragraph.id == *paragraph_id)
+}
+
+/// 计算段落逻辑文本的字素边界，并追加文本长度作为末尾边界。
+fn body_grapheme_offsets(paragraph: &LaidOutParagraph) -> Vec<usize> {
+    let mut offsets = paragraph
+        .text
+        .grapheme_indices(true)
+        .map(|(offset, _)| offset)
+        .collect::<Vec<_>>();
+    offsets.push(paragraph.text.len());
+    offsets
+}
+
+/// 按行收集正文页面片段产生的选区矩形条目与去重后的字素停靠偏移。
+fn body_fragment_hits(context: &BodyFragmentContext<'_>, line_range: Range<usize>) -> BodyDragHits {
+    let mut hits = BodyDragHits {
+        segments: Vec::new(),
+        offsets: Vec::new(),
+    };
+    for line_index in line_range {
+        let Some(line) = context.paragraph.layout.paragraph.lines.get(line_index) else {
+            continue;
+        };
+        let line_hits = body_line_hits(
+            context,
+            BodyLineBytes {
+                source_start: line.source_bytes.start,
+                consumed_end: line.consumed_bytes.end,
+                source_end: line.source_bytes.end,
+            },
+        );
+        hits.segments.extend(line_hits.segments);
+        hits.offsets.extend(line_hits.offsets);
+    }
+    hits.offsets.sort_unstable();
+    hits.offsets.dedup();
+    hits
+}
+
+/// 收集单行覆盖的字素停靠偏移，并为相邻字素对生成正文选区矩形条目。
+fn body_line_hits(context: &BodyFragmentContext<'_>, line: BodyLineBytes) -> BodyDragHits {
+    let first_boundary = context
+        .grapheme_offsets
+        .partition_point(|offset| *offset < line.source_start);
+    let boundary_end = context
+        .grapheme_offsets
+        .partition_point(|offset| *offset <= line.source_end);
+    let offsets = context.grapheme_offsets[first_boundary..]
+        .iter()
+        .copied()
+        .take_while(|offset| *offset <= line.consumed_end)
+        .collect();
+    let segments = context.grapheme_offsets[first_boundary..boundary_end]
+        .windows(2)
+        .flat_map(|pair| body_segment_hits(context, pair[0], pair[1]))
+        .collect();
+    BodyDragHits { segments, offsets }
+}
+
+/// 为一个字素对生成落在目标页内的正文选区矩形条目，保持矩形原始顺序。
+fn body_segment_hits(
+    context: &BodyFragmentContext<'_>,
+    start: usize,
+    end: usize,
+) -> Vec<serde_json::Value> {
+    let selection = Selection {
+        anchor: Pos {
+            story: context.paragraph.story.clone(),
+            paragraph_id: context.paragraph.id.clone(),
+            offset: start,
+            affinity: Affinity::Downstream,
+        },
+        focus: Pos {
+            story: context.paragraph.story.clone(),
+            paragraph_id: context.paragraph.id.clone(),
+            offset: end,
+            affinity: Affinity::Downstream,
+        },
+    };
+    let Some(rectangles) = context.snapshot.selection_geometry(&selection) else {
+        return Vec::new();
+    };
+    rectangles
+        .into_iter()
+        .filter(|rectangle| rectangle.page_index == context.page_index)
+        .map(|rectangle| body_segment_json(context, start, end, rectangle))
+        .collect()
+}
+
+/// 构造单条正文选区矩形命中条目，字段名、类型与数值格式遵循拖选协议。
+fn body_segment_json(
+    context: &BodyFragmentContext<'_>,
+    start: usize,
+    end: usize,
+    rectangle: PageSelectionRect,
+) -> serde_json::Value {
+    let mut segment = serde_json::json!({
+        "domainId": "body",
+        "paragraphIndex": context.paragraph_order,
+        "startUtf8": start.to_string(),
+        "endUtf8": end.to_string(),
+        "startPosition": {
+            "kind": "body",
+            "paragraphIndex": context.paragraph_order,
+            "offsetUtf8": start.to_string(),
+            "orderUtf8": start.to_string(),
+        },
+        "endPosition": {
+            "kind": "body",
+            "paragraphIndex": context.paragraph_order,
+            "offsetUtf8": end.to_string(),
+            "orderUtf8": end.to_string(),
+        },
+    });
+    if let Some(object) = segment.as_object_mut() {
+        object.extend(rectangle_fields(rectangle));
+    }
+    segment
+}
+
+/// 为正文片段的每个字素停靠偏移生成两种逻辑亲和性与两种视觉亲和性的光标停靠条目。
+fn body_fragment_stops(
+    context: &BodyFragmentContext<'_>,
+    offsets: &[usize],
+    seen: &mut HashSet<BodyStopIdentity>,
+) -> Vec<serde_json::Value> {
+    let mut stops = Vec::new();
+    for &offset in offsets {
+        for logical_affinity in [Affinity::Upstream, Affinity::Downstream] {
+            for visual_affinity in [VisualAffinity::Upstream, VisualAffinity::Downstream] {
+                let Some(stop) =
+                    body_caret_stop(context, offset, logical_affinity, visual_affinity, seen)
+                else {
+                    continue;
+                };
+                stops.push(stop);
+            }
+        }
+    }
+    stops
+}
+
+/// 生成单个正文光标停靠条目；同段落、同偏移与同侧别的重复停靠只保留首次。
+fn body_caret_stop(
+    context: &BodyFragmentContext<'_>,
+    offset: usize,
+    logical_affinity: Affinity,
+    visual_affinity: VisualAffinity,
+    seen: &mut HashSet<BodyStopIdentity>,
+) -> Option<serde_json::Value> {
+    let position = Pos {
+        story: context.paragraph.story.clone(),
+        paragraph_id: context.paragraph.id.clone(),
+        offset,
+        affinity: logical_affinity,
+    };
+    let caret = context
+        .snapshot
+        .caret_geometry(&position, visual_affinity)?;
+    if caret.page_index != context.page_index {
+        return None;
+    }
+    let identity = (
+        context.paragraph.id.to_string(),
+        offset,
+        matches!(logical_affinity, Affinity::Upstream),
+        matches!(visual_affinity, VisualAffinity::Upstream),
+    );
+    if !seen.insert(identity) {
+        return None;
+    }
+    Some(body_caret_stop_json(
+        context,
+        offset,
+        logical_affinity,
+        visual_affinity,
+        caret,
+    ))
+}
+
+/// 构造单条正文光标停靠条目，字段名与亲和性命名遵循拖选协议。
+fn body_caret_stop_json(
+    context: &BodyFragmentContext<'_>,
+    offset: usize,
+    logical_affinity: Affinity,
+    visual_affinity: VisualAffinity,
+    caret: PageCaretGeometry,
+) -> serde_json::Value {
+    serde_json::json!({
+        "domainId": "body",
+        "pageIndex": context.page_index,
+        "xPt": caret.x_pt,
+        "y0Pt": caret.y0_pt,
+        "y1Pt": caret.y1_pt,
+        "position": {
+            "kind": "body",
+            "domainId": "body",
+            "paragraphId": context.paragraph.id.to_string(),
+            "paragraphIndex": context.paragraph_order,
+            "offsetUtf8": offset.to_string(),
+            "orderUtf8": offset.to_string(),
+            "affinity": if logical_affinity == Affinity::Upstream { "upstream" } else { "downstream" },
+        },
+        "visualAffinity": if visual_affinity == VisualAffinity::Upstream { "upstream" } else { "downstream" },
+    })
+}
+
+/// 收集数学文本拖选停靠条目，并按域归并岛内字素点。
+fn math_drag_stop_entries(
+    snapshot: &DocumentLayoutSnapshot,
+    page_index: usize,
+) -> (Vec<serde_json::Value>, MathDragIslands) {
+    let mut stops = Vec::new();
+    let mut islands = MathDragIslands::new();
+    for stop in snapshot.math_text_drag_stops(page_index) {
+        let domain_id = math_text_domain_id(&stop.target, stop.token);
+        let island = islands
+            .entry(domain_id.clone())
+            .or_insert_with(|| (stop.target.clone(), Vec::new()));
+        island.1.push((stop.order_utf8, stop.position.clone()));
+        stops.push(math_hit_stop_json(snapshot, page_index, &stop, &domain_id));
+    }
+    (stops, islands)
+}
+
+/// 构造单条数学文本光标停靠条目，内嵌位置字段与拖选协议保持一致。
+fn math_hit_stop_json(
+    snapshot: &DocumentLayoutSnapshot,
+    page_index: usize,
+    stop: &PageMathTextDragStop,
+    domain_id: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "domainId": domain_id,
+        "pageIndex": page_index,
+        "xPt": stop.caret.x_pt,
+        "y0Pt": stop.caret.y0_pt,
+        "y1Pt": stop.caret.y1_pt,
+        "position": {
+            "kind": "math",
+            "sessionId": snapshot.session_id.as_ref().map(ToString::to_string),
+            "domainId": domain_id,
+            "pageIndex": page_index,
+            "xPt": stop.caret.x_pt,
+            "yPt": (stop.caret.y0_pt + stop.caret.y1_pt) / 2.0,
+            "documentGeneration": snapshot.document_generation.to_string(),
+            "fontGeneration": snapshot.font_generation.to_string(),
+            "token": stop.token,
+            "orderUtf8": stop.order_utf8.to_string(),
+            "offsetUtf8": stop.position.offset.to_string(),
+            "affinity": math_affinity_name(stop.position.affinity),
+            "visualAffinity": visual_affinity_name(stop.visual_affinity),
+            "target": math_target_json(&stop.target),
+            "alignCell": stop.position.path.align_cell(),
+            "path": stop.position.path.steps().iter().map(math_path_step_json).collect::<Vec<_>>(),
+        },
+        "visualAffinity": visual_affinity_name(stop.visual_affinity),
+    })
+}
+
+/// 为每个数学文本岛生成岛内相邻字素点的选区矩形条目。
+fn math_drag_segments(
+    snapshot: &DocumentLayoutSnapshot,
+    page_index: usize,
+    islands: MathDragIslands,
+) -> Vec<serde_json::Value> {
+    let mut segments = Vec::new();
+    for (domain_id, (target, mut points)) in islands {
+        points.sort_unstable_by_key(|(offset, _)| *offset);
+        points.dedup_by_key(|(offset, _)| *offset);
+        for pair in points.windows(2) {
+            segments.extend(math_pair_segments(
+                snapshot, page_index, &domain_id, &target, &pair[0], &pair[1],
+            ));
+        }
+    }
+    segments
+}
+
+/// 为一个相邻数学文本点对生成落在目标页内的选区矩形条目，保持矩形原始顺序。
+fn math_pair_segments(
+    snapshot: &DocumentLayoutSnapshot,
+    page_index: usize,
+    domain_id: &str,
+    target: &MathEditTarget,
+    start_point: &(usize, MathTextPosition),
+    end_point: &(usize, MathTextPosition),
+) -> Vec<serde_json::Value> {
+    let (start_offset, start_position) = start_point;
+    let (end_offset, end_position) = end_point;
+    if start_offset == end_offset {
+        return Vec::new();
+    }
+    let start = MathTextPosition::new(
+        start_position.path.clone(),
+        start_position.offset,
+        MathPositionAffinity::Downstream,
+    );
+    let end = MathTextPosition::new(
+        end_position.path.clone(),
+        end_position.offset,
+        MathPositionAffinity::Upstream,
+    );
+    let Some(rectangles) = snapshot.math_text_selection_geometry(target, &start, &end) else {
+        return Vec::new();
+    };
+    rectangles
+        .into_iter()
+        .filter(|rectangle| rectangle.page_index == page_index)
+        .map(|rectangle| math_segment_json(domain_id, *start_offset, *end_offset, rectangle))
+        .collect()
+}
+
+/// 构造单条数学文本选区矩形命中条目，字段名、类型与数值格式遵循拖选协议。
+fn math_segment_json(
+    domain_id: &str,
+    start_offset: usize,
+    end_offset: usize,
+    rectangle: PageSelectionRect,
+) -> serde_json::Value {
+    let mut segment = serde_json::json!({
+        "domainId": domain_id,
+        "startUtf8": start_offset.to_string(),
+        "endUtf8": end_offset.to_string(),
+        "startPosition": {
+            "kind": "math",
+            "orderUtf8": start_offset.to_string(),
+        },
+        "endPosition": {
+            "kind": "math",
+            "orderUtf8": end_offset.to_string(),
+        },
+    });
+    if let Some(object) = segment.as_object_mut() {
+        object.extend(rectangle_fields(rectangle));
+    }
+    segment
 }
 
 fn math_text_domain_id(target: &MathEditTarget, token: u64) -> String {

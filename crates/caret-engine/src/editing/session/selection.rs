@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use super::super::paragraph_ops::{compare_positions, paragraph_at_location};
+use super::super::paragraph_ops::{ParagraphLocation, compare_positions, paragraph_at_location};
 use super::super::text_map::{OBJECT_REPLACEMENT, TextMap};
 use super::super::{
     Affinity, Command, Direction, DocumentRangeEndpoint, EditError, Effect, HostCaretKind,
@@ -14,6 +14,24 @@ use super::document_position::{visual_affinity_for, visual_affinity_for_block_ed
 use super::range_extension::AdjacentComplexUnit;
 use caret_doc::NodeId;
 use caret_layout::VisualAffinity;
+use std::ops::Range;
+
+/// 结构选区文本投影的段落切口边界：按文档顺序的段落下标与段内字节偏移。
+#[derive(Debug, Clone, Copy)]
+struct StructureTextBounds {
+    start_ordinal: usize,
+    end_ordinal: usize,
+    start_offset: usize,
+    end_offset: usize,
+}
+
+/// 汇集结构选区文本时共享的只读选择上下文。
+#[derive(Debug, Clone, Copy)]
+struct StructureTextCopy<'a> {
+    bounds: Option<StructureTextBounds>,
+    environments: &'a [NodeId],
+    math_blocks: &'a [NodeId],
+}
 
 impl Session {
     /// 按文档顺序提取当前正文选区的纯文本，段落之间以换行连接。
@@ -24,91 +42,42 @@ impl Session {
         if self.has_structure_selection() {
             return self.structure_selection_text();
         }
-        let (start, end) = self.edit_range()?;
-        if start.story != end.story {
-            return Err(EditError::CrossParagraphSelection);
-        }
-        if start == end {
+        let (anchor, focus) = self.edit_range()?;
+        if anchor == focus {
             return Ok(String::new());
         }
-        let start_map = TextMap::new(self.paragraph_for(&start)?)?;
-        start_map.validate_pos(&start)?;
-        if start.paragraph_id == end.paragraph_id {
-            start_map.validate_pos(&end)?;
-            let (from, to) = if start.offset <= end.offset {
-                (start.offset, end.offset)
+        let anchor_map = TextMap::new(self.paragraph_for(&anchor)?)?;
+        anchor_map.validate_pos(&anchor)?;
+        if anchor.paragraph_id == focus.paragraph_id {
+            anchor_map.validate_pos(&focus)?;
+            let (from, to) = if anchor.offset <= focus.offset {
+                (anchor.offset, focus.offset)
             } else {
-                (end.offset, start.offset)
+                (focus.offset, anchor.offset)
             };
-            return start_map
+            return anchor_map
                 .text
                 .get(from..to)
                 .map(str::to_owned)
                 .ok_or(EditError::InvalidPosition);
         }
-        if start.story != StoryId::Body || end.story != StoryId::Body {
+        if anchor.story != StoryId::Body || focus.story != StoryId::Body {
             return Err(EditError::CrossParagraphSelection);
         }
-        let end_map = TextMap::new(self.paragraph_for(&end)?)?;
-        end_map.validate_pos(&end)?;
+        let focus_map = TextMap::new(self.paragraph_for(&focus)?)?;
+        focus_map.validate_pos(&focus)?;
 
-        let mut paragraphs: Vec<_> = self
-            .paragraph_index
-            .iter()
-            .filter(|(_, location)| location.story == StoryId::Body)
-            .collect();
-        paragraphs.sort_by(|(_, left), (_, right)| {
-            left.block_path
-                .cmp(&right.block_path)
-                .then_with(|| left.is_title.cmp(&right.is_title).reverse())
-        });
-        let start_index = paragraphs
-            .iter()
-            .position(|(id, _)| *id == &start.paragraph_id)
-            .ok_or_else(|| EditError::UnknownParagraph(start.paragraph_id.to_string()))?;
-        let end_index = paragraphs
-            .iter()
-            .position(|(id, _)| *id == &end.paragraph_id)
-            .ok_or_else(|| EditError::UnknownParagraph(end.paragraph_id.to_string()))?;
-        let (start_index, start_offset, end_index, end_offset) =
-            if compare_positions(&self.document.body, &self.paragraph_index, &start, &end)?.is_gt()
-            {
-                (end_index, end.offset, start_index, start.offset)
-            } else {
-                (start_index, start.offset, end_index, end.offset)
-            };
-        if start_index == end_index && start_offset == end_offset {
-            return Ok(String::new());
-        }
-
+        let (start, end) = self.ordered_text_range(&anchor, &focus)?;
         let mut text = String::new();
-        for (index, (paragraph_id, location)) in paragraphs
-            .iter()
-            .enumerate()
-            .take(end_index + 1)
-            .skip(start_index)
-        {
-            let paragraph = paragraph_at_location(&self.document.body, location)
-                .ok_or_else(|| EditError::UnknownParagraph(paragraph_id.to_string()))?;
-            let paragraph_text = TextMap::new(paragraph)?.text;
-            let fragment_start = if index == start_index {
-                start_offset
-            } else {
-                0
-            };
-            let fragment_end = if index == end_index {
-                end_offset
-            } else {
-                paragraph_text.len()
-            };
-            let fragment = paragraph_text
-                .get(fragment_start..fragment_end)
-                .ok_or(EditError::InvalidPosition)?;
-            if index != start_index {
+        let mut first = true;
+        self.visit_ordered_paragraph_ranges(&start, &end, |_, _, map, range| {
+            if !first {
                 text.push('\n');
             }
-            text.push_str(fragment);
-        }
+            text.push_str(map.text.get(range).ok_or(EditError::InvalidPosition)?);
+            first = false;
+            Ok(())
+        })?;
         Ok(text)
     }
 
@@ -119,22 +88,23 @@ impl Session {
         let (environments, math_blocks) = self.structure_range_block_nodes()?;
         // 只覆盖块对象时没有可复制文字，两端最近段落会交错，此时不按段落切口复制。
         let bounds = self.usable_structure_text_bounds()?.map(
-            |(start_position, end_position, start_ordinal, end_ordinal)| {
-                (
-                    start_ordinal,
-                    end_ordinal,
-                    start_position.offset,
-                    end_position.offset,
-                )
+            |(start_position, end_position, start_ordinal, end_ordinal)| StructureTextBounds {
+                start_ordinal,
+                end_ordinal,
+                start_offset: start_position.offset,
+                end_offset: end_position.offset,
             },
         );
+        let copy = StructureTextCopy {
+            bounds,
+            environments: &environments,
+            math_blocks: &math_blocks,
+        };
         let mut text = String::new();
         let mut first = true;
         self.collect_structure_selection_text(
             &self.document.body,
-            bounds,
-            &environments,
-            &math_blocks,
+            copy,
             false,
             &mut text,
             &mut first,
@@ -143,13 +113,10 @@ impl Session {
     }
 
     /// 按物理块顺序汇集结构选区文本；`whole` 表示当前位于被覆盖环境内部。
-    #[allow(clippy::too_many_arguments)]
     fn collect_structure_selection_text(
         &self,
         blocks: &[caret_doc::Block],
-        bounds: Option<(usize, usize, usize, usize)>,
-        environments: &[NodeId],
-        math_blocks: &[NodeId],
+        copy: StructureTextCopy<'_>,
         whole: bool,
         text: &mut String,
         first: &mut bool,
@@ -157,29 +124,27 @@ impl Session {
         for block in blocks {
             match block {
                 caret_doc::Block::Paragraph(paragraph) => {
-                    self.push_structure_paragraph(paragraph, bounds, whole, text, first)?;
+                    self.push_structure_paragraph(paragraph, copy, whole, text, first)?;
                 }
                 caret_doc::Block::Environment(environment) => {
-                    let covered = whole || environments.contains(&environment.id);
+                    let covered = whole || copy.environments.contains(&environment.id);
                     if let Some(title) = &environment.title {
-                        self.push_structure_paragraph(title, bounds, covered, text, first)?;
+                        self.push_structure_paragraph(title, copy, covered, text, first)?;
                     }
                     self.collect_structure_selection_text(
                         &environment.children,
-                        bounds,
-                        environments,
-                        math_blocks,
+                        copy,
                         covered,
                         text,
                         first,
                     )?;
                 }
                 caret_doc::Block::Equation(equation)
-                    if whole || math_blocks.contains(&equation.id) =>
+                    if whole || copy.math_blocks.contains(&equation.id) =>
                 {
                     push_structure_selection_unit(text, first, None);
                 }
-                caret_doc::Block::Align(align) if whole || math_blocks.contains(&align.id) => {
+                caret_doc::Block::Align(align) if whole || copy.math_blocks.contains(&align.id) => {
                     push_structure_selection_unit(text, first, None);
                 }
                 caret_doc::Block::Equation(_)
@@ -195,7 +160,7 @@ impl Session {
     fn push_structure_paragraph(
         &self,
         paragraph: &caret_doc::Paragraph,
-        bounds: Option<(usize, usize, usize, usize)>,
+        copy: StructureTextCopy<'_>,
         whole: bool,
         text: &mut String,
         first: &mut bool,
@@ -204,12 +169,18 @@ impl Session {
         let (from, to, emit) = if whole {
             (0, map.text.len(), true)
         } else {
-            let Some((start_ordinal, end_ordinal, start_offset, end_offset)) = bounds else {
+            let Some(bounds) = copy.bounds else {
                 return Ok(());
             };
             let Some(ordinal) = self.structure_index.paragraph_ordinal(&paragraph.id) else {
                 return Ok(());
             };
+            let StructureTextBounds {
+                start_ordinal,
+                end_ordinal,
+                start_offset,
+                end_offset,
+            } = bounds;
             if ordinal < start_ordinal || ordinal > end_ordinal {
                 return Ok(());
             }
@@ -908,6 +879,95 @@ impl Session {
             return Err(EditError::CrossParagraphSelection);
         }
         Ok((selection.anchor.clone(), selection.focus.clone()))
+    }
+
+    /// 按文档顺序返回同一 Story 内的选区端点；`compare_positions` 同时校验两端段落与边界。
+    pub(super) fn ordered_text_range(
+        &self,
+        anchor: &Pos,
+        focus: &Pos,
+    ) -> Result<(Pos, Pos), EditError> {
+        let ordering =
+            compare_positions(&self.document.body, &self.paragraph_index, anchor, focus)?;
+        Ok(if ordering.is_le() {
+            (anchor.clone(), focus.clone())
+        } else {
+            (focus.clone(), anchor.clone())
+        })
+    }
+
+    /// 按文档顺序遍历 `start..=end` 覆盖的同 Story 段落。
+    ///
+    /// `visit` 依次收到段落位置、段落、文本映射与该段被选区覆盖的字节范围；范围可能为空
+    /// （选区两端切口重合），因此调用方自行决定是否跳过空切片。
+    pub(super) fn visit_ordered_paragraph_ranges(
+        &self,
+        start: &Pos,
+        end: &Pos,
+        mut visit: impl FnMut(
+            &ParagraphLocation,
+            &caret_doc::Paragraph,
+            &TextMap,
+            Range<usize>,
+        ) -> Result<(), EditError>,
+    ) -> Result<(), EditError> {
+        let mut paragraphs: Vec<_> = self
+            .paragraph_index
+            .iter()
+            .filter(|(_, location)| location.story == start.story)
+            .collect();
+        paragraphs.sort_by(|(_, left), (_, right)| {
+            left.block_path
+                .cmp(&right.block_path)
+                .then_with(|| left.is_title.cmp(&right.is_title).reverse())
+        });
+        let start_index = paragraphs
+            .iter()
+            .position(|(id, _)| *id == &start.paragraph_id)
+            .ok_or(EditError::InvalidPosition)?;
+        let end_index = paragraphs
+            .iter()
+            .position(|(id, _)| *id == &end.paragraph_id)
+            .ok_or(EditError::InvalidPosition)?;
+        if start_index > end_index {
+            return Err(EditError::InvalidPosition);
+        }
+
+        for (index, entry) in paragraphs
+            .iter()
+            .enumerate()
+            .take(end_index + 1)
+            .skip(start_index)
+        {
+            let (_, location) = *entry;
+            let paragraph = paragraph_at_location(&self.document.body, location)
+                .ok_or(EditError::InvalidPosition)?;
+            let map = TextMap::new(paragraph)?;
+            let range_start = if index == start_index {
+                start.offset
+            } else {
+                0
+            };
+            let range_end = if index == end_index {
+                end.offset
+            } else {
+                map.text.len()
+            };
+            if range_start > range_end || range_end > map.text.len() {
+                return Err(EditError::InvalidPosition);
+            }
+            map.validate_pos(&Pos {
+                offset: range_start,
+                ..start.clone()
+            })?;
+            map.validate_pos(&Pos {
+                paragraph_id: location.paragraph_id.clone(),
+                offset: range_end,
+                ..start.clone()
+            })?;
+            visit(location, paragraph, &map, range_start..range_end)?;
+        }
+        Ok(())
     }
 
     /// 校验并安装 Rust Session 中的逻辑选区。

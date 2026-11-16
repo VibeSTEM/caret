@@ -3,7 +3,6 @@
 
 #ifdef CARET_ENABLE_APP
 #include "caret_ffi.h"
-#include "document_runtime_bridge.hpp"
 #include "layout_view_model.hpp"
 #include <QByteArray>
 #include <QFile>
@@ -18,8 +17,6 @@
 #include <QtTest/qtestcase.h>
 #include <cstddef>
 #include <cstdint>
-#include <string_view>
-#include <utility>
 
 namespace {
 
@@ -37,19 +34,6 @@ rust::Vec<std::uint8_t> to_rust_bytes(const QByteArray& bytes) {
     return result;
 }
 
-bool install_blank_runtime() {
-    auto runtime = caret::ffi::new_blank_document_runtime();
-    const rust::String snapshot = caret::ffi::layout_snapshot_json(*runtime);
-    if (std::string_view(snapshot.data(), snapshot.size()).starts_with("error:")) {
-        return false;
-    }
-    if (!caret::install_layout_snapshot(
-            QString::fromUtf8(snapshot.data(), static_cast<qsizetype>(snapshot.size())))) {
-        return false;
-    }
-    return caret::install_document_runtime(std::move(runtime));
-}
-
 QList<QVariant> wait_for_operation(QSignalSpy& spy) {
     if (spy.isEmpty() && !spy.wait(10000)) {
         return {};
@@ -62,12 +46,12 @@ QList<QVariant> wait_for_operation(QSignalSpy& spy) {
 void ShellLoadTest::recoveryEntriesCanBeRestoredExportedAndDiscarded() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
-    QVERIFY(caret::ffi::configure_document_recovery(to_rust_string(directory.path())).empty());
+    QVERIFY(configureDocumentRecovery(directory.path()));
 
     const QString document_path = directory.filePath(QStringLiteral("recoverable.cdoc"));
     QString local_recovery_id;
     {
-        QVERIFY(install_blank_runtime());
+        QVERIFY(installBlankDocumentRuntime());
         caret::LayoutViewModel source_view_model;
         QSignalSpy operations(&source_view_model,
                               &caret::LayoutViewModel::documentFileOperationFinished);
@@ -102,7 +86,7 @@ void ShellLoadTest::recoveryEntriesCanBeRestoredExportedAndDiscarded() {
         QVERIFY2(recovery_updated.at(0).toBool(), qPrintable(recovery_updated.at(1).toString()));
 
         // 模拟应用重启：释放旧会话租约后，恢复列表才应向用户展示该条目。
-        QVERIFY(install_blank_runtime());
+        QVERIFY(installBlankDocumentRuntime());
         QVERIFY(
             source_view_model.refreshRecoveryEntries().value(QStringLiteral("pending")).toBool());
         const QList<QVariant> listed = wait_for_operation(operations);
@@ -117,7 +101,7 @@ void ShellLoadTest::recoveryEntriesCanBeRestoredExportedAndDiscarded() {
         QVERIFY(!local_recovery_id.isEmpty());
     }
 
-    QVERIFY(install_blank_runtime());
+    QVERIFY(installBlankDocumentRuntime());
     caret::LayoutViewModel restored_view_model;
     QSignalSpy restored_operations(&restored_view_model,
                                    &caret::LayoutViewModel::documentFileOperationFinished);
@@ -193,8 +177,8 @@ void ShellLoadTest::recoveryEntriesCanBeRestoredExportedAndDiscarded() {
 void ShellLoadTest::missingRecoveryEntryFailsWithoutReplacingTheOpenDocument() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
-    QVERIFY(caret::ffi::configure_document_recovery(to_rust_string(directory.path())).empty());
-    QVERIFY(install_blank_runtime());
+    QVERIFY(configureDocumentRecovery(directory.path()));
+    QVERIFY(installBlankDocumentRuntime());
 
     caret::LayoutViewModel view_model;
     QSignalSpy operations(&view_model, &caret::LayoutViewModel::documentFileOperationFinished);

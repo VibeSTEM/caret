@@ -6,6 +6,7 @@
 use super::super::StoryId;
 use super::Session;
 use super::math_edit::math_text_split_is_available;
+use crate::editing::command::command_ids;
 use crate::editing::command_registry::{MATH_INSERT_COMMAND_ID, MATH_SPLIT_INLINE_COMMAND_ID};
 use crate::editing::text_map::TextMap;
 use crate::editing::{
@@ -74,7 +75,7 @@ impl Session {
                     .is_some_and(|candidate| {
                         matches!(
                             candidate.command_id,
-                            "text.format.font" | "document.default_font"
+                            command_ids::TEXT_FORMAT_FONT | "document.default_font"
                         )
                     })
         });
@@ -149,15 +150,17 @@ impl Session {
             return false;
         }
         match candidate.command_id {
-            "struct.section.create" => self.command_line.as_ref().is_some_and(|line| {
+            command_ids::STRUCT_SECTION_CREATE => self.command_line.as_ref().is_some_and(|line| {
                 line.at.story == StoryId::Body
                     && self.selection.anchor == self.selection.focus
                     && self.paragraph_index.contains_key(&line.at.paragraph_id)
             }),
-            "insert.equation" => self.can_insert_display_math(false),
-            "insert.align" => self.can_insert_display_math(true),
-            "insert.inline_math" => self.inline_math_insert_is_available(),
-            "text.format.bold" | "text.format.italic" | "text.format.underline" => {
+            command_ids::INSERT_EQUATION => self.can_insert_display_math(false),
+            command_ids::INSERT_ALIGN => self.can_insert_display_math(true),
+            command_ids::INSERT_INLINE_MATH => self.inline_math_insert_is_available(),
+            command_ids::TEXT_FORMAT_BOLD
+            | command_ids::TEXT_FORMAT_ITALIC
+            | command_ids::TEXT_FORMAT_UNDERLINE => {
                 self.command_line
                     .as_ref()
                     .is_some_and(|line| line.mode != CommandLineMode::Math)
@@ -501,34 +504,34 @@ impl Session {
         }
         self.command_line = None;
         let effect = match candidate.command_id {
-            "text.soft_break" => self.run(Command::InsertSoftBreak),
-            "text.split_paragraph" => self.run(Command::InsertParagraphBreak),
-            "text.insert.one_character_width_space" => {
+            command_ids::TEXT_SOFT_BREAK => self.run(Command::InsertSoftBreak),
+            command_ids::TEXT_SPLIT_PARAGRAPH => self.run(Command::InsertParagraphBreak),
+            command_ids::TEXT_INSERT_ONE_CHARACTER_WIDTH_SPACE => {
                 self.run(Command::InsertOneCharacterWidthSpace)
             }
-            "text.insert.two_character_width_space" => {
+            command_ids::TEXT_INSERT_TWO_CHARACTER_WIDTH_SPACE => {
                 self.run(Command::InsertTwoCharacterWidthSpace)
             }
-            "text.format.bold" => self.run(Command::ToggleInlineFormat(
+            command_ids::TEXT_FORMAT_BOLD => self.run(Command::ToggleInlineFormat(
                 caret_doc::InlineEnvironmentKind::Bold,
             )),
-            "text.format.italic" => self.run(Command::ToggleInlineFormat(
+            command_ids::TEXT_FORMAT_ITALIC => self.run(Command::ToggleInlineFormat(
                 caret_doc::InlineEnvironmentKind::Italic,
             )),
-            "text.format.underline" => self.run(Command::ToggleRunUnderline),
-            "text.format.font_family" => candidate
+            command_ids::TEXT_FORMAT_UNDERLINE => self.run(Command::ToggleRunUnderline),
+            command_ids::TEXT_FORMAT_FONT_FAMILY => candidate
                 .value
                 .map(|family| self.run(Command::SetInlineFontFamily(family)))
                 .unwrap_or_else(|| Ok(Effect::default())),
-            "paragraph.first_line_indent.set" => {
+            command_ids::PARAGRAPH_FIRST_LINE_INDENT_SET => {
                 self.run(Command::SetParagraphFirstLineIndentChars(2))
             }
-            "struct.section.create" => self.run(Command::CreateBlockEnvironment(
+            command_ids::STRUCT_SECTION_CREATE => self.run(Command::CreateBlockEnvironment(
                 BlockEnvironmentKind::Section,
             )),
-            "insert.inline_math" => self.begin_inline_math(),
-            "insert.equation" => self.insert_display_math(false),
-            "insert.align" => self.insert_display_math(true),
+            command_ids::INSERT_INLINE_MATH => self.begin_inline_math(),
+            command_ids::INSERT_EQUATION => self.insert_display_math(false),
+            command_ids::INSERT_ALIGN => self.insert_display_math(true),
             id if id == MATH_INSERT_COMMAND_ID => match candidate.value.clone() {
                 Some(template) if self.math_edit.is_some() => self.math_insert_template(&template),
                 _ => return Ok(Effect::default()),

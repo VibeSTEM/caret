@@ -92,19 +92,19 @@ impl Session {
             .validate()
             .map_err(|error| EditError::InvalidMath(error.to_string()))?;
         let next_path = next_focus.path.clone();
+        let next_cursor = next_focus.offset;
         self.commit_math_text_tree(
             edit,
             updated_tree,
             super::text_branch::MathTextTreeCommit {
-                branch: super::MathEditBranch::Text {
-                    path: next_path.clone(),
-                    anchor: next_anchor,
-                    focus_affinity: next_focus.affinity,
+                branch: super::MathEditBranch::text_selection(
+                    next_anchor,
+                    next_focus,
                     anchor_visual_affinity,
                     visual_affinity,
-                },
+                ),
                 align_cell: next_path.align_cell(),
-                cursor: next_focus.offset,
+                cursor: next_cursor,
                 merge_group: None,
                 pending_style: super::text_branch::PendingStylePolicy::Clear,
                 selection_changed: true,
@@ -169,19 +169,19 @@ impl Session {
             .validate()
             .map_err(|error| EditError::InvalidMath(error.to_string()))?;
         let next_path = next_focus.path.clone();
+        let next_cursor = next_focus.offset;
         self.commit_math_text_tree(
             edit,
             updated_tree,
             super::text_branch::MathTextTreeCommit {
-                branch: super::MathEditBranch::Text {
-                    path: next_path.clone(),
-                    anchor: next_anchor,
-                    focus_affinity: next_focus.affinity,
+                branch: super::MathEditBranch::text_selection(
+                    next_anchor,
+                    next_focus,
                     anchor_visual_affinity,
                     visual_affinity,
-                },
+                ),
                 align_cell: next_path.align_cell(),
-                cursor: next_focus.offset,
+                cursor: next_cursor,
                 merge_group: None,
                 pending_style: super::text_branch::PendingStylePolicy::Clear,
                 selection_changed: true,

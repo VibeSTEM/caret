@@ -16,7 +16,7 @@ DialogWindow {
     signal saveRequested
     signal discardRequested
 
-    width: Theme.dialogActionWidth * 3 + Theme.dialogActionSpacing * 2 + Theme.spacingLarge * 2
+    width: Theme.actionDialogWidth
     height: frame.headerImplicitHeight + Theme.spacingMedium * 2 + promptLabel.implicitHeight + Theme.spacingLarge + actionsRow.implicitHeight
     title: qsTr("Unsaved changes")
 

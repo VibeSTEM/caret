@@ -12,7 +12,7 @@ use serde_json::Value;
 // 只登记当前 native 模块和真实 CTest 标签。未知模块回退全量。
 const NATIVE_LABELS: &[(&str, &[&str])] = &[
     ("i18n", &["cpp", "i18n", "qml"]),
-    ("app", &["qml"]),
+    ("app", &["cpp", "app"]),
     ("adapters", &["qml"]),
     ("viewmodels", &["qml"]),
     ("canvas", &["qml"]),

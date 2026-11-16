@@ -2,10 +2,7 @@
 #include "shell_load_test.hpp"
 
 #ifdef CARET_ENABLE_APP
-#include "caret_ffi.h"
-#include "document_runtime_bridge.hpp"
 #include "layout_view_model.hpp"
-#include <QByteArray>
 #include <QFile>
 #include <QIODevice>
 #include <QSignalSpy>
@@ -14,26 +11,14 @@
 #include <QTest>
 #include <QVariantMap>
 #include <QtTest/qtestcase.h>
-#include <cstddef>
 #include <qcontainerfwd.h>
-#include <string_view>
-#include <utility>
 
 void ShellLoadTest::autoSaveWritesTheCurrentRevisionAfterTheDeadline() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
 
-    const QByteArray recovery_root = directory.path().toUtf8();
-    const rust::String recovery_configuration = caret::ffi::configure_document_recovery(
-        rust::String(recovery_root.constData(), static_cast<std::size_t>(recovery_root.size())));
-    QVERIFY(recovery_configuration.empty());
-
-    auto runtime = caret::ffi::new_blank_document_runtime();
-    const rust::String blank_snapshot = caret::ffi::layout_snapshot_json(*runtime);
-    QVERIFY(!std::string_view(blank_snapshot.data(), blank_snapshot.size()).starts_with("error:"));
-    QVERIFY(caret::install_layout_snapshot(
-        QString::fromUtf8(blank_snapshot.data(), static_cast<qsizetype>(blank_snapshot.size()))));
-    QVERIFY(caret::install_document_runtime(std::move(runtime)));
+    QVERIFY(configureDocumentRecovery(directory.path()));
+    QVERIFY(installBlankDocumentRuntime());
 
     caret::LayoutViewModel view_model;
     QSignalSpy operation_spy(&view_model, &caret::LayoutViewModel::documentFileOperationFinished);
