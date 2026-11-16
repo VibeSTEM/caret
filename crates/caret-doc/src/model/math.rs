@@ -114,39 +114,39 @@ impl MathNodeKind {
     }
 }
 
+/// 校验数学节点的属性键与值域；每个 `MathNodeKind` 的契约只在此分派一次。
 pub(crate) fn math_node_attributes_supported(
     kind: MathNodeKind,
     text: Option<&str>,
     attributes: &BTreeMap<String, String>,
 ) -> bool {
-    let allowed_keys: &[&str] = match kind {
-        MathNodeKind::Symbol => &["atomClass"],
-        MathNodeKind::Operator => &["limits"],
-        MathNodeKind::Fraction => &["style"],
-        MathNodeKind::Delimited => &["left", "right"],
-        MathNodeKind::SizedDelimiter => &["size", "atomClass"],
-        MathNodeKind::Matrix => &["style", "columns"],
-        MathNodeKind::Sum | MathNodeKind::Product | MathNodeKind::Limit => &[],
-        MathNodeKind::Integral => &["integralKind"],
-        MathNodeKind::Accent => &["accent"],
-        MathNodeKind::Space => &[
-            "spaceKind",
-            "valueNumerator",
-            "valueDenominator",
-            "valueUnit",
-        ],
-        MathNodeKind::Text => &["style"],
-        MathNodeKind::Color | MathNodeKind::TextColor | MathNodeKind::ColorBox => &["color"],
-        MathNodeKind::FColorBox => &["borderColor", "fillColor"],
-        MathNodeKind::Strut => &[
-            "heightNumerator",
-            "heightDenominator",
-            "heightUnit",
-            "depthNumerator",
-            "depthDenominator",
-            "depthUnit",
-        ],
-        MathNodeKind::Phantom => &["phantomKind"],
+    match kind {
+        MathNodeKind::Symbol => symbol_attributes_supported(attributes),
+        MathNodeKind::Operator => {
+            required_enum_attribute_supported(attributes, "limits", &["true", "false"])
+        }
+        MathNodeKind::Fraction => {
+            required_enum_attribute_supported(attributes, "style", FRACTION_STYLES)
+        }
+        MathNodeKind::Delimited => delimited_attributes_supported(attributes),
+        MathNodeKind::SizedDelimiter => sized_delimiter_attributes_supported(text, attributes),
+        MathNodeKind::Matrix => matrix_attributes_supported(attributes),
+        MathNodeKind::Integral => {
+            required_enum_attribute_supported(attributes, "integralKind", INTEGRAL_KINDS)
+        }
+        MathNodeKind::Accent => {
+            required_enum_attribute_supported(attributes, "accent", ACCENT_KINDS)
+        }
+        MathNodeKind::Space => space_attributes_supported(attributes),
+        MathNodeKind::Text => required_enum_attribute_supported(attributes, "style", TEXT_STYLES),
+        MathNodeKind::Color | MathNodeKind::TextColor | MathNodeKind::ColorBox => {
+            css_color_attributes_supported(attributes)
+        }
+        MathNodeKind::FColorBox => fcolorbox_attributes_supported(attributes),
+        MathNodeKind::Strut => strut_attributes_supported(attributes),
+        MathNodeKind::Phantom => {
+            required_enum_attribute_supported(attributes, "phantomKind", PHANTOM_KINDS)
+        }
         MathNodeKind::Row
         | MathNodeKind::Substack
         | MathNodeKind::Intertext
@@ -155,186 +155,240 @@ pub(crate) fn math_node_attributes_supported(
         | MathNodeKind::CancelTo
         | MathNodeKind::Style
         | MathNodeKind::Group
-        | MathNodeKind::Placeholder => &[],
-        MathNodeKind::Radical
+        | MathNodeKind::Placeholder
+        | MathNodeKind::Sum
+        | MathNodeKind::Product
+        | MathNodeKind::Limit
+        | MathNodeKind::Radical
         | MathNodeKind::Superscript
         | MathNodeKind::Subscript
-        | MathNodeKind::SubSup => &[],
-    };
-    if attributes
-        .keys()
-        .any(|key| !allowed_keys.contains(&key.as_str()))
-    {
-        return false;
-    }
-
-    let enum_value = |key: &str, allowed: &[&str]| {
-        attributes
-            .get(key)
-            .is_some_and(|value| allowed.contains(&value.as_str()))
-    };
-    let dimension = |prefix: &str| {
-        let numerator = format!("{prefix}Numerator");
-        let denominator = format!("{prefix}Denominator");
-        let unit = format!("{prefix}Unit");
-        match (
-            attributes.get(&numerator),
-            attributes.get(&denominator),
-            attributes.get(&unit),
-        ) {
-            (None, None, None) => true,
-            (Some(numerator), Some(denominator), Some(unit)) if unit == "em" => numerator
-                .parse::<i128>()
-                .is_ok_and(|_| denominator.parse::<i128>().is_ok_and(|value| value > 0)),
-            _ => false,
-        }
-    };
-    let dimension_present = |prefix: &str| {
-        attributes.contains_key(&format!("{prefix}Numerator"))
-            && attributes.contains_key(&format!("{prefix}Denominator"))
-            && attributes.contains_key(&format!("{prefix}Unit"))
-    };
-
-    match kind {
-        MathNodeKind::Symbol => attributes.get("atomClass").is_none_or(|_| {
-            enum_value(
-                "atomClass",
-                &["ord", "op", "bin", "rel", "open", "close", "punct", "inner"],
-            )
-        }),
-        MathNodeKind::Operator => enum_value("limits", &["true", "false"]),
-        MathNodeKind::Fraction => enum_value("style", &["frac", "dfrac", "tfrac", "cfrac"]),
-        MathNodeKind::Delimited => {
-            attributes.contains_key("left")
-                && attributes.contains_key("right")
-                && attributes
-                    .get("left")
-                    .is_none_or(|value| valid_delimiter(value))
-                && attributes
-                    .get("right")
-                    .is_none_or(|value| valid_delimiter(value))
-        }
-        MathNodeKind::SizedDelimiter => {
-            text.is_some_and(valid_delimiter)
-                && enum_value("size", &["big", "Big", "bigg", "Bigg"])
-                && enum_value(
-                    "atomClass",
-                    &["ord", "op", "bin", "rel", "open", "close", "punct", "inner"],
-                )
-        }
-        MathNodeKind::Matrix => {
-            enum_value(
-                "style",
-                &[
-                    "matrix", "pmatrix", "bmatrix", "vmatrix", "Vmatrix", "Bmatrix", "cases",
-                    "array", "aligned", "split",
-                ],
-            ) && attributes.get("columns").is_some_and(|columns| {
-                columns
-                    .chars()
-                    .all(|column| matches!(column, 'l' | 'c' | 'r' | '|'))
-            })
-        }
-        MathNodeKind::Integral => {
-            enum_value("integralKind", &["int", "iint", "iiint", "oint", "oiint"])
-        }
-        MathNodeKind::Accent => enum_value(
-            "accent",
-            &[
-                "hat",
-                "check",
-                "breve",
-                "acute",
-                "grave",
-                "tilde",
-                "bar",
-                "vec",
-                "dot",
-                "ddot",
-                "dddot",
-                "ddddot",
-                "widehat",
-                "widetilde",
-                "overline",
-                "underline",
-                "overbrace",
-                "underbrace",
-                "overleftarrow",
-                "overrightarrow",
-                "overleftrightarrow",
-                "underleftarrow",
-                "underrightarrow",
-                "underleftrightarrow",
-                "cancel",
-                "bcancel",
-                "xcancel",
-                "boxed",
-                "ring",
-                "not",
-            ],
-        ),
-        MathNodeKind::Space => {
-            enum_value(
-                "spaceKind",
-                &[
-                    "thin",
-                    "medium",
-                    "thick",
-                    "negative_thin",
-                    "quad",
-                    "qquad",
-                    "control",
-                    "hspace",
-                    "space",
-                    "control_space",
-                    "no_break_space",
-                ],
-            ) && if attributes.get("spaceKind").map(String::as_str) == Some("hspace") {
-                dimension_present("value") && dimension("value")
-            } else {
-                !attributes.contains_key("valueNumerator")
-                    && !attributes.contains_key("valueDenominator")
-                    && !attributes.contains_key("valueUnit")
-            }
-        }
-        MathNodeKind::Text => enum_value(
-            "style",
-            &[
-                "rm",
-                "bf",
-                "it",
-                "sf",
-                "tt",
-                "bb",
-                "cal",
-                "frak",
-                "scr",
-                "boldsymbol",
-                "pmb",
-                "text",
-            ],
-        ),
-        MathNodeKind::Color | MathNodeKind::TextColor | MathNodeKind::ColorBox => attributes
-            .get("color")
-            .is_some_and(|color| valid_css_color(color)),
-        MathNodeKind::FColorBox => {
-            attributes
-                .get("borderColor")
-                .is_some_and(|color| valid_css_color(color))
-                && attributes
-                    .get("fillColor")
-                    .is_some_and(|color| valid_css_color(color))
-        }
-        MathNodeKind::Strut => {
-            dimension_present("height")
-                && dimension_present("depth")
-                && dimension("height")
-                && dimension("depth")
-        }
-        MathNodeKind::Phantom => enum_value("phantomKind", &["phantom", "vphantom", "hphantom"]),
-        _ => true,
+        | MathNodeKind::SubSup => attributes.is_empty(),
     }
 }
+
+/// Symbol 节点：`atomClass` 可缺省，出现时必须是已知原子类别。
+fn symbol_attributes_supported(attributes: &BTreeMap<String, String>) -> bool {
+    keys_supported(attributes, &["atomClass"])
+        && attributes
+            .get("atomClass")
+            .is_none_or(|value| ATOM_CLASSES.contains(&value.as_str()))
+}
+
+/// Delimited 节点：`left` 与 `right` 必须同时出现且都是合法定界符。
+fn delimited_attributes_supported(attributes: &BTreeMap<String, String>) -> bool {
+    keys_supported(attributes, &["left", "right"])
+        && attributes
+            .get("left")
+            .is_some_and(|value| valid_delimiter(value))
+        && attributes
+            .get("right")
+            .is_some_and(|value| valid_delimiter(value))
+}
+
+/// SizedDelimiter 节点：文本本身必须是合法定界符，`size` 与 `atomClass` 必填。
+fn sized_delimiter_attributes_supported(
+    text: Option<&str>,
+    attributes: &BTreeMap<String, String>,
+) -> bool {
+    keys_supported(attributes, &["size", "atomClass"])
+        && text.is_some_and(valid_delimiter)
+        && enum_attribute_matches(attributes, "size", DELIMITER_SIZES)
+        && enum_attribute_matches(attributes, "atomClass", ATOM_CLASSES)
+}
+
+/// Matrix 节点：`style` 必填为矩阵样式，`columns` 必填且只含列对齐字符。
+fn matrix_attributes_supported(attributes: &BTreeMap<String, String>) -> bool {
+    keys_supported(attributes, &["style", "columns"])
+        && enum_attribute_matches(attributes, "style", MATRIX_STYLES)
+        && attributes.get("columns").is_some_and(|columns| {
+            columns
+                .chars()
+                .all(|column| matches!(column, 'l' | 'c' | 'r' | '|'))
+        })
+}
+
+/// Space 节点：`spaceKind` 必填；`hspace` 要求成组且合法的 `value` 维度，其余种类禁止值维度。
+fn space_attributes_supported(attributes: &BTreeMap<String, String>) -> bool {
+    keys_supported(
+        attributes,
+        &[
+            "spaceKind",
+            "valueNumerator",
+            "valueDenominator",
+            "valueUnit",
+        ],
+    ) && enum_attribute_matches(attributes, "spaceKind", SPACE_KINDS)
+        && if attributes.get("spaceKind").map(String::as_str) == Some("hspace") {
+            dimension_present(attributes, "value") && dimension_supported(attributes, "value")
+        } else {
+            !attributes.contains_key("valueNumerator")
+                && !attributes.contains_key("valueDenominator")
+                && !attributes.contains_key("valueUnit")
+        }
+}
+
+/// Color/TextColor/ColorBox 节点：`color` 必填且为合法 CSS 颜色。
+fn css_color_attributes_supported(attributes: &BTreeMap<String, String>) -> bool {
+    keys_supported(attributes, &["color"])
+        && attributes
+            .get("color")
+            .is_some_and(|color| valid_css_color(color))
+}
+
+/// FColorBox 节点：边框色与填充色都必填且为合法 CSS 颜色。
+fn fcolorbox_attributes_supported(attributes: &BTreeMap<String, String>) -> bool {
+    keys_supported(attributes, &["borderColor", "fillColor"])
+        && attributes
+            .get("borderColor")
+            .is_some_and(|color| valid_css_color(color))
+        && attributes
+            .get("fillColor")
+            .is_some_and(|color| valid_css_color(color))
+}
+
+/// Strut 节点：高度与深度两组维度都必须完整给出且合法。
+fn strut_attributes_supported(attributes: &BTreeMap<String, String>) -> bool {
+    keys_supported(
+        attributes,
+        &[
+            "heightNumerator",
+            "heightDenominator",
+            "heightUnit",
+            "depthNumerator",
+            "depthDenominator",
+            "depthUnit",
+        ],
+    ) && dimension_present(attributes, "height")
+        && dimension_present(attributes, "depth")
+        && dimension_supported(attributes, "height")
+        && dimension_supported(attributes, "depth")
+}
+
+/// 单枚举属性节点：只允许出现 `key` 一个属性键，且该键必填并取 `allowed` 中的值。
+fn required_enum_attribute_supported(
+    attributes: &BTreeMap<String, String>,
+    key: &str,
+    allowed: &[&str],
+) -> bool {
+    keys_supported(attributes, &[key]) && enum_attribute_matches(attributes, key, allowed)
+}
+
+/// 属性键集合必须全部落在 `allowed` 内；空切片表示不接受任何属性。
+fn keys_supported(attributes: &BTreeMap<String, String>, allowed: &[&str]) -> bool {
+    attributes.keys().all(|key| allowed.contains(&key.as_str()))
+}
+
+/// `key` 必填且取值在 `allowed` 内；用于组合多个属性的契约。
+fn enum_attribute_matches(
+    attributes: &BTreeMap<String, String>,
+    key: &str,
+    allowed: &[&str],
+) -> bool {
+    attributes
+        .get(key)
+        .is_some_and(|value| allowed.contains(&value.as_str()))
+}
+
+/// 判断 `<prefix>Numerator/<prefix>Denominator/<prefix>Unit` 是否三个键同时存在。
+fn dimension_present(attributes: &BTreeMap<String, String>, prefix: &str) -> bool {
+    attributes.contains_key(&format!("{prefix}Numerator"))
+        && attributes.contains_key(&format!("{prefix}Denominator"))
+        && attributes.contains_key(&format!("{prefix}Unit"))
+}
+
+/// 校验 `<prefix>Numerator/<prefix>Denominator/<prefix>Unit` 维度：
+/// 三者全缺省视为未设置，全部给出时要求单位为 `em`、分子为整数、分母为正整数。
+fn dimension_supported(attributes: &BTreeMap<String, String>, prefix: &str) -> bool {
+    match (
+        attributes.get(&format!("{prefix}Numerator")),
+        attributes.get(&format!("{prefix}Denominator")),
+        attributes.get(&format!("{prefix}Unit")),
+    ) {
+        (None, None, None) => true,
+        (Some(numerator), Some(denominator), Some(unit)) if unit == "em" => numerator
+            .parse::<i128>()
+            .is_ok_and(|_| denominator.parse::<i128>().is_ok_and(|value| value > 0)),
+        _ => false,
+    }
+}
+
+/// `atomClass` 允许的原子类别。
+const ATOM_CLASSES: &[&str] = &["ord", "op", "bin", "rel", "open", "close", "punct", "inner"];
+/// 定界符 `size` 允许的尺寸。
+const DELIMITER_SIZES: &[&str] = &["big", "Big", "bigg", "Bigg"];
+/// 分数节点 `style` 允许的取值。
+const FRACTION_STYLES: &[&str] = &["frac", "dfrac", "tfrac", "cfrac"];
+/// 矩阵节点 `style` 允许的取值。
+const MATRIX_STYLES: &[&str] = &[
+    "matrix", "pmatrix", "bmatrix", "vmatrix", "Vmatrix", "Bmatrix", "cases", "array", "aligned",
+    "split",
+];
+/// 积分节点 `integralKind` 允许的取值。
+const INTEGRAL_KINDS: &[&str] = &["int", "iint", "iiint", "oint", "oiint"];
+/// 重音节点 `accent` 允许的取值。
+const ACCENT_KINDS: &[&str] = &[
+    "hat",
+    "check",
+    "breve",
+    "acute",
+    "grave",
+    "tilde",
+    "bar",
+    "vec",
+    "dot",
+    "ddot",
+    "dddot",
+    "ddddot",
+    "widehat",
+    "widetilde",
+    "overline",
+    "underline",
+    "overbrace",
+    "underbrace",
+    "overleftarrow",
+    "overrightarrow",
+    "overleftrightarrow",
+    "underleftarrow",
+    "underrightarrow",
+    "underleftrightarrow",
+    "cancel",
+    "bcancel",
+    "xcancel",
+    "boxed",
+    "ring",
+    "not",
+];
+/// 空白节点 `spaceKind` 允许的取值。
+const SPACE_KINDS: &[&str] = &[
+    "thin",
+    "medium",
+    "thick",
+    "negative_thin",
+    "quad",
+    "qquad",
+    "control",
+    "hspace",
+    "space",
+    "control_space",
+    "no_break_space",
+];
+/// 文本节点 `style` 允许的取值。
+const TEXT_STYLES: &[&str] = &[
+    "rm",
+    "bf",
+    "it",
+    "sf",
+    "tt",
+    "bb",
+    "cal",
+    "frak",
+    "scr",
+    "boldsymbol",
+    "pmb",
+    "text",
+];
+/// 幻影节点 `phantomKind` 允许的取值。
+const PHANTOM_KINDS: &[&str] = &["phantom", "vphantom", "hphantom"];
 
 pub(crate) fn math_node_structure_supported(
     parent: Option<MathNodeKind>,
