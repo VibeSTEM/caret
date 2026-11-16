@@ -1,9 +1,9 @@
 # 089 — InlineEnvironment 普通 Backspace 清理语义
 
-- 状态：implemented
+- 状态：done
 - 依赖：031、044、075
 - 优先级：P1
-- 创建 / 更新：2026-11-12 / 2026-11-12
+- 创建 / 更新：2026-11-12 / 2026-11-16
 
 ## 目标与背景
 
@@ -13,8 +13,8 @@
 
 ## 必读
 
-- [行内格式与文本](../../architecture/editor/text-formatting.md)、[数学公式](../../architecture/editor/math.md)
-- [验证与评审](../../standards/validation-and-review.md)、[测试规范](../../standards/testing.md)
+- [行内格式与文本](../architecture/editor/text-formatting.md)、[数学公式](../architecture/editor/math.md)
+- [验证与评审](../standards/validation-and-review.md)、[测试规范](../standards/testing.md)
 - [031](031-environment-highlight.md)、[044](044-math-layout-and-rendering.md)、[075](075-equation-align-active-highlight.md)
 
 ## 范围与非目标
@@ -63,3 +63,4 @@
 ## 决策与工作记录
 
 - 2026-11-12：从桌面测试发现中拆出并实现，任务归属 031/044（行内环境删除契约），不在 083 的跨宿主选区范围。
+- 2026-11-16：只读复核 `25151cc8` 至当前 main 的 Backspace 路由、Session 事务、engine/app 回归；无阻断发现。验证边界：未运行测试或真实桌面检查；数学编辑和块边界保护以代码路径复核，未单独组合复现空环境场景，失败事务也未独立复现。验收标准由已有行为测试和历史仓库验证覆盖。
