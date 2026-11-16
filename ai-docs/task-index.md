@@ -78,7 +78,7 @@
 | 044 | 数学排版 | [M3：公式布局与画布渲染](task/044-math-layout-and-rendering.md) | P2 | 027、043 | L | done |
 | 045 | 表格 | [M3：表格模型与交互](task/045-table-model-and-editing.md) | P2 | 010、021、043、071 | M | planned |
 | 046 | 表格 | [M3：表格布局与画布](task/046-table-layout-and-canvas.md) | P2 | 027、043、044、045 | M | planned |
-| 047 | 文档交换 | [Markdown 导入导出与转换框架](task/047-markdown-interchange.md) | P2 | 008、010–012、018、021、023–027、029、050–053 | L | planned |
+| 047 | 文档交换 | [Markdown 导入导出与转换框架](task/047-markdown-interchange.md) | P2 | 008、010–012、018、021、023–027、029、050–053、092 | L | planned |
 | 048 | 文档交换 | [DOCX 导入导出适配器](task/048-docx-interchange.md) | P2 | 047 | L | planned |
 | 049 | 文档交换 | [TeX 文档导入导出适配器](task/049-tex-interchange.md) | P2 | 047 | L | planned |
 | 050 | 文档模型 | [代码、引用与链接语义节点及编辑](task/050-document-code-links-quotes.md) | P2 | 010、021、025 | L | planned |
@@ -111,7 +111,7 @@
 | 077 | 数学交互 | [数学宿主行框与光标高度统一](task/077-stable-math-caret-height.md) | P1 | 044、074 | M | implemented |
 | 078 | 数学输入 | [数学输入源的拉丁字符等效输出](task/078-math-latin-input-source-parity.md) | P1 | 076 | M | ready |
 | 079 | 数学交互 | [数学多行换行与删除事务](task/079-math-multiline-break-deletion.md) | P1 | 071、074、076 | M | done |
-| 080 | 架构 | [Block/Inline 共享交互底座（Paragraph 为基线）](task/080-shared-host-boundary-interaction.md) | P1 | 071、074、077、081–083 | L | planned |
+| 080 | 架构 | [Block/Inline 共享交互底座（Paragraph 为基线）](task/080-shared-host-boundary-interaction.md) | P1 | 071、074、077、081–083、091 | L | in-progress |
 | 081 | 编辑交互 | [Block/Inline 共享三态焦点仲裁](task/081-host-three-state-caret-arbitration.md) | P0 | 071、074、077 | M | done |
 | 082 | 架构 | [共享文档位置、全序与宿主定位](task/082-shared-document-position-and-order.md) | P1 | 071、074、077、081 | M | done |
 | 083 | 编辑交互 | [跨宿主选区、编辑事务与几何投影](task/083-cross-host-selection-and-transactions.md) | P1 | 071、074、077、081、082 | L | done |
@@ -122,5 +122,7 @@
 | 088 | 数学排版 | [收敛空 InlineMath 插入槽与正文命中优先级](task/088-unify-empty-inline-math-hit-slot.md) | P2 | 087、069 | S | planned |
 | 089 | 行内格式 | [InlineEnvironment 普通 Backspace 清理语义](task/089-inline-environment-backspace-cleanup.md) | P1 | 031、044、075 | S | done |
 | 090 | 画布交互 | [拖选跨公式块/块环境的实时预览](task/090-drag-selection-live-preview.md) | P1 | 027、031、044、083 | M | implemented |
+| 091 | 剪贴板 | [富剪贴板与数学片段接入](task/091-rich-clipboard-integration.md) | P1 | 083、092 | M | planned |
+| 092 | 数学排版 | [共享数学片段转换接口](task/092-checked-math-fragment-converter.md) | P1 | 043 | M | ready |
 
 分类描述任务主题；里程碑和实施边界写在对应任务中。任务拆分、状态变更及执行记录以各任务文档为准。

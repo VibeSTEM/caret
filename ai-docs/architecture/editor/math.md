@@ -1,6 +1,6 @@
 # 数学公式
 
-更新日期：2026-11-10。本文是 Caret 数学文档模型、LaTeX 子集、公式编辑语义和字体选择的唯一权威。公式与表格之间的工作边界见[专题索引](math-and-table.md)。
+更新日期：2026-11-16。本文是 Caret 数学文档模型、LaTeX 子集、公式编辑语义和字体选择的唯一权威。公式与表格之间的工作边界见[专题索引](math-and-table.md)。
 
 ## 公式节点与 LaTeX 语义
 
@@ -51,7 +51,7 @@ Caret 数学树保留 TeX 原子与符号顺序，不解析成代数关系或运
 
 公式后端是工作区内的 `caret-math` crate，选型依据见[研究 010](../../research/010-typst-math-layout.md)：
 
-- **解析与导出**：LaTeX 子集解析器将输入转换为 `MathTree` / `Align`；导出器将文档树转换为规范 TeX。编辑 TextFlow 不经此转换边界；显式源码编辑才使用临时 TeX 草稿和会话映射。树与草稿无法无歧义对齐，或导出无法表达格式与扩展元数据时，返回明确错误并保留有效状态。
+- **解析与导出**：`caret-math` 提供共享的数学片段转换边界，将受支持 TeX 数学语法转换为 `MathTree` / `Align`，并从规范树生成规范 TeX。序列化遇到不可表达的语义或扩展字段必须返回结构化损失，不得静默删减；checked API 的实现由任务 092 验收。Markdown、完整 TeX 文档适配器、显式公式源码输入和剪贴板纯文本投影复用此能力；外层分隔符、文档结构、源位置与转换诊断归调用方，不为不同入口复制数学 parser、serializer 或 AST。该接口不是完整 TeX 文档 parser，也不执行用户宏。编辑 TextFlow 不经此转换边界；显式源码编辑才使用临时 TeX 草稿和会话映射。树与草稿无法无歧义对齐，或导出无法表达格式与扩展元数据时，返回明确错误并保留有效状态。
 - **排版**：`layout/` 移植自 Typst v0.15.1 的数学排版，度量来自 OpenType MATH 表，经 `read-fonts` / `skrifa` 读取。`Align` 的显示布局在调用期间适配成数学后端的 `aligned` 矩阵，由数学表格适配器计算对齐列与行距；Equation 是单行单格的显示公式，Align 是多行多格的显示公式；两者都不转存为 Caret 文档表格。行框和网格纯几何由共享的 `caret-grid-layout` 计算，正文布局与数学宿主向它提供测量结果和行距策略；文档表格以后也复用同一层。嵌套 matrix/cases 保持数学自身排版，不继承宿主正文行高。移植文件的来源与修改记录在文件头，见[源码署名](../../standards/source-attribution.md)。
 - **输出**：`MathLayout` 独立产出 Glyph、Rule、Line、Rectangle 和 MathNodeBox 项及其几何；页面布局将这些项适配到 Caret 页面快照，并让绘制、命中和光标共用几何。InlineMath 作为行内对象参与正文段落行框；Equation 作为一行一格、Align 作为多行多格使用正文基础行框和共享网格推进。超出行框的上标、分数等由 Natural、Multiple、AtLeast、Exactly 规则处理。数学 caret 使用宿主的正文基础行高，并锚定 MathNodeBox 或 MathText 当前视觉行的真实基线；上下标等结构保留相对基线偏移，多行文本岛按当前视觉行取基线。Exactly 按宿主行距固定推进，逐行溢出裁切必须与行身份、绘制、命中和 caret 共用同一几何。Equation/Align 的块前后间距沿用普通段落的相邻间距合并规则。空公式宿主（InlineMath 根、Equation 根与 Align cell 根）保留非零 MathNodeBox 作为命中、插入点和 caret 的布局锚点，但不输出内部必填槽使用的描边 Rectangle；分数、脚本、根式等内部必填空槽仍绘制该矩形。这个区别属于稳定的树布局角色，与当前焦点无关。空宿主参与行内流时另有行内推进契约：空 InlineMath 的 `MathLayout.inline_advance` 为 0（与空 InlineEnvironment 一致，不在正文中留下不可见间隙），非空 InlineMath 与显示公式使用排版宽度；聚焦空 InlineMath 的内联环境高亮使用与其它空行内环境相同的插入槽（字号相关、以公式 caret 居中），其命中区同样限制在插入槽内且不吞掉相邻正文点击。Equation/Align 的分页与块几何不受该推进字段影响。SVG/PNG 不是文档模型，也不是交互路径。
 - **缓存**：`MathLayoutEngine` 按公式内容、字号、样式与字体缓存排版结果；页面布局服务负责组合和复用。
