@@ -442,10 +442,19 @@ fn native_module_change_selects_registered_label_closure() -> Result<(), Box<dyn
         plan.native_labels,
         BTreeSet::from(["cpp".into(), "i18n".into(), "qml".into()])
     );
-    let app = make_plan(&["native/viewmodels/theme/theme_catalog.cpp".into()], &root)?;
-    assert!(!app.full);
-    assert_eq!(app.native_labels, BTreeSet::from(["qml".into()]));
-    assert!(!app.qml_lint, "{app:?}");
+    let viewmodels = make_plan(&["native/viewmodels/theme/theme_catalog.cpp".into()], &root)?;
+    assert!(!viewmodels.full);
+    assert_eq!(viewmodels.native_labels, BTreeSet::from(["qml".into()]));
+    assert!(!viewmodels.qml_lint, "{viewmodels:?}");
+    // App.* CTest 用例在 native/app/CMakeLists.txt 注册为 "cpp;app"，改动 native/app 必须选中它们。
+    let app_entry = make_plan(&["native/app/main.cpp".into()], &root)?;
+    assert!(!app_entry.full);
+    assert_eq!(
+        app_entry.native_labels,
+        BTreeSet::from(["app".into(), "cpp".into()])
+    );
+    assert!(!app_entry.qml, "{app_entry:?}");
+    assert!(!app_entry.qml_lint, "{app_entry:?}");
     for header in [
         "native/adapters/document_path_adapter.hpp",
         "native/adapters/platform_fonts.hpp",
