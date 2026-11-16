@@ -4,82 +4,37 @@
 // 署名：Yuki Lu
 
 use super::{DocumentError, is_known_inline_environment};
-use crate::MathNodeKind;
+use crate::{Document, MathNodeKind, MathTree};
 use serde_json::Value;
 use std::collections::{BTreeSet, HashSet};
 
-/// 即使未知子节点使类型解码器将载体保留为不透明数据，也要从 envelope 校验当前数学 schema 的能力声明。
-pub(super) fn validate_raw_math_feature_declarations(
-    raw: &Value,
-    declared: &[String],
-) -> Result<(), DocumentError> {
-    fn has_current_tree(value: &Value) -> bool {
-        value
-            .get("schemaVersion")
-            .and_then(Value::as_u64)
-            .is_some_and(|version| version == crate::MATH_TREE_SCHEMA_VERSION as u64)
-    }
+/// 缺失必需数学能力时的统一格式错误；raw 扫描与类型路径共用同一文案。
+pub(super) fn missing_math_capability(feature: &str) -> DocumentError {
+    DocumentError::InvalidDocument(format!("required math capability is missing: {feature}"))
+}
 
+/// 推导 raw 文档使用的数学能力。
+///
+/// 类型解码器可能因未知子节点把整个载体保留为不透明数据，此时仍须从 envelope 校验
+/// 当前数学 schema 的能力声明，因此不能复用 `Document::required_features` 的类型推导。
+pub(super) fn raw_math_capabilities(raw: &Value) -> BTreeSet<&'static str> {
     fn add_carrier(kind: &'static str, required: &mut BTreeSet<&'static str>) {
-        required.insert("caret.math.content-flow.v2");
+        required.insert(Document::MATH_FEATURE_CONTENT_FLOW_V2);
         match kind {
             "inlineMath" => {
-                required.insert("caret.math.inline");
+                required.insert(Document::MATH_FEATURE_INLINE);
             }
             "equation" => {
-                required.insert("caret.math.equation");
+                required.insert(Document::MATH_FEATURE_EQUATION);
             }
             "align" => {
-                required.insert("caret.math.align");
+                required.insert(Document::MATH_FEATURE_ALIGN);
             }
             _ => {}
         }
     }
 
     fn collect_tree_syntax(tree: &Value, required: &mut BTreeSet<&'static str>) {
-        fn parse_attributes(
-            value: Option<&Value>,
-        ) -> Option<std::collections::BTreeMap<String, String>> {
-            let Some(value) = value else {
-                return Some(std::collections::BTreeMap::new());
-            };
-            let object = value.as_object()?;
-            object
-                .iter()
-                .map(|(key, value)| Some((key.clone(), value.as_str()?.to_owned())))
-                .collect()
-        }
-
-        fn child_kinds(children: &[Value]) -> Vec<MathNodeKind> {
-            children
-                .iter()
-                .map(|flow| {
-                    let first_math =
-                        flow.get("content")
-                            .and_then(Value::as_array)
-                            .and_then(|content| {
-                                content.iter().find(|item| {
-                                    item.get("type").and_then(Value::as_str) == Some("math")
-                                })
-                            });
-                    match first_math
-                        .and_then(|item| item.get("kind"))
-                        .and_then(Value::as_str)
-                        .and_then(|name| {
-                            serde_json::from_value::<MathNodeKind>(Value::String(name.to_owned()))
-                                .ok()
-                        }) {
-                        Some(
-                            special @ (MathNodeKind::Placeholder
-                            | MathNodeKind::Hline
-                            | MathNodeKind::Intertext),
-                        ) => special,
-                        _ => MathNodeKind::Row,
-                    }
-                })
-                .collect()
-        }
-
         fn visit_content(
             content: &Value,
             parent: Option<MathNodeKind>,
@@ -90,43 +45,21 @@ pub(super) fn validate_raw_math_feature_declarations(
             };
             match object.get("type").and_then(Value::as_str) {
                 Some("math") => {
-                    let Some(kind_name) = object.get("kind").and_then(Value::as_str) else {
+                    // 与类型解码器共用同一节点判定；解码器不能解释的节点不产生语法要求。
+                    let Some(kind) = MathNodeKind::supported_from_storage(object, parent) else {
                         return;
                     };
-                    let Ok(kind) =
-                        serde_json::from_value::<MathNodeKind>(Value::String(kind_name.to_owned()))
-                    else {
-                        return;
-                    };
-                    let Some(attributes) = parse_attributes(object.get("attributes")) else {
-                        return;
-                    };
-                    let text = match object.get("text") {
-                        None | Some(Value::Null) => None,
-                        Some(Value::String(text)) => Some(text.as_str()),
-                        _ => return,
-                    };
-                    let children = match object.get("children") {
-                        None => &[][..],
-                        Some(Value::Array(children)) => children.as_slice(),
-                        _ => return,
-                    };
-                    if !crate::model::math_node_attributes_supported(kind, text, &attributes)
-                        || !crate::model::math_node_structure_supported(
-                            parent,
-                            kind,
-                            text,
-                            &child_kinds(children),
-                        )
-                    {
-                        return;
-                    }
-                    let has_attributes = !attributes.is_empty();
+                    let has_attributes = object
+                        .get("attributes")
+                        .and_then(Value::as_object)
+                        .is_some_and(|attributes| !attributes.is_empty());
                     if crate::model::math_node_requires_syntax(kind, has_attributes) {
-                        required.insert("caret.math.syntax.v1");
+                        required.insert(Document::MATH_FEATURE_SYNTAX_V1);
                     }
-                    for child in children {
-                        visit_flow(child, Some(kind), required);
+                    if let Some(children) = object.get("children").and_then(Value::as_array) {
+                        for child in children {
+                            visit_flow(child, Some(kind), required);
+                        }
                     }
                 }
                 Some("environment")
@@ -156,7 +89,7 @@ pub(super) fn validate_raw_math_feature_declarations(
             }
         }
 
-        if has_current_tree(tree)
+        if MathTree::storage_schema_is_current(tree)
             && let Some(root) = tree.get("root")
         {
             visit_flow(root, None, required);
@@ -172,7 +105,11 @@ pub(super) fn validate_raw_math_feature_declarations(
                 continue;
             };
             match object.get("type").and_then(Value::as_str) {
-                Some("inlineMath") if object.get("mathTree").is_some_and(has_current_tree) => {
+                Some("inlineMath")
+                    if object
+                        .get("mathTree")
+                        .is_some_and(MathTree::storage_schema_is_current) =>
+                {
                     add_carrier("inlineMath", required);
                     if let Some(tree) = object.get("mathTree") {
                         collect_tree_syntax(tree, required);
@@ -198,7 +135,11 @@ pub(super) fn validate_raw_math_feature_declarations(
             return;
         };
         match object.get("type").and_then(Value::as_str) {
-            Some("inlineMath") if object.get("mathTree").is_some_and(has_current_tree) => {
+            Some("inlineMath")
+                if object
+                    .get("mathTree")
+                    .is_some_and(MathTree::storage_schema_is_current) =>
+            {
                 add_carrier("inlineMath", required);
                 if let Some(tree) = object.get("mathTree") {
                     collect_tree_syntax(tree, required);
@@ -224,7 +165,11 @@ pub(super) fn validate_raw_math_feature_declarations(
         };
         match object.get("type").and_then(Value::as_str) {
             Some("paragraph") => visit_paragraph(block, required),
-            Some("equation") if object.get("mathTree").is_some_and(has_current_tree) => {
+            Some("equation")
+                if object
+                    .get("mathTree")
+                    .is_some_and(MathTree::storage_schema_is_current) =>
+            {
                 add_carrier("equation", required);
                 if let Some(tree) = object.get("mathTree") {
                     collect_tree_syntax(tree, required);
@@ -239,7 +184,9 @@ pub(super) fn validate_raw_math_feature_declarations(
                             rows.iter().any(|row| {
                                 row.get("cells")
                                     .and_then(Value::as_array)
-                                    .is_some_and(|cells| cells.iter().any(has_current_tree))
+                                    .is_some_and(|cells| {
+                                        cells.iter().any(MathTree::storage_schema_is_current)
+                                    })
                             })
                         });
                 if has_current_cell {
@@ -249,7 +196,7 @@ pub(super) fn validate_raw_math_feature_declarations(
                             .iter()
                             .filter_map(|row| row.get("cells").and_then(Value::as_array))
                             .flatten()
-                            .filter(|cell| has_current_tree(cell))
+                            .filter(|cell| MathTree::storage_schema_is_current(cell))
                         {
                             collect_tree_syntax(cell, required);
                         }
@@ -286,12 +233,18 @@ pub(super) fn validate_raw_math_feature_declarations(
             visit_block(block, &mut required);
         }
     }
+    required
+}
+
+/// 即使未知子节点使类型解码器将载体保留为不透明数据，也要从 envelope 校验当前数学 schema 的能力声明。
+pub(super) fn validate_raw_math_feature_declarations(
+    raw: &Value,
+    declared: &[String],
+) -> Result<(), DocumentError> {
     let declared = declared.iter().map(String::as_str).collect::<HashSet<_>>();
-    for feature in required {
-        if !declared.contains(feature) {
-            return Err(DocumentError::InvalidDocument(format!(
-                "required math capability is missing: {feature}"
-            )));
+    for feature in raw_math_capabilities(raw) {
+        if Document::requires_explicit_math_declaration(feature) && !declared.contains(feature) {
+            return Err(missing_math_capability(feature));
         }
     }
     Ok(())

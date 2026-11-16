@@ -1695,3 +1695,222 @@ fn writing_rejects_incompatible_envelopes_and_preserves_the_document()
     assert_eq!(original.to_bytes()?, original_bytes);
     Ok(())
 }
+
+#[test]
+fn raw_and_typed_math_capability_derivation_agree() -> Result<(), Box<dyn std::error::Error>> {
+    let mut envelope = blank_envelope()?;
+    envelope["document"]["body"] = json!([
+        {
+            "type": "paragraph", "id": "paragraph", "inlines": [{
+                "type": "inlineMath", "id": "inline",
+                "mathTree": {"schemaVersion": 3, "root": {"id": "inline-root", "content": [{
+                    "type": "math", "id": "fraction", "kind": "fraction",
+                    "attributes": {"style": "frac"},
+                    "children": [
+                        {"id": "numerator", "content": [{"type": "text", "runs": [{"text": "x"}]}]},
+                        {"id": "denominator", "content": []}
+                    ]
+                }]}}
+            }]
+        },
+        {
+            "type": "equation", "id": "equation",
+            "mathTree": {"schemaVersion": 3, "root": {"id": "equation-root", "content": [
+                {"type": "math", "id": "symbol", "kind": "symbol", "text": "y"},
+                {"type": "text", "runs": [{"text": "plain"}]},
+                {"type": "softBreak"},
+                {"type": "environment", "scope": "inline", "id": "environment", "kind": "bold",
+                 "children": [{
+                    "type": "math", "id": "delimiter", "kind": "sized_delimiter",
+                    "text": "char:(", "attributes": {"size": "big", "atomClass": "open"}
+                 }]}
+            ]}}
+        },
+        {
+            "type": "align", "id": "align", "rows": [{
+                "id": "row", "cells": [
+                    {"schemaVersion": 3, "root": {"id": "cell-1", "content": [{
+                        "type": "math", "id": "matrix", "kind": "matrix",
+                        "attributes": {"style": "matrix", "columns": "c"},
+                        "children": [{"id": "matrix-row", "content": [{
+                            "type": "math", "id": "matrix-symbol", "kind": "symbol", "text": "z"
+                        }]}]
+                    }]}},
+                    {"schemaVersion": 3, "root": {"id": "cell-2", "content": []}}
+                ]
+            }]
+        }
+    ]);
+    envelope["requiredFeatures"] = json!([
+        "caret.env.bold",
+        "caret.math.align",
+        "caret.math.content-flow.v2",
+        "caret.math.equation",
+        "caret.math.inline",
+        "caret.math.syntax.v1",
+        "caret.paragraph.content-flow.v1",
+        "caret.paragraph.layout-settings",
+        "caret.text.default-font-size"
+    ]);
+
+    let raw: Vec<&str> = super::math_capabilities::raw_math_capabilities(&envelope)
+        .into_iter()
+        .collect();
+    let OpenedDocument::Editable(file) = open(envelope.to_string().as_bytes())? else {
+        return Err("fully typed math carriers should open as editable".into());
+    };
+    let typed: Vec<&str> = file
+        .required_features()
+        .iter()
+        .filter(|feature| feature.starts_with("caret.math."))
+        .map(String::as_str)
+        .collect();
+    assert_eq!(raw, typed, "raw 与类型推导必须推出同一组数学能力");
+    assert_eq!(
+        raw,
+        [
+            "caret.math.align",
+            "caret.math.content-flow.v2",
+            "caret.math.equation",
+            "caret.math.inline",
+            "caret.math.syntax.v1",
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn raw_scan_and_decoder_share_math_node_support_determination()
+-> Result<(), Box<dyn std::error::Error>> {
+    let shapes = [
+        (
+            json!({"type": "math", "id": "node", "kind": "symbol", "text": "x"}),
+            true,
+        ),
+        (
+            json!({"type": "math", "id": "node", "kind": "future_kind"}),
+            false,
+        ),
+        (
+            json!({
+                "type": "math", "id": "node", "kind": "symbol", "text": "x",
+                "attributes": {"atomClass": "future"}
+            }),
+            false,
+        ),
+        // 操作数内容不是对象：类型解码器无法解释，raw 扫描也必须当作不透明数据。
+        (
+            json!({
+                "type": "math", "id": "node", "kind": "row",
+                "children": [{"id": "operand", "content": [42]}]
+            }),
+            false,
+        ),
+        // 操作数内容项缺少 type：同一判定必须给出同一边界。
+        (
+            json!({
+                "type": "math", "id": "node", "kind": "row",
+                "children": [{"id": "operand", "content": [{"kind": "row"}]}]
+            }),
+            false,
+        ),
+    ];
+    for (shape, expected_supported) in shapes {
+        let object = shape
+            .as_object()
+            .ok_or("math node shape must be an object")?;
+        let supported = crate::MathNodeKind::supported_from_storage(object, None).is_some();
+        assert_eq!(supported, expected_supported, "unexpected support: {shape}");
+
+        // 已退役字段只在当前解码器能解释的节点上拒绝；其余保持不透明数据。
+        let mut retired = shape.clone();
+        retired
+            .as_object_mut()
+            .ok_or("math node shape must be an object")?
+            .insert("sourceRange".to_owned(), json!({"start": 0, "end": 1}));
+        let mut envelope = blank_envelope()?;
+        envelope["document"]["body"] = json!([{
+            "type": "equation", "id": "equation",
+            "mathTree": {"schemaVersion": 3, "root": {"id": "root", "content": [retired]}}
+        }]);
+        envelope["requiredFeatures"] = json!([
+            "caret.math.content-flow.v2",
+            "caret.math.equation",
+            "caret.paragraph.content-flow.v1",
+            "caret.paragraph.layout-settings",
+            "caret.text.default-font-size"
+        ]);
+        let bytes = envelope.to_string();
+        if expected_supported {
+            assert!(
+                matches!(
+                    open(bytes.as_bytes()),
+                    Err(DocumentError::InvalidDocument(reason))
+                        if reason.contains("MathNode.sourceRange")
+                ),
+                "可解释节点上的已退役字段必须被拒绝: {shape}"
+            );
+        } else {
+            let OpenedDocument::SafePreview(preview) = open(bytes.as_bytes())? else {
+                return Err(format!("不可解释节点必须保持为安全预览: {shape}").into());
+            };
+            assert!(
+                preview
+                    .reasons
+                    .contains(&PreviewReason::UnsupportedNodeKind)
+            );
+            let preserved = preview.to_json_value()?;
+            assert!(
+                preserved["document"]["body"][0]["mathTree"]["root"]["content"][0]["sourceRange"]
+                    .is_object()
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn raw_capability_scan_uses_the_shared_node_support_boundary()
+-> Result<(), Box<dyn std::error::Error>> {
+    // 解码器无法解释的节点不产生语法能力要求；可解释的兄弟节点仍然产生。
+    let mut envelope = blank_envelope()?;
+    envelope["document"]["body"] = json!([{
+        "type": "equation", "id": "equation",
+        "mathTree": {"schemaVersion": 3, "root": {"id": "root", "content": [
+            {"type": "math", "id": "future", "kind": "future_kind"},
+            {"type": "math", "id": "fraction", "kind": "fraction",
+             "attributes": {"style": "frac"},
+             "children": [{"id": "a", "content": []}, {"id": "b", "content": []}]}
+        ]}}
+    }]);
+    let raw: Vec<&str> = super::math_capabilities::raw_math_capabilities(&envelope)
+        .into_iter()
+        .collect();
+    assert_eq!(
+        raw,
+        [
+            "caret.math.content-flow.v2",
+            "caret.math.equation",
+            "caret.math.syntax.v1",
+        ]
+    );
+
+    // 操作数无法被解码器分类时，父节点整体视为不可解释，不再声明其语法能力。
+    let mut envelope = blank_envelope()?;
+    envelope["document"]["body"] = json!([{
+        "type": "equation", "id": "equation",
+        "mathTree": {"schemaVersion": 3, "root": {"id": "root", "content": [{
+            "type": "math", "id": "fraction", "kind": "fraction",
+            "attributes": {"style": "frac"},
+            "children": [
+                {"id": "a", "content": [{"type": "math", "id": "future", "kind": "future_kind"}]},
+                {"id": "b", "content": []}
+            ]
+        }]}}
+    }]);
+    let raw: Vec<&str> = super::math_capabilities::raw_math_capabilities(&envelope)
+        .into_iter()
+        .collect();
+    assert_eq!(raw, ["caret.math.content-flow.v2", "caret.math.equation"]);
+    Ok(())
+}

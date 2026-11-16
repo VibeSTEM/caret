@@ -13,7 +13,7 @@ pub(crate) fn block_from_value(value: Value) -> Result<Block, ModelError> {
         ));
     };
     match object.get("type").and_then(Value::as_str) {
-        Some("equation") if supported_tree(object.get("mathTree")) => {
+        Some("equation") if supported_math_tree(object.get("mathTree")) => {
             serde_json::from_value(without_fields(value, &["type"])?)
                 .map(Block::Equation)
                 .map_err(|error| ModelError::InvalidDocument(error.to_string()))
@@ -49,7 +49,7 @@ pub(crate) fn paragraph_content_from_value(value: Value) -> Result<ParagraphCont
         ));
     };
     match object.get("type").and_then(Value::as_str) {
-        Some("inlineMath") if supported_tree(object.get("mathTree")) => {
+        Some("inlineMath") if supported_math_tree(object.get("mathTree")) => {
             serde_json::from_value(without_fields(value, &["type"])?)
                 .map(ParagraphContent::Math)
                 .map_err(|error| ModelError::InvalidDocument(error.to_string()))
@@ -127,12 +127,12 @@ fn parse_text_flow(value: Value) -> Result<TextFlow, ModelError> {
     })
 }
 
-fn supported_tree(value: Option<&Value>) -> bool {
-    let Some(tree) = value.and_then(Value::as_object) else {
+/// 判定原始 JSON 是否声明当前数学树 schema，且根流属于当前解码器可解释的形态。
+fn supported_math_tree(value: Option<&Value>) -> bool {
+    let Some(tree) = value else {
         return false;
     };
-    tree.get("schemaVersion").and_then(Value::as_u64)
-        == Some(super::MATH_TREE_SCHEMA_VERSION as u64)
+    super::MathTree::storage_schema_is_current(tree)
         && tree
             .get("root")
             .is_some_and(|root| supported_math_flow(root, None))
@@ -208,58 +208,59 @@ fn supported_align(object: &Map<String, Value>) -> bool {
         row.as_object()
             .and_then(|row| row.get("cells"))
             .and_then(Value::as_array)
-            .is_some_and(|cells| cells.iter().all(|cell| supported_tree(Some(cell))))
+            .is_some_and(|cells| cells.iter().all(|cell| supported_math_tree(Some(cell))))
     })
+}
+
+impl super::MathTree {
+    /// 判定原始 JSON 的数学树 schema 版本是否与当前解码器一致。
+    pub(crate) fn storage_schema_is_current(tree: &Value) -> bool {
+        tree.get("schemaVersion").and_then(Value::as_u64)
+            == Some(super::MATH_TREE_SCHEMA_VERSION as u64)
+    }
+}
+
+impl super::MathNodeKind {
+    /// 判定单个原始数学节点自身是否为当前解码器可解释的形态。
+    ///
+    /// 返回值是该节点的类别；`None` 表示只能按不透明数据处理。raw 扫描与类型解码器
+    /// 共用此判定，避免对同一份 JSON 给出不同的支持结论。操作数由调用方递归检查。
+    pub(crate) fn supported_from_storage(
+        object: &Map<String, Value>,
+        parent: Option<Self>,
+    ) -> Option<Self> {
+        let kind_name = object.get("kind").and_then(Value::as_str)?;
+        let kind: Self = serde_json::from_value(Value::String(kind_name.to_owned())).ok()?;
+        let mut attributes = BTreeMap::new();
+        if let Some(values) = object.get("attributes") {
+            let values = values.as_object()?;
+            for (key, value) in values {
+                attributes.insert(key.clone(), value.as_str()?.to_owned());
+            }
+        }
+        let child_flows = match object.get("children") {
+            None => Vec::new(),
+            Some(Value::Array(children)) => children
+                .iter()
+                .map(math_flow_primary_kind)
+                .collect::<Option<Vec<_>>>()?,
+            Some(_) => return None,
+        };
+        let text = object.get("text").and_then(Value::as_str);
+        (math_node_attributes_supported(kind, text, &attributes)
+            && math_node_structure_supported(parent, kind, text, &child_flows))
+        .then_some(kind)
+    }
 }
 
 fn supported_math_node(value: &Value, parent: Option<super::MathNodeKind>) -> bool {
     let Some(node) = value.as_object() else {
         return false;
     };
-    let Some(kind_name) = node.get("kind").and_then(Value::as_str) else {
+    let Some(kind) = super::MathNodeKind::supported_from_storage(node, parent) else {
         return false;
     };
-    let Ok(kind) =
-        serde_json::from_value::<super::MathNodeKind>(Value::String(kind_name.to_owned()))
-    else {
-        return false;
-    };
-    let mut attributes = BTreeMap::new();
-    if let Some(values) = node.get("attributes") {
-        let Some(values) = values.as_object() else {
-            return false;
-        };
-        for (key, value) in values {
-            let Some(value) = value.as_str() else {
-                return false;
-            };
-            attributes.insert(key.clone(), value.to_owned());
-        }
-    }
-    let child_flows = match node.get("children") {
-        None => Vec::new(),
-        Some(Value::Array(children)) => {
-            let Some(children) = children
-                .iter()
-                .map(math_flow_primary_kind)
-                .collect::<Option<Vec<_>>>()
-            else {
-                return false;
-            };
-            children
-        }
-        Some(_) => return false,
-    };
-    super::math::math_node_attributes_supported(
-        kind,
-        node.get("text").and_then(Value::as_str),
-        &attributes,
-    ) && super::math::math_node_structure_supported(
-        parent,
-        kind,
-        node.get("text").and_then(Value::as_str),
-        &child_flows,
-    ) && node.get("children").is_none_or(|children| {
+    node.get("children").is_none_or(|children| {
         children.as_array().is_some_and(|children| {
             children
                 .iter()

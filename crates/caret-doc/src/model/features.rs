@@ -7,6 +7,28 @@ use super::*;
 use std::collections::BTreeSet;
 
 impl Document {
+    // `requiredFeatures` 的数学能力标识只在 `Document` 上登记一份；类型推导、raw
+    // 声明扫描与已知能力清单都引用这里，避免同一字面量在两条路径各写一遍。
+    pub(crate) const MATH_FEATURE_ALIGN: &'static str = "caret.math.align";
+    pub(crate) const MATH_FEATURE_CONTENT_FLOW_V2: &'static str = "caret.math.content-flow.v2";
+    pub(crate) const MATH_FEATURE_EQUATION: &'static str = "caret.math.equation";
+    pub(crate) const MATH_FEATURE_INLINE: &'static str = "caret.math.inline";
+    pub(crate) const MATH_FEATURE_SYNTAX_V1: &'static str = "caret.math.syntax.v1";
+
+    /// 读取器要求在 `requiredFeatures` 中显式声明、否则按格式错误拒绝的数学能力。
+    const REQUIRED_EXPLICIT_MATH_FEATURES: &'static [&'static str] = &[
+        Self::MATH_FEATURE_ALIGN,
+        Self::MATH_FEATURE_CONTENT_FLOW_V2,
+        Self::MATH_FEATURE_EQUATION,
+        Self::MATH_FEATURE_INLINE,
+        Self::MATH_FEATURE_SYNTAX_V1,
+    ];
+
+    /// 判定数学能力是否必须由 envelope 显式声明。
+    pub(crate) fn requires_explicit_math_declaration(feature: &str) -> bool {
+        Self::REQUIRED_EXPLICIT_MATH_FEATURES.contains(&feature)
+    }
+
     pub fn required_features(&self) -> Vec<String> {
         let mut features = BTreeSet::new();
         features.insert("caret.paragraph.layout-settings".to_owned());
@@ -261,30 +283,34 @@ impl FeatureVisitor for FeatureCollector<'_> {
     }
 
     fn visit_inline_math(&mut self, _math: &InlineMath) -> bool {
-        self.features.insert("caret.math.inline".to_owned());
         self.features
-            .insert("caret.math.content-flow.v2".to_owned());
+            .insert(Document::MATH_FEATURE_INLINE.to_owned());
+        self.features
+            .insert(Document::MATH_FEATURE_CONTENT_FLOW_V2.to_owned());
         false
     }
 
     fn visit_math_node(&mut self, node: &MathNode) -> bool {
         if math_node_requires_syntax(node.kind, !node.attributes.is_empty()) {
-            self.features.insert("caret.math.syntax.v1".to_owned());
+            self.features
+                .insert(Document::MATH_FEATURE_SYNTAX_V1.to_owned());
         }
         false
     }
 
     fn visit_equation(&mut self, _equation: &Equation) -> bool {
-        self.features.insert("caret.math.equation".to_owned());
         self.features
-            .insert("caret.math.content-flow.v2".to_owned());
+            .insert(Document::MATH_FEATURE_EQUATION.to_owned());
+        self.features
+            .insert(Document::MATH_FEATURE_CONTENT_FLOW_V2.to_owned());
         false
     }
 
     fn visit_align(&mut self, _align: &Align) -> bool {
-        self.features.insert("caret.math.align".to_owned());
         self.features
-            .insert("caret.math.content-flow.v2".to_owned());
+            .insert(Document::MATH_FEATURE_ALIGN.to_owned());
+        self.features
+            .insert(Document::MATH_FEATURE_CONTENT_FLOW_V2.to_owned());
         false
     }
 }
