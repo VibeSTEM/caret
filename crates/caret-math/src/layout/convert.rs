@@ -16,7 +16,10 @@ use super::radical::layout_radical;
 use super::run::layout_row;
 use super::scripts::{Attachments, layout_attachments};
 use super::table::{Align, TableRow, TableSpec, layout_table};
-use super::text::{MathTextContainer, MathTextRequest, MathTextRun, MathTextRunStyle};
+use super::text::{
+    MathTextContainer, MathTextRequest, MathTextRun, MathTextRunBox, MathTextRunStyle,
+    MathTextShape,
+};
 use crate::backend::BackendNodeKind as K;
 use crate::backend::{Node as MathNode, NodePosition};
 use crate::fonts::Axis;
@@ -41,6 +44,117 @@ pub(crate) struct Converter<'a> {
     pub requested_text_family_missing: bool,
     pub(crate) text_tokens: std::collections::HashSet<u64>,
     pub math_text_style: MathTextRunStyle,
+}
+
+/// 一次文本岛的累积状态与上下文。
+///
+/// 文本 run、container 区间和字节偏移在同一个请求内连续累积；遇到数学节点或流式
+/// `Row` 时中途落盘。内联样式作用域会替换继承样式与 container 栈，收集完子树后
+/// 恢复，因此递归不再需要额外的上下文参数。
+struct TextSequenceCollector {
+    /// 本次收集固定的排版样式。
+    style: Style,
+    /// 当前作用域继承到文本 run 的行内样式。
+    inherited: MathTextRunStyle,
+    /// 当前作用域的 container 栈，外层在前。
+    active_containers: Vec<MathTextContainer>,
+    /// 正在累积的排版请求。
+    request: MathTextRequest,
+    /// 当前请求内已累积的 UTF-8 字节偏移。
+    byte_offset: usize,
+    /// 文本整形错误；置位后停止收集，由调用方统一上报。
+    stream_error: Option<super::MathTextShapeError>,
+}
+
+impl TextSequenceCollector {
+    /// 按初始样式建立收集器；请求随收集器一起累积。
+    fn new(
+        converter: &Converter<'_>,
+        style: Style,
+        inherited: MathTextRunStyle,
+        active_containers: &[MathTextContainer],
+    ) -> Self {
+        Self {
+            style,
+            inherited,
+            active_containers: active_containers.to_vec(),
+            request: Self::empty_request(converter, style),
+            byte_offset: 0,
+            stream_error: None,
+        }
+    }
+
+    /// 按当前样式与颜色构造空请求。
+    fn empty_request(converter: &Converter<'_>, style: Style) -> MathTextRequest {
+        MathTextRequest {
+            font_size_pt: converter.ctx.font_size(style),
+            color: style.color,
+            runs: Vec::new(),
+            containers: Vec::new(),
+        }
+    }
+
+    /// 落盘当前请求并重置字节偏移。
+    fn flush(&mut self, converter: &mut Converter<'_>, out: &mut Vec<Fragment>) {
+        let empty = Self::empty_request(converter, self.style);
+        let request = std::mem::replace(&mut self.request, empty);
+        converter.flush_text_request(request, self.style, out);
+        self.byte_offset = 0;
+    }
+}
+
+/// 查找已登记的同一 container（按作用域与路径判定），返回其下标。
+fn find_container(
+    containers: &[MathTextContainer],
+    container: &MathTextContainer,
+) -> Option<usize> {
+    containers.iter().position(|existing| {
+        existing.scope_id == container.scope_id && existing.path == container.path
+    })
+}
+
+/// 以统一字段追加 container 区间；区间端点由调用方按语义给出。
+fn push_container(
+    containers: &mut Vec<MathTextContainer>,
+    container: &MathTextContainer,
+    start: usize,
+    end: usize,
+) {
+    containers.push(MathTextContainer {
+        start_byte: start,
+        end_byte: end,
+        ..container.clone()
+    });
+}
+
+/// 登记新进入的 container：未登记者以 `offset` 为起点建零长区间，已登记者保持不变。
+fn open_container_ranges(
+    containers: &mut Vec<MathTextContainer>,
+    opened: &[MathTextContainer],
+    offset: usize,
+) {
+    for container in opened {
+        if find_container(containers, container).is_none() {
+            push_container(containers, container, offset, offset);
+        }
+    }
+}
+
+/// 把文本片段的结束偏移写入所有生效 container 的区间；未登记者以片段起点补登记。
+fn extend_container_ranges(
+    containers: &mut Vec<MathTextContainer>,
+    active: &[MathTextContainer],
+    start: usize,
+    end: usize,
+) {
+    for container in active {
+        // 下标来自同一列表的查找，必然有效；直接索引避免额外分支。
+        if let Some(index) = find_container(containers, container) {
+            containers[index].end_byte = end;
+        } else {
+            push_container(containers, container, start, end);
+        }
+    }
 }
 
 impl Converter<'_> {
@@ -122,88 +236,41 @@ impl Converter<'_> {
         active_containers: &[MathTextContainer],
         out: &mut Vec<Fragment>,
     ) {
-        let mut request = MathTextRequest {
-            font_size_pt: self.ctx.font_size(style),
-            color: style.color,
-            runs: Vec::new(),
-            containers: Vec::new(),
-        };
-        let mut byte_offset = 0;
-        let mut stream_error = None;
-        self.collect_text_sequence_into(
-            children,
-            style,
-            &inherited,
-            active_containers,
-            &mut request,
-            &mut byte_offset,
-            out,
-            &mut stream_error,
-        );
-        self.flush_text_request(request, style, out);
-        if let Some(error) = stream_error {
+        let mut collector = TextSequenceCollector::new(self, style, inherited, active_containers);
+        self.collect_text_sequence_into(children, &mut collector, out);
+        collector.flush(self, out);
+        if let Some(error) = collector.stream_error {
             self.text_shaping_error = Some(error);
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// 收集文本岛内的子节点；非文本节点在当前请求边界落盘后直接排版。
     fn collect_text_sequence_into(
         &mut self,
         children: &[MathNode],
-        style: Style,
-        inherited: &MathTextRunStyle,
-        active_containers: &[MathTextContainer],
-        request: &mut MathTextRequest,
-        byte_offset: &mut usize,
+        collector: &mut TextSequenceCollector,
         out: &mut Vec<Fragment>,
-        stream_error: &mut Option<super::MathTextShapeError>,
     ) {
         for child in children {
-            if stream_error.is_some() {
+            if collector.stream_error.is_some() {
                 return;
             }
             match child.kind {
                 K::Text if Self::attribute(child, "style") != "text" => {
-                    self.flush_text_request(
-                        std::mem::replace(
-                            request,
-                            MathTextRequest {
-                                font_size_pt: self.ctx.font_size(style),
-                                color: style.color,
-                                runs: Vec::new(),
-                                containers: Vec::new(),
-                            },
-                        ),
-                        style,
-                        out,
-                    );
-                    *byte_offset = 0;
+                    collector.flush(self, out);
                     let math_style = Style {
                         text_mode: false,
-                        ..style
+                        ..collector.style
                     };
                     out.push(self.node(child, math_style));
                 }
                 K::TextContent | K::TextSymbol | K::TextSpace | K::SoftBreak | K::Opaque => {
                     let isolated = child.kind == K::Opaque;
                     if isolated {
-                        self.flush_text_request(
-                            std::mem::replace(
-                                request,
-                                MathTextRequest {
-                                    font_size_pt: self.ctx.font_size(style),
-                                    color: style.color,
-                                    runs: Vec::new(),
-                                    containers: Vec::new(),
-                                },
-                            ),
-                            style,
-                            out,
-                        );
-                        *byte_offset = 0;
+                        collector.flush(self, out);
                     }
                     let Some(position) = child.position.as_ref() else {
-                        *stream_error = Some(super::MathTextShapeError::UnsupportedInput);
+                        collector.stream_error = Some(super::MathTextShapeError::UnsupportedInput);
                         return;
                     };
                     let text = if child.kind == K::SoftBreak {
@@ -220,93 +287,61 @@ impl Converter<'_> {
                             .or_else(|| child.text.clone())
                             .unwrap_or_default()
                     };
-                    let Some(end) = byte_offset.checked_add(text.len()) else {
-                        *stream_error = Some(super::MathTextShapeError::UnsupportedInput);
+                    let Some(end) = collector.byte_offset.checked_add(text.len()) else {
+                        collector.stream_error = Some(super::MathTextShapeError::UnsupportedInput);
                         return;
                     };
-                    for container in active_containers {
-                        if let Some(existing) = request.containers.iter_mut().find(|existing| {
-                            existing.scope_id == container.scope_id
-                                && existing.path == container.path
-                        }) {
-                            existing.end_byte = end;
-                        } else {
-                            request.containers.push(MathTextContainer {
-                                start_byte: *byte_offset,
-                                end_byte: end,
-                                ..container.clone()
-                            });
-                        }
-                    }
-                    request.runs.push(MathTextRun {
+                    extend_container_ranges(
+                        &mut collector.request.containers,
+                        &collector.active_containers,
+                        collector.byte_offset,
+                        end,
+                    );
+                    collector.request.runs.push(MathTextRun {
                         run: child.run.clone(),
                         text,
                         scope_id: position.scope_id.clone(),
                         path: position.path.clone(),
                         run_index: position.text_run_index,
                         is_text_flow: position.is_text_flow,
-                        style: inherited.clone(),
+                        style: collector.inherited.clone(),
                     });
-                    *byte_offset = end;
+                    collector.byte_offset = end;
                     if isolated {
-                        self.flush_text_request(
-                            std::mem::replace(
-                                request,
-                                MathTextRequest {
-                                    font_size_pt: self.ctx.font_size(style),
-                                    color: style.color,
-                                    runs: Vec::new(),
-                                    containers: Vec::new(),
-                                },
-                            ),
-                            style,
-                            out,
-                        );
-                        *byte_offset = 0;
+                        collector.flush(self, out);
                     }
                 }
                 K::Text | K::TextStyle => {
                     let Some(position) = child.position.as_ref() else {
-                        *stream_error = Some(super::MathTextShapeError::UnsupportedInput);
+                        collector.stream_error = Some(super::MathTextShapeError::UnsupportedInput);
                         return;
                     };
                     let container = MathTextContainer {
                         id: child.id.clone(),
                         scope_id: position.scope_id.clone(),
                         path: position.path.clone(),
-                        start_byte: *byte_offset,
-                        end_byte: *byte_offset,
+                        start_byte: collector.byte_offset,
+                        end_byte: collector.byte_offset,
                         is_flow: position.is_flow,
                         is_container: position.is_container,
                     };
-                    let mut nested_containers = active_containers.to_vec();
+                    let mut nested_containers = collector.active_containers.clone();
                     nested_containers.push(container);
-                    for container in &nested_containers {
-                        if !request.containers.iter().any(|existing| {
-                            existing.scope_id == container.scope_id
-                                && existing.path == container.path
-                        }) {
-                            request.containers.push(MathTextContainer {
-                                start_byte: *byte_offset,
-                                end_byte: *byte_offset,
-                                ..container.clone()
-                            });
-                        }
-                    }
-                    let mut nested_style = inherited.clone();
+                    open_container_ranges(
+                        &mut collector.request.containers,
+                        &nested_containers,
+                        collector.byte_offset,
+                    );
+                    let mut nested_style = collector.inherited.clone();
                     if let Some(environment_style) = child.text_style.as_ref() {
                         apply_inline_environment_style(&mut nested_style, environment_style);
                     }
-                    self.collect_text_sequence_into(
-                        &child.children,
-                        style,
-                        &nested_style,
-                        &nested_containers,
-                        request,
-                        byte_offset,
-                        out,
-                        stream_error,
-                    );
+                    let outer_style = std::mem::replace(&mut collector.inherited, nested_style);
+                    let outer_containers =
+                        std::mem::replace(&mut collector.active_containers, nested_containers);
+                    self.collect_text_sequence_into(&child.children, collector, out);
+                    collector.inherited = outer_style;
+                    collector.active_containers = outer_containers;
                 }
                 K::Row
                     if child
@@ -314,22 +349,9 @@ impl Converter<'_> {
                         .as_ref()
                         .is_some_and(|position| position.is_flow) =>
                 {
-                    self.flush_text_request(
-                        std::mem::replace(
-                            request,
-                            MathTextRequest {
-                                font_size_pt: self.ctx.font_size(style),
-                                color: style.color,
-                                runs: Vec::new(),
-                                containers: Vec::new(),
-                            },
-                        ),
-                        style,
-                        out,
-                    );
-                    *byte_offset = 0;
+                    collector.flush(self, out);
                     if child.children.is_empty() {
-                        out.push(self.node(child, style));
+                        out.push(self.node(child, collector.style));
                         continue;
                     }
                     let mut frame = Frame::new(0.0, 0.0, 0.0);
@@ -337,7 +359,7 @@ impl Converter<'_> {
                         Point::default(),
                         Item::Node {
                             id: child.id.clone(),
-                            position: self.styled_position(&child.position, style),
+                            position: self.styled_position(&child.position, collector.style),
                             width: 0.0,
                             height: 0.0,
                             baseline: 0.0,
@@ -347,71 +369,28 @@ impl Converter<'_> {
                     marker.position_marker = true;
                     out.push(marker);
                     let Some(_position) = child.position.as_ref() else {
-                        *stream_error = Some(super::MathTextShapeError::UnsupportedInput);
+                        collector.stream_error = Some(super::MathTextShapeError::UnsupportedInput);
                         return;
                     };
-                    let nested_containers = active_containers.to_vec();
-                    let mut nested_request = MathTextRequest {
-                        font_size_pt: self.ctx.font_size(style),
-                        color: style.color,
-                        runs: Vec::new(),
-                        containers: Vec::new(),
-                    };
-                    let mut nested_byte_offset = 0;
-                    self.collect_text_sequence_into(
-                        &child.children,
-                        style,
-                        inherited,
-                        &nested_containers,
-                        &mut nested_request,
-                        &mut nested_byte_offset,
-                        out,
-                        stream_error,
-                    );
-                    self.flush_text_request(nested_request, style, out);
+                    self.collect_text_sequence_into(&child.children, collector, out);
+                    collector.flush(self, out);
                 }
                 K::Hline | K::Intertext => {
-                    self.flush_text_request(
-                        std::mem::replace(
-                            request,
-                            MathTextRequest {
-                                font_size_pt: self.ctx.font_size(style),
-                                color: style.color,
-                                runs: Vec::new(),
-                                containers: Vec::new(),
-                            },
-                        ),
-                        style,
-                        out,
-                    );
-                    *byte_offset = 0;
+                    collector.flush(self, out);
                 }
                 _ => {
-                    self.flush_text_request(
-                        std::mem::replace(
-                            request,
-                            MathTextRequest {
-                                font_size_pt: self.ctx.font_size(style),
-                                color: style.color,
-                                runs: Vec::new(),
-                                containers: Vec::new(),
-                            },
-                        ),
-                        style,
-                        out,
-                    );
-                    *byte_offset = 0;
-                    let math_style = if style.text_mode {
+                    collector.flush(self, out);
+                    let math_style = if collector.style.text_mode {
                         Style {
                             text_mode: false,
                             variant: Variant::Normal,
-                            ..style
+                            ..collector.style
                         }
                     } else {
-                        style
+                        collector.style
                     };
                     let previous_text_style =
-                        std::mem::replace(&mut self.math_text_style, inherited.clone());
+                        std::mem::replace(&mut self.math_text_style, collector.inherited.clone());
                     let fragment = self.node(child, math_style);
                     self.math_text_style = previous_text_style;
                     out.push(fragment);
@@ -541,51 +520,7 @@ impl Converter<'_> {
                 return Fragment::new(Frame::new(0.0, 0.0, 0.0), AtomClass::Ord);
             }
         };
-        if !self.text_tokens.insert(shaped.token)
-            || !shaped.width.is_finite()
-            || shaped.width < 0.0
-            || !shaped.ascent.is_finite()
-            || shaped.ascent < 0.0
-            || !shaped.descent.is_finite()
-            || shaped.descent < 0.0
-            || shaped.runs.len() != request.runs.len()
-            || shaped.containers.len() != request.containers.len()
-            || shaped.runs.iter().zip(&request.runs).any(|(bounds, run)| {
-                bounds.id.is_some()
-                    || bounds.is_flow
-                    || bounds.is_container
-                    || bounds.scope_id != run.scope_id
-                    || bounds.path != run.path
-                    || bounds.run_index != run.run_index
-                    || bounds.is_text_flow != run.is_text_flow
-                    || !bounds.x.is_finite()
-                    || !bounds.y.is_finite()
-                    || !bounds.width.is_finite()
-                    || bounds.width < 0.0
-                    || !bounds.height.is_finite()
-                    || bounds.height < 0.0
-                    || !bounds.baseline.is_finite()
-            })
-            || shaped
-                .containers
-                .iter()
-                .zip(&request.containers)
-                .any(|(bounds, container)| {
-                    bounds.id.as_ref() != container.id.as_ref()
-                        || bounds.scope_id != container.scope_id
-                        || bounds.path != container.path
-                        || bounds.run_index.is_some()
-                        || bounds.is_flow != container.is_flow
-                        || bounds.is_container != container.is_container
-                        || !bounds.x.is_finite()
-                        || !bounds.y.is_finite()
-                        || !bounds.width.is_finite()
-                        || bounds.width < 0.0
-                        || !bounds.height.is_finite()
-                        || bounds.height < 0.0
-                        || !bounds.baseline.is_finite()
-                })
-        {
+        if !self.validate_text_shape(&shaped, &request) {
             self.text_shaping_error = Some(super::MathTextShapeError::InvalidMetrics);
             return Fragment::new(Frame::new(0.0, 0.0, 0.0), AtomClass::Ord);
         }
@@ -686,6 +621,70 @@ impl Converter<'_> {
             fragment.text_like = true;
         }
         fragment
+    }
+
+    /// 校验整形结果与请求是否一致；任何违规都统一映射为 `InvalidMetrics`。
+    ///
+    /// token 登记必须最先执行：即使后续字段校验失败，该 token 也已占用。
+    fn validate_text_shape(&mut self, shaped: &MathTextShape, request: &MathTextRequest) -> bool {
+        self.text_tokens.insert(shaped.token)
+            && Self::valid_text_metrics(shaped)
+            && Self::validate_runs(shaped, request)
+            && Self::validate_containers(shaped, request)
+    }
+
+    /// 文本岛整体几何：宽度与上/下行高必须有限且非负。
+    fn valid_text_metrics(shaped: &MathTextShape) -> bool {
+        shaped.width.is_finite()
+            && shaped.width >= 0.0
+            && shaped.ascent.is_finite()
+            && shaped.ascent >= 0.0
+            && shaped.descent.is_finite()
+            && shaped.descent >= 0.0
+    }
+
+    /// run 数量、逐项身份与几何必须与请求一致。
+    fn validate_runs(shaped: &MathTextShape, request: &MathTextRequest) -> bool {
+        shaped.runs.len() == request.runs.len()
+            && shaped.runs.iter().zip(&request.runs).all(|(bounds, run)| {
+                bounds.id.is_none()
+                    && !bounds.is_flow
+                    && !bounds.is_container
+                    && bounds.scope_id == run.scope_id
+                    && bounds.path == run.path
+                    && bounds.run_index == run.run_index
+                    && bounds.is_text_flow == run.is_text_flow
+                    && Self::valid_bounds_geometry(bounds)
+            })
+    }
+
+    /// container 数量、逐项身份与几何必须与请求一致。
+    fn validate_containers(shaped: &MathTextShape, request: &MathTextRequest) -> bool {
+        shaped.containers.len() == request.containers.len()
+            && shaped
+                .containers
+                .iter()
+                .zip(&request.containers)
+                .all(|(bounds, container)| {
+                    bounds.id.as_ref() == container.id.as_ref()
+                        && bounds.scope_id == container.scope_id
+                        && bounds.path == container.path
+                        && bounds.run_index.is_none()
+                        && bounds.is_flow == container.is_flow
+                        && bounds.is_container == container.is_container
+                        && Self::valid_bounds_geometry(bounds)
+                })
+    }
+
+    /// 边界几何：坐标、宽高与基线必须有限，宽高非负。
+    fn valid_bounds_geometry(bounds: &MathTextRunBox) -> bool {
+        bounds.x.is_finite()
+            && bounds.y.is_finite()
+            && bounds.width.is_finite()
+            && bounds.width >= 0.0
+            && bounds.height.is_finite()
+            && bounds.height >= 0.0
+            && bounds.baseline.is_finite()
     }
 
     fn child(&mut self, node: &MathNode, index: usize, style: Style) -> Fragment {
