@@ -117,17 +117,12 @@ QVariantMap LayoutViewModel::beginPreparedDocumentInstall(PreparedDocumentSource
                 ffi::install_prepared_document(*active_runtime, result.ticket);
             const QByteArray install_bytes =
                 layout_view_model_support::response_bytes(install_response);
-            if (restoring_recovery) {
-                // 恢复安装失败返回完整的服务端错误文本。
-                if (!install_bytes.isEmpty()) {
-                    emit documentFileOperationFinished(false, QString::fromUtf8(install_bytes));
-                    refresh_recovery_after_failure();
-                    return;
-                }
-            } else if (install_bytes.startsWith("error:")) {
-                // 打开命令只把 error: 前缀之后的部分作为错误文本。
-                emit documentFileOperationFinished(false,
-                                                   QString::fromUtf8(install_bytes.sliced(6)));
+            if (!install_bytes.isEmpty()) {
+                // Rust 使用 error: 标记失败响应；打开和恢复向 UI 暴露相同的错误文本。
+                const QByteArray error_bytes =
+                    install_bytes.startsWith("error:") ? install_bytes.sliced(6) : install_bytes;
+                emit documentFileOperationFinished(false, QString::fromUtf8(error_bytes));
+                refresh_recovery_after_failure();
                 return;
             }
             if (result.ticket_owner != nullptr) {

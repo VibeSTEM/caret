@@ -12,7 +12,7 @@ Brooks sweep 在 native 层已完成 canvas 内部 glyph frame 线格式单解�
 - `native/canvas/document_canvas/scene_graph.cpp` 在每次 scene 重建时仍整体 `parse` glyph frame（实现去重了，工作量未去重），并在缺纹理检查中残留一份 image 线格式判定（与 wire 规则当前一致但可漂移）；
 - 页面局部矩形（`pageIndex/x0Pt/y0Pt/x1Pt/y1Pt`）的校验在 codec、environment、selection 等处手写 4 份。
 
-完成后：Rust 协议只在一处定义并由 C++ 消费（字段名/状态枚举来自共享描述或生成），渲染期不重复解析已校验帧，矩形校验单点。
+完成后：Rust 协议只在一处定义并由 C++ 消费（字段名/状态枚举来自共享描述或生成），渲染期不重复解析已校验帧，矩形校验按各自信任边界复用规则且保留入口策略。打开与恢复的安装失败信号使用相同的错误前缀剥离规则。
 
 ## 必读
 
@@ -20,7 +20,7 @@ Brooks sweep 在 native 层已完成 canvas 内部 glyph frame 线格式单解�
 
 ## 范围与非目标
 
-范围内：协议词表单源（Rust 导出或共享生成）、scene_graph 复用已解析结果/收敛 image 判定、矩形校验 helper。非目标：改线格式（JSON 字段名/类型）与用户可见行为；不合并跨信任边界的 adapter/canvas 校验（分层要求保留）。
+范围内：协议词表单源（Rust 导出或共享生成）、scene_graph 复用已解析结果/收敛 image 判定、保留入口策略的矩形校验规则复用，以及打开/恢复安装失败时统一剥离内部 `error:` 前缀。非目标：改线格式（JSON 字段名/类型）、错误语义和文档状态行为；不合并跨信任边界的 adapter/canvas 校验（分层要求保留）。
 
 ## 前置条件与待决策
 
@@ -30,25 +30,28 @@ Brooks sweep 在 native 层已完成 canvas 内部 glyph frame 线格式单解�
 
 1. 列出 `layout_snapshot_codec.cpp` 复制的协议词表与 Rust 来源，逐项给出单源方案（导出/共享生成/映射）。
 2. 先做无行为变化的单源迁移；再收敛 scene_graph 的 image 判定与重复 parse（缓存到 PageGlyphNode，失效条件与刷新路径明确）。
-3. 矩形校验抽 `validate_page_rect` 一处，替换 4 处手写。
-4. native 验证：`cargo test --locked -p caret-tests --test native`（11/11）、clang-format/tidy、增量构建 0 新增告警；全量门禁 + 独立评审。
+3. 矩形校验逐入口列出输入类型、信任边界和几何策略；抽取不改变策略的纯校验规则，但保留 ViewModel/Canvas 各自的适配和边界检查。拖选预览允许超出页面的矩形时，不得复用会拒绝越界的严格规则。
+4. 打开与恢复安装失败统一剥离 Rust 响应的 `error:` 前缀，同时保留恢复失败后的恢复列表刷新；非空响应仍一律判为失败。补恢复条目准备成功、安装前会话过期的 Qt Test，断言错误文本无前缀、当前文档内容保留且恢复列表刷新。
+5. native 验证：`cargo test --locked -p caret-tests --test native`（11/11）、clang-format/tidy、增量构建 0 新增告警；全量门禁 + 独立评审。
 
 ## 预计改动
 
-`native/viewmodels/document/layout_snapshot_codec.cpp`、`native/canvas/document_canvas/scene_graph.cpp`、`native/canvas/document_canvas/glyph_frame_wire.*`、可能的共享常量头；不改 Rust 线格式。
+`native/viewmodels/document/layout_snapshot_codec.cpp`、`native/viewmodels/document/layout_view_model_file_commands.cpp`、`native/canvas/document_canvas/scene_graph.cpp`、`native/canvas/document_canvas/glyph_frame_wire.*`、`tests/cpp/shell/shell_document_recovery_test.cpp`、可能的共享常量头；不改 Rust 线格式。
 
 ## 验收标准
 
 - [ ] 协议词表不再手写双份，漂移有测试或生成保证。
 - [ ] scene_graph 不再在每次重建时整体重复 parse；image 线格式判定只有一处。
-- [ ] 矩形校验单点，4 处手写删除。
+- [ ] 矩形规则在信任边界内复用且入口策略一致；拖选预览越界与普通选区拒绝越界的既有差异由测试固定。
+- [x] 打开/恢复的安装错误都剥离 `error:`，恢复失败会刷新列表；过期会话恢复测试证明错误文本、文档保留与刷新行为。
 - [ ] native 11/11 与全量门禁通过；独立评审通过。
 
 ## 验证计划与结果
 
 | 日期 | 环境 / 命令 | 预期 | 实际结果 |
 | --- | --- | --- | --- |
-| — | `cargo test --locked -p caret-tests --test native` | 11/11 | 未执行 |
+| 2026-11-17 | `cargo test --locked -p caret-tests --test native` | 11/11 | 11/11 通过；含 `Qml.ShellLoad` 过期会话恢复、QML 格式和其余 native CTest |
+| 2026-11-17 | `cargo format --check` | 跨语言格式检查通过 | 首次检查发现本次两处 C++ 排版问题；运行 `cargo format` 后通过 |
 
 ## 风险与回退
 
@@ -57,6 +60,7 @@ Brooks sweep 在 native 层已完成 canvas 内部 glyph frame 线格式单解�
 ## 决策与工作记录
 
 - 2026-11-17：Brooks sweep 已完成 glyph frame canvas 内部单解析与异步流程共享；跨层协议与渲染期重复留本任务。
+- 2026-11-17：Issue #140 统一打开/恢复安装失败的 `error:` 前缀剥离；新增过期会话恢复行为断言，验证错误文本、当前文档保留和恢复列表刷新。其余协议单源、渲染缓存与矩形策略项仍待实施。
 
 ## 完成摘要
 

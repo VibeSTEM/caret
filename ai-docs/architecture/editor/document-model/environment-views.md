@@ -93,7 +93,7 @@ Bold、Italic、Font 用行内包装节点表达。它们拥有稳定文档 ID �
 
 ### `Run.props.underline`
 
-Underline 是 glyph 装饰直接属性，不拥有子树，也不参与主题环境模板或结构嵌套。适配器沿 Paragraph 行内文档顺序累计相邻文本位置；连续且值为 `true` 的 Run 片段可以投影为一个语义范围。language、其他 props 和未知字段边界不拆分语义范围，但底层 Run 仍分别保存。
+Underline 是 glyph 装饰直接属性，不拥有子树，也不参与主题环境模板或结构嵌套。适配器沿 Paragraph 行内文档顺序累计相邻文本位置；连续且值为 `true` 的 Run 片段可以投影为一个语义范围。language 与其他 props 边界不拆分语义范围，但底层 Run 仍分别保存。已知 Run 的未知字段按 [`.cdoc` 当前 schema](document-storage.md) 在解码时拒绝。
 
 `SoftBreak`、`InlineMath` 和 Opaque 节点截断可绘制的下划线几何；它们两侧的 underlined Run 不合并为跨对象高亮范围。跨越格式环境边界时继续按逻辑文本顺序累计，因此 Underline 可以与 Bold、Italic、Font 的范围相交。
 

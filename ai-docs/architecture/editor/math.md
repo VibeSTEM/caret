@@ -20,7 +20,7 @@
 
 MathTree 是 `.cdoc` 中数学内容的唯一权威。文档只保存结构、文本、格式与节点元数据，不保存 LaTeX source、节点 sourceRange 或 TextFlow sourceMap。MathTree 的 schema 版本和文档能力标记必须识别树唯一表示；不匹配的旧版本或遗留源码字段一律拒绝，不能迁移或放入 `extra`。LaTeX 导入由解析器生成 MathTree；导出转换器从树生成规范 TeX，不承诺保留原始空白、注释、命令拼写和定界符。数学树中的文本流导出为数学文本命令（如 `\text{...}`），其中 Run 属性和行内环境再转换为对应的 TeX 文本格式命令；段落中公式之外的普通文本导出为 TeX 正文，不包入 `\text`。这些 TeX 写法属于转换规则，不是 `.cdoc` 的第二表示。
 
-需要源码编辑时，从 MathTree 生成临时 TeX 草稿及节点/文本位置映射，并绑定到对应树版本；候选解析成功后按结构和临时位置对齐，保留可归属的稳定 ID、Run 属性和未知字段，再原子提交新树。解析失败时保留已提交树、草稿和公式焦点。失焦、保存或关闭时必须先提交草稿或由用户明确取消；提交失败则取消相应状态迁移，不静默丢弃草稿。撤销/重做优先作用于草稿编辑历史，因此可用撤销修复不完整 TeX；草稿本地历史耗尽后，只有有效草稿提交后才能继续访问文档历史，提交失败则保留草稿并拒绝跨入文档历史。只有合法树事务进入文档历史。若草稿绑定的树版本已过期，拒绝提交并保留草稿，不覆盖较新树；用户可显式放弃该草稿并离开，已提交树保持不变。以后若支持基于新版本重放草稿，重放冲突也必须保留原草稿供用户处理。TextFlow 模式直接改写目标文本流，不经过 TeX 往返。Tree 原生编辑按 `Mod+Backspace` 降级为源码文本时，空 MathFlow 与无额外元数据的空槽 Placeholder 视为相同空槽，光标映射到 `{}` 内部；未知元数据或真正不透明内容仍拒绝降级。导出遇到无法表达的外观、语义或未知字段时返回明确损失错误，不得静默降级。解析、树对齐或事务失败不得改写已提交公式、有效焦点或草稿。
+需要源码编辑时，从 MathTree 生成临时 TeX 草稿及节点/文本位置映射，并绑定到对应树版本；候选解析成功后按结构和临时位置对齐，保留可归属的稳定 ID 与 Run 属性，再原子提交新树。解析失败时保留已提交树、草稿和公式焦点。失焦、保存或关闭时必须先提交草稿或由用户明确取消；提交失败则取消相应状态迁移，不静默丢弃草稿。撤销/重做优先作用于草稿编辑历史，因此可用撤销修复不完整 TeX；草稿本地历史耗尽后，只有有效草稿提交后才能继续访问文档历史，提交失败则保留草稿并拒绝跨入文档历史。只有合法树事务进入文档历史。若草稿绑定的树版本已过期，拒绝提交并保留草稿，不覆盖较新树；用户可显式放弃该草稿并离开，已提交树保持不变。以后若支持基于新版本重放草稿，重放冲突也必须保留原草稿供用户处理。TextFlow 模式直接改写目标文本流，不经过 TeX 往返。Tree 原生编辑按 `Mod+Backspace` 降级为源码文本时，空 MathFlow 与无额外元数据的空槽 Placeholder 视为相同空槽，光标映射到 `{}` 内部；未知节点元数据或真正不透明内容仍拒绝降级。导出遇到无法表达的外观、语义或未知节点时返回明确损失错误，不得静默降级。解析、树对齐或事务失败不得改写已提交公式、有效焦点或草稿。
 
 源码编辑期间的临时映射将 MathTree 路径、显示 TextFlow UTF-8 区间与规范 TeX 草稿关联。转义符号与 TeX 语法会造成长度差异；映射只在该草稿和对应树版本有效，不写入 `.cdoc`。空文本流由零长度 TextFlow 表达，不需要源码映射字段。
 
@@ -39,7 +39,7 @@ Document.body: Vec<Block>
 └── Align { id, rows: Vec<MathAlignRow { cells: Vec<MathTree> }> }
 ```
 
-Caret 数学树保留 TeX 原子与符号顺序，不解析成代数关系或运算语义。`MathTree { schemaVersion, root, extra }` 的字段与验证由本页定义：`root` 是 `MathFlow`，`MathContent` 按源码顺序交替保存 `Math(MathNode)`、`Text(TextFlow)` 和行内格式环境。分数、根式、脚本等结构节点的每个语义槽位各持有一个有序 `MathFlow`；流内切分不得增加、删除或重排这些固定槽位。行内环境是 `InlineEnvironment<Child>` 包装节点，`ParagraphContent::Environment` 使用 `InlineEnvironment<ParagraphContent>`，`MathContent::Environment` 使用 `InlineEnvironment<MathContent>`；共享包装语义与树操作，子项类型由宿主流约束。MathTree 是唯一持久表示；LaTeX 规范文本由转换器按需生成。文档级能力登记和未知能力行为见[文档存储](document-model/document-storage.md)。早期临时字符串 `TextContent` 格式不属于受支持 schema，也不提供兼容或迁移路径。
+Caret 数学树保留 TeX 原子与符号顺序，不解析成代数关系或运算语义。`MathTree { schemaVersion, root }` 的字段与验证由本页定义：`root` 是 `MathFlow`，`MathContent` 按源码顺序交替保存 `Math(MathNode)`、`Text(TextFlow)` 和行内格式环境。分数、根式、脚本等结构节点的每个语义槽位各持有一个有序 `MathFlow`；流内切分不得增加、删除或重排这些固定槽位。行内环境是 `InlineEnvironment<Child>` 包装节点，`ParagraphContent::Environment` 使用 `InlineEnvironment<ParagraphContent>`，`MathContent::Environment` 使用 `InlineEnvironment<MathContent>`；共享包装语义与树操作，子项类型由宿主流约束。MathTree 是唯一持久表示；LaTeX 规范文本由转换器按需生成。文档级能力登记和未知能力行为见[文档存储](document-model/document-storage.md)。早期临时字符串 `TextContent` 格式不属于受支持 schema，也不提供兼容或迁移路径。
 
 ### 数学树限制
 
@@ -65,13 +65,13 @@ Caret 数学树保留 TeX 原子与符号顺序，不解析成代数关系或运
 
 数学结构槽位中的 `\text{...}` 是 MathFlow 的文本分支，与数学源码编辑分支平级；InlineMath 根层的 `\text{...}` 按本页宿主规则提升为 Paragraph TextFlow。Paragraph 行内流使用 `Vec<ParagraphContent>`，包含 `Text(TextFlow)`、`Math(InlineMath)` 和 `Environment(InlineEnvironment<ParagraphContent>)`；其他语义分支由各自的文档模型定义。MathFlow 与 Paragraph 共用 TextFlow 载体，不建立第二套文本存储或编辑器。TextFlow 只保存文本 Run；Math 和 InlineEnvironment 是同一父序列的其他分支。
 
-`TextFlow` 复用正文 Run、Run 属性、未知字段和字素边界；Paragraph 与 MathFlow 使用同一 TextFlow 文本、Run 属性、InlineEnvironment 和字素编辑适配器。Paragraph 与 MathFlow 宿主适配器只解析宿主路径、定位节点并提交各自的历史事务；MathEdit 不另实现一套文本格式语义。源码编辑映射属于临时视图，不是 TextFlow 或 MathTree 的持久字段。
+`TextFlow` 复用正文 Run、已知 Run 属性和字素边界；Paragraph 与 MathFlow 使用同一 TextFlow 文本、Run 属性、InlineEnvironment 和字素编辑适配器。Paragraph 与 MathFlow 宿主适配器只解析宿主路径、定位节点并提交各自的历史事务；MathEdit 不另实现一套文本格式语义。源码编辑映射属于临时视图，不是 TextFlow 或 MathTree 的持久字段。已知 TextFlow 或 Run 上的未知字段在 `.cdoc` 解码时拒绝。
 
 数学字面符号按扩展字素簇划分编辑位置，连续字母和数字之间允许停靠与逐个删除；命令生成的符号和复合运算节点保持原子。解析输入与逐键输入使用相同粒度，不能因解析器合并字面内容而改变光标和删除行为。
 
 IME 只在活动分支为 TextFlow 时启用。数学 TextFlow 请求 Qt `ImhPreferLatin`，用于提示输入法优先提供拉丁字符；这是平台提示，不能锁定或切换宿主操作系统的输入法，也不应阻止用户提交 Unicode 字符。MathTree 结构分支、数学源码和数学命令查询仍拒绝预编辑、替换或组字预览；不能只打开输入法提示就启用结构分支 IME，后续若支持，须先定义结构插入点的 surrounding text、UTF-16 替换范围、预编辑投影与原子提交。Qt 的 `ImEnabled` 与 `ImHints` 由 Rust 活动分支投影，TextFlow 的替换事务遵守正文输入法语义并由宿主事务提交；公式文本继续使用正文相同的 shaping 与缺字 fallback。
 
-公式源码分支拒绝正文格式命令，避免误改宿主段落的 pending style。TextFlow 分支的 Run 属性格式（例如 underline）由 Run 属性适配器在目标 TextFlow 内更新：选区操作只拆分受影响的 Run，保留其他 Run 元数据；未知字段无法安全复制时整笔事务拒绝。折叠光标使用统一 `PendingInlineStyle`，新输入写入 Run 属性，焦点或选区变化时清除待输入格式。Bold、Italic、Font 使用 `InlineEnvironment` 格式适配器；相交范围通过树切分表达，不生成交叉包装。数学源码分支明确拒绝不支持的正文格式命令，不得静默清除 MathEdit 后落到宿主旧选区。固定数学槽位内的 TextFlow 从 MathTree 内部环境解析继承样式；Paragraph 外层环境不改写 MathTree；公式内部 TextFlow 的格式由 MathTree 内部环境决定。
+公式源码分支拒绝正文格式命令，避免误改宿主段落的 pending style。TextFlow 分支的 Run 属性格式（例如 underline）由 Run 属性适配器在目标 TextFlow 内更新：选区操作只拆分受影响的 Run，保留其他已知 Run 元数据；已知 Run 结构上的未知字段在打开边界拒绝。折叠光标使用统一 `PendingInlineStyle`，新输入写入 Run 属性，焦点或选区变化时清除待输入格式。Bold、Italic、Font 使用 `InlineEnvironment` 格式适配器；相交范围通过树切分表达，不生成交叉包装。数学源码分支明确拒绝不支持的正文格式命令，不得静默清除 MathEdit 后落到宿主旧选区。固定数学槽位内的 TextFlow 从 MathTree 内部环境解析继承样式；Paragraph 外层环境不改写 MathTree；公式内部 TextFlow 的格式由 MathTree 内部环境决定。
 
 ### 宿主边界与拆分
 
@@ -79,7 +79,7 @@ IME 只在活动分支为 TextFlow 时启用。数学 TextFlow 请求 Qt `ImhPre
 
 拆分递归穿过 Bold、Italic、Font 等 `InlineEnvironment`，保留单个环境包装、ID、顺序和语义。例如 `\math(\bold{a\text{x}b})` 归一化为一个 Bold 包装，children 按序为 Math、Text、Math；不得拆成三个相邻 Bold，也不得把 Text 留在 InlineMath 中。`Run.props`（例如 underline）随 TextFlow 的 Run 保留，不转换成 InlineEnvironment。
 
-数学树不持久化源码范围或 `sourceMap`，数学节点中的旧版映射字段由存储边界拒绝；正文 TextFlow 不定义数学源码映射，其同名未知字段仍按普通扩展元数据处理。源码编辑适配器先通过与树版本绑定的临时映射把光标和选区映射到各输出片段，再创建宿主位置；移除的命令包装映射到最近的可表示边界。Text 后紧邻 Math 的源码起点归属前一正文 TextFlow 末端。若 anchor 与 focus 分属不同输出片段且不能由宿主位置模型无损表达，整笔事务拒绝。根层 `\text{}` 保留为空正文 TextFlow；文本岛中显式的空数学区间保留为可编辑空 Math 片段。无法归属到输出节点的临时源范围或未知字段必须导致事务拒绝，不得静默丢弃。
+数学树不持久化源码范围或 `sourceMap`，数学节点中的旧版映射字段由存储边界拒绝；已知 TextFlow 结构不接受未定义字段。源码编辑适配器先通过与树版本绑定的临时映射把光标和选区映射到各输出片段，再创建宿主位置；移除的命令包装映射到最近的可表示边界。Text 后紧邻 Math 的源码起点归属前一正文 TextFlow 末端。若 anchor 与 focus 分属不同输出片段且不能由宿主位置模型无损表达，整笔事务拒绝。根层 `\text{}` 保留为空正文 TextFlow；文本岛中显式的空数学区间保留为可编辑空 Math 片段。无法归属到输出节点的临时源范围或已知节点字段必须导致事务拒绝，不得静默丢弃。
 
 归一化、源码解析/序列化、焦点与选区映射、节点身份和历史补丁属于一个原子文档事务。分数、根式、上下标等内部槽位的 `\text{...}` 始终留在各自 MathFlow 中。在这类 TextFlow 内执行 `\math` 时，共享流操作把选中或插入范围切分为前后 TextFlow 与新的 MathNode；后续输入进入数学分支，不提升到 Paragraph。需要源码编辑时，才通过临时 TeX 草稿和位置映射转换整棵树。Equation/Align 没有 Paragraph 宿主，其根流保留数学混合内容。
 
@@ -87,7 +87,7 @@ IME 只在活动分支为 TextFlow 时启用。数学 TextFlow 请求 Qt `ImhPre
 
 split/merge 操作接收强类型有序流和宿主路径，由宿主适配器访问节点与位置；ParagraphContent 与 MathContent 共用操作策略但不抹平成无类型数据。Bold、Italic、Font 声明包装语义，不各自复制拼接算法。抽象必须维持宿主位置映射、元数据校验和事务边界。
 
-根流提升时，`InlineEnvironment<MathContent>` 转为 `InlineEnvironment<ParagraphContent>`，输入包装仍对应一个输出包装，不因子项类型转换复制节点。只有编辑范围使同一包装包含多个不连续输出范围时，才拆成多个包装；原 ID 留在首个存活的同 kind/同语义包装，其余新节点使用新 ID。InlineMath 宿主 ID 留给首个仍存在的 Math 输出项；没有 Math 输出时移除该 ID。MathNode 内部 ID 原样保留，无 ID 节点不生成身份。Run 与环境未知字段按实际归属保留；不能证明安全复制或唯一归属时整笔编辑原子拒绝。合并仅在属性、未知字段和身份可无损处理时进行。
+根流提升时，`InlineEnvironment<MathContent>` 转为 `InlineEnvironment<ParagraphContent>`，输入包装仍对应一个输出包装，不因子项类型转换复制节点。只有编辑范围使同一包装包含多个不连续输出范围时，才拆成多个包装；原 ID 留在首个存活的同 kind/同语义包装，其余新节点使用新 ID。InlineMath 宿主 ID 留给首个仍存在的 Math 输出项；没有 Math 输出时移除该 ID。MathNode 内部 ID 原样保留，无 ID 节点不生成身份。已知 Run 与环境字段按实际归属保留；不能证明安全复制或唯一归属时整笔编辑原子拒绝。合并仅在属性和身份可无损处理时进行。
 
 文本岛复用正文 shaping 的字体回退、语言、Run 属性与 InlineEnvironment，但不获得段落块布局、段落前后距或分页语义。Bold、Italic、Font 的 `enabled` / `fontFamily` 语义由 `caret-doc::InlineTextStyle` 统一解析，正文 shaping 和数学布局适配器都消费同一份增量；数学 backend 只负责把它投影到 TeX 命令，布局侧直接使用结构化样式，不再往返解析 `bf/md/it/up` 字符串。数学文本不维护专属字体规则：`\textsf` / `\texttt` 映射为 TextFlow 的通用 Font 环境；`sans-serif` / `monospace` 遵循[字体选择规范](font-selection.md)中的通用族语义，和 Math/Code 字体角色相互独立。公式文本与正文采用相同的 shaping、字体度量和缺字回退行为；布局快照 `textDiagnostics` 使用同一诊断结构报告正文与公式的缺字/缺失字体族，并附带段落或公式宿主 ID。
 

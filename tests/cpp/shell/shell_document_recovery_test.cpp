@@ -106,6 +106,34 @@ void ShellLoadTest::recoveryEntriesCanBeRestoredExportedAndDiscarded() {
     QSignalSpy restored_operations(&restored_view_model,
                                    &caret::LayoutViewModel::documentFileOperationFinished);
     QVERIFY(restored_operations.isValid());
+
+    // 恢复准备完成后、安装前文档发生变化，安装必须失败且不能泄露 Rust 的 error: 前缀。
+    const QVariantMap stale_restore = restored_view_model.restoreRecovery(local_recovery_id);
+    QVERIFY2(stale_restore.value(QStringLiteral("pending")).toBool(),
+             qPrintable(stale_restore.value(QStringLiteral("error")).toString()));
+    const QVariantMap concurrent_edit =
+        restored_view_model.insertText(QStringLiteral("保留当前正文"));
+    QVERIFY2(concurrent_edit.value(QStringLiteral("valid")).toBool(),
+             qPrintable(concurrent_edit.value(QStringLiteral("error")).toString()));
+    const QList<QVariant> stale_result = wait_for_operation(restored_operations);
+    QVERIFY(!stale_result.isEmpty());
+    QVERIFY(!stale_result.at(0).toBool());
+    QCOMPARE(stale_result.at(1).toString(), QStringLiteral("document.open_stale_session"));
+    QCOMPARE(restored_view_model.paragraphLayouts().size(), 1);
+    QCOMPARE(restored_view_model.paragraphLayouts()
+                 .first()
+                 .toMap()
+                 .value(QStringLiteral("text"))
+                 .toString(),
+             QStringLiteral("保留当前正文"));
+    QTRY_COMPARE_WITH_TIMEOUT(restored_operations.size(), 1, 10000);
+    const QList<QVariant> refreshed_after_stale = restored_operations.takeFirst();
+    QVERIFY2(refreshed_after_stale.at(0).toBool(),
+             qPrintable(refreshed_after_stale.at(1).toString()));
+    QVERIFY(!restored_view_model.recoveryEntries().isEmpty());
+    QVERIFY2(restored_view_model.undo().value(QStringLiteral("valid")).toBool(),
+             "undo should restore the clean document before the successful recovery attempt");
+
     const QVariantMap restore = restored_view_model.restoreRecovery(local_recovery_id);
     QVERIFY2(restore.value(QStringLiteral("pending")).toBool(),
              qPrintable(restore.value(QStringLiteral("error")).toString()));
