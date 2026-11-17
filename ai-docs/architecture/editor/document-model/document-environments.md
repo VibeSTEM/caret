@@ -8,7 +8,7 @@
 
 无标题 Section 按编号规则不显示、不占号，解除时只提升子项，不合成标题段落。
 
-文档级语言字段与语言回退见[多文字体系字体选择](../font-selection.md)；格式优先级与环境模板覆盖见[文字格式语义](../text-formatting.md)。页面几何由 `PageSection` 承载，模型见[文档树与结构](document-structure.md)。Run 的 Unicode 码点保留与未知字段参与局部合并等规则，也见[文档树与结构](document-structure.md)。
+文档级语言字段与语言回退见[多文字体系字体选择](../font-selection.md)；格式优先级与环境模板覆盖见[文字格式语义](../text-formatting.md)。页面几何由 `PageSection` 承载，模型见[文档树与结构](document-structure.md)。Run 的 Unicode 码点保留与局部合并规则，也见[文档树与结构](document-structure.md)。
 
 块级环境的 `title` 始终是单个 Paragraph。标题中按 Enter 时，光标前文本留在标题，后半段移入新建的正文首段，并插到已有正文内容之前；光标在标题开头或末尾时，允许标题前缀或新正文段为空。标题内的文本选区按“删除选区，再在选区起点拆分”一次提交。普通文本 Selection 只接受同一 `Story` 内的范围；GUI 指针拖选若跨越环境标题/正文或环境内外边界，会在 Rust 校验两个合法位置后提升为整块结构选区，并把焦点放到拖动方向对应的环境边界。无效 UTF-8/字素位置不得改变现有选区。标题 Enter 不会隐式改写跨 Story 文本范围。若正文首项是表格或嵌套环境，也在它之前插入 Paragraph。标题不会被拆成多个标题段。IME composition 尚未提交时 Return 由输入法消费，不触发 Enter 命令。
 

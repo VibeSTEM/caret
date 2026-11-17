@@ -24,7 +24,7 @@
 | --- | --- | --- |
 | `Block` | 页面内容的有序块流 | `Paragraph`、块级 `EnvironmentNode`、`Equation`、`Align`、显式分页；块环境通过有序 `children` 持有可嵌套块内容 |
 | `ParagraphContent` | Paragraph block 或行内格式环境的有序子项 | `Text(TextFlow)`、`Math(InlineMath)`、`Environment(InlineEnvironment<ParagraphContent>)`、`SoftBreak`、未知行内项 |
-| `TextFlow` | `ParagraphContent::Text` 或 Math `Text(TextFlow)` | 有序 Run 片段及其属性、语言与未知字段；不含 Math 节点或块级布局 |
+| `TextFlow` | `ParagraphContent::Text` 或 Math `Text(TextFlow)` | 有序 Run 片段及其属性、语言；不含 Math 节点或块级布局。已知 Run 上的未知字段按 `.cdoc` 当前 schema 报错 |
 
 页面角色组织 Block 流；Paragraph block 持有 `Vec<ParagraphContent>` 并负责段落级排版。Section 等容器 Block 持有 `Vec<Block>`，可通过 Paragraph 子项承载行内内容；其他 Block（例如 Align 或未来的 Table/Figure）只有在其内部模型显式提供 ParagraphContent、MathContent 或等价 inline-capable 流时才承载 Inline。Inline 可复用在 Paragraph 及这些内层流中，但不能越过宿主定义直接插进任意 Block 序列。公式文本项和正文 `ParagraphContent::Text` 共用同一种 `TextFlow`，但公式文本项不获得段落折行、段落前后间距或块级身份。`InlineEnvironment<Child>` 的子项类型由宿主流决定：正文包装使用 `ParagraphContent`，数学流包装使用 `MathContent`。正文格式树编辑与 InlineMath 根层提升由各自宿主适配器处理；共用 TextFlow 文本/格式操作、Run 范围替换和字素原语，不将两种节点枚举抹平成无类型数据。数学节点的分子、分母、上下标等固定槽位各自持有 `MathFlow`；槽内文本和 MathNode 不得提升到 Paragraph 层，只有 InlineMath 根流及其格式包装子树中的 TextFlow 可按 Paragraph 宿主规则提升为相邻 ParagraphContent。Run 边界和行内环境边界不改变宿主 UTF-8 偏移或跨节点字素分段。InlineMath 创建及从源码导入时执行根层提升；具体事务规则见[数学公式](../math.md#宿主边界与拆分)。
 
@@ -92,31 +92,31 @@ Document
 `PageContent` 是统一的页面组合类型；`BodyPage` 与 `TitlePage` 是不同 `role`，不是两套节点类型。`Title` 是可放在任一页面角色中的 `SingleLine` 内容块。标题页可以自然分页，不为塞进单个物理页而强行缩放或裁切。Author/Date 是否允许重复、是否绑定文档元数据，尚未决定。
 
 ```text
-Document { body: Vec<Block>, pageSections, globalSettings, extra }
+Document { body: Vec<Block>, pageSections, globalSettings }
 Block = Paragraph | Environment(BlockEnvironment) | Equation | Align | ExplicitBreak | Opaque
-Paragraph { id, language?, layout?, inlines: Vec<ParagraphContent>, markStyle, props, extra }
+Paragraph { id, language?, layout?, inlines: Vec<ParagraphContent>, markStyle, props }
 ParagraphContent = Text(TextFlow) | Math(InlineMath) | Environment(InlineEnvironment<ParagraphContent>) | SoftBreak | Opaque
-TextFlow { runs: Vec<Run>, extra }
-Run { text, language?, props, extra }  # text 保留原始 Unicode 码点序列
-InlineEnvironment<Child> { id, kind, definitionId?, props, children: Vec<Child>, extra }
+TextFlow { runs: Vec<Run> }
+Run { text, language?, props }  # text 保留原始 Unicode 码点序列
+InlineEnvironment<Child> { id, kind, definitionId?, props, children: Vec<Child> }
 
-BlockEnvironment { id, kind, definitionId?, props, title?: Paragraph, children: Vec<Block>, extra }
-Equation { id, mathTree, extra }
-Align { id, rows: Vec<MathAlignRow>, extra }
-MathAlignRow { id, cells: Vec<MathTree>, extra }
-MathTree { schemaVersion, root: MathFlow, extra }
-MathFlow { id, content: Vec<MathContent>, extra }
+BlockEnvironment { id, kind, definitionId?, props, title?: Paragraph, children: Vec<Block> }
+Equation { id, mathTree }
+Align { id, rows: Vec<MathAlignRow> }
+MathAlignRow { id, cells: Vec<MathTree> }
+MathTree { schemaVersion, root: MathFlow }
+MathFlow { id, content: Vec<MathContent> }
 MathContent = Math(MathNode) | Text(TextFlow) | Environment(InlineEnvironment<MathContent>) | SoftBreak | Opaque
-MathNode { id, kind, text?, attributes, children: Vec<MathFlow>, extra }
+MathNode { id, kind, text?, attributes, children: Vec<MathFlow> }
 ```
 
-图中列的是目标 `caret-doc` DTO；`CodeSpan`、`Title`、`Table`、`Figure` 和页面组合均为规划概念，不能视为已持久化节点。每个 DTO 的可选字段默认值与 JSON 编解码细节以对应 Rust 结构定义为准。
+图中列的是目标 `caret-doc` DTO；已知 DTO 不保存未知字段载体，只有 `Opaque` 保存未知节点类型的原始数据。`CodeSpan`、`Title`、`Table`、`Figure` 和页面组合均为规划概念，不能视为已持久化节点。每个 DTO 的可选字段默认值与 JSON 编解码细节以对应 Rust 结构定义为准。
 
 
 块环境编辑规则见[块环境模型](document-environments.md)；行内载体和两层环境适配见[环境视图](environment-views.md)；格式解析和直接属性规则见[文字格式语义](../text-formatting.md)。
 
 ## 文本与实现边界
 
-Run 文本在插入、打开和保存时保留原始 Unicode 码点序列，不隐式转成 NFC 或 NFD。搜索/比较如需规范化，使用独立的规范化视图，不回写或替换文档正文。相邻 Run 的 `language`、`props`、未知可选字段 `extra` 完全相同时，编辑器可在受影响的局部范围合并它们；这些边界不代表光标停靠点。没有文本且无显式属性/语言/未知字段的默认 Run 是无语义占位，可在局部编辑归一化时移除；不能合并格式不同或带未知字段的 Run，也不在打开文档时重写整棵内容树。
+Run 文本在插入、打开和保存时保留原始 Unicode 码点序列，不隐式转成 NFC 或 NFD。搜索/比较如需规范化，使用独立的规范化视图，不回写或替换文档正文。相邻 Run 的 `language` 与 `props` 完全相同时，编辑器可在受影响的局部范围合并它们；这些边界不代表光标停靠点。没有文本且无显式属性/语言的默认 Run 是无语义占位，可在局部编辑归一化时移除；不能合并格式不同的 Run，也不在打开文档时重写整棵内容树。已知 Run 结构上的未知字段在打开边界拒绝，不进入编辑模型。
 
 物理分页和页内片段是排版结果，引用原始文档范围；显式分页符才是文档内容。文字或度量变化使受影响布局失效，全局度量变化可触发完整分页，纯绘制属性只刷新绘制，只有影响大纲语义的变化才更新结构索引。异步布局快照携带单调 `documentGeneration`，过期结果不能覆盖新状态。布局失效与缓存策略见[增量排版](../incremental-layout.md)。当前 DTO 使用拥有型 `Vec`，没有 `Arc<Block>` 结构共享或逐节点 `contentRev`、`layoutRev`、`structureRev`、`paintRev` 字段。局部编辑不保证只复制受影响节点；超长 Paragraph 与宽子项容器的优化应依据 013 基准测量后决定，不预先承诺 rope、分块表示或结构共享。
