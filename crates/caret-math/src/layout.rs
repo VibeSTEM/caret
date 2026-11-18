@@ -26,7 +26,9 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
 use caret_doc::InlineEnvironmentTemplates;
-use caret_doc::{Align, DocumentUnits, MathContent, MathFlow, MathPathStep, NodeId};
+use caret_doc::{
+    Align, DocumentUnits, MATH_ALIGNED_MATRIX_STYLE, MathContent, MathFlow, MathPathStep, NodeId,
+};
 
 pub use crate::fonts::{MathFont, MathFontError};
 pub use context::{MathDiagnostic, MathSize};
@@ -424,7 +426,10 @@ fn layout_align_internal<'a>(
         kind: BackendNodeKind::Matrix,
         text: None,
         run: None,
-        attributes: std::collections::BTreeMap::from([("style".to_owned(), "aligned".to_owned())]),
+        attributes: std::collections::BTreeMap::from([(
+            "style".to_owned(),
+            MATH_ALIGNED_MATRIX_STYLE.name.to_owned(),
+        )]),
         text_style: None,
         children: rows,
     };

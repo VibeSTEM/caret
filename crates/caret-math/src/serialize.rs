@@ -6,9 +6,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use caret_doc::{Align, MathFlow, MathTree};
+use caret_doc::{
+    Align, DEFAULT_MATH_MATRIX_STYLE, MATH_ALIGNED_MATRIX_STYLE, MathFlow, MathTree,
+    math_accent_by_value, math_matrix_style,
+};
 
 use crate::backend::{BackendNodeKind as MathNodeKind, Node as MathNode, flow_nodes};
+use crate::dimension::format_dimension;
 use crate::symbols::{NAMED_COLORS, delimiter_source};
 
 /// 序列化单棵数学树（不含外层 `$` 或 `\[`）。
@@ -30,7 +34,7 @@ fn serialize_flow(flow: &MathFlow) -> String {
 /// 序列化对齐公式为 `aligned` 环境。
 pub fn serialize_align(align: &Align) -> String {
     let mut writer = Writer::default();
-    writer.raw("\\begin{aligned}");
+    writer.raw(&format!("\\begin{{{}}}", MATH_ALIGNED_MATRIX_STYLE.name));
     for (index, row) in align.rows.iter().enumerate() {
         if index > 0 {
             writer.raw(" \\\\");
@@ -42,7 +46,7 @@ pub fn serialize_align(align: &Align) -> String {
             writer.children(&flow_nodes(&cell.root));
         }
     }
-    writer.raw("\\end{aligned}");
+    writer.raw(&format!("\\end{{{}}}", MATH_ALIGNED_MATRIX_STYLE.name));
     writer.output
 }
 
@@ -357,7 +361,8 @@ impl Writer {
             }
             K::Accent => {
                 let accent = Self::attribute(node, "accent");
-                self.command(if accent == "ring" { "mathring" } else { accent });
+                let command = math_accent_by_value(accent).map_or(accent, |accent| accent.command);
+                self.command(command);
                 self.optional_group(Self::child(node, 0));
             }
             K::Space => self.space(node),
@@ -425,9 +430,9 @@ impl Writer {
                 let total = (height.0 * depth.1 + depth.0 * height.1, height.1 * depth.1);
                 self.command("rule");
                 if depth.0 != 0 {
-                    self.raw(&format!("[{}]", dimension((-depth.0, depth.1))));
+                    self.raw(&format!("[{}]", format_dimension((-depth.0, depth.1))));
                 }
-                self.raw(&format!("{{0em}}{{{}}}", dimension(total)));
+                self.raw(&format!("{{0em}}{{{}}}", format_dimension(total)));
             }
             K::Phantom => {
                 let kind = match Self::attribute(node, "phantomKind") {
@@ -543,7 +548,10 @@ impl Writer {
                 let numerator = value("valueNumerator").unwrap_or(0);
                 let denominator = value("valueDenominator").unwrap_or(1).max(1);
                 self.command("hspace");
-                self.raw(&format!("{{{}}}", dimension((numerator, denominator))));
+                self.raw(&format!(
+                    "{{{}}}",
+                    format_dimension((numerator, denominator))
+                ));
             }
             _ => self.raw("\\ "),
         }
@@ -641,12 +649,12 @@ impl Writer {
 
     fn matrix(&mut self, node: &MathNode) {
         let style = match Self::attribute(node, "style") {
-            "" => "matrix",
+            "" => DEFAULT_MATH_MATRIX_STYLE.name,
             style => style,
         };
         self.command("begin");
         self.raw(&format!("{{{style}}}"));
-        if style == "array" {
+        if math_matrix_style(style).is_some_and(|spec| spec.has_column_spec) {
             self.raw(&format!("{{{}}}", Self::attribute(node, "columns")));
         }
         let mut previous_was_row = false;
@@ -703,63 +711,5 @@ fn flatten_transparent_rows<'a>(children: &'a [MathNode], output: &mut Vec<&'a M
         } else {
             output.push(child);
         }
-    }
-}
-
-/// 有理数 em 长度写成解析器可读的形式：能精确写成小数 em 时用 em，
-/// 否则在能精确写成小数 mu（1/18 em）时用 mu。
-fn dimension((numerator, denominator): (i128, i128)) -> String {
-    if is_finite_decimal(denominator) {
-        return format!("{}em", decimal((numerator, denominator)));
-    }
-    let mu = (numerator * 18, denominator);
-    if is_finite_decimal(mu.1 / gcd(mu.0, mu.1)) {
-        return format!("{}mu", decimal(mu));
-    }
-    format!("{}em", decimal((numerator, denominator)))
-}
-
-fn gcd(mut a: i128, mut b: i128) -> i128 {
-    a = a.abs();
-    b = b.abs();
-    while b != 0 {
-        (a, b) = (b, a % b);
-    }
-    a.max(1)
-}
-
-fn is_finite_decimal(mut denominator: i128) -> bool {
-    denominator = denominator.abs().max(1);
-    for factor in [2, 5] {
-        while denominator % factor == 0 {
-            denominator /= factor;
-        }
-    }
-    denominator == 1
-}
-
-/// 有理数写成有限小数；分母含 2 和 5 以外的因子时保留六位小数。
-fn decimal((numerator, denominator): (i128, i128)) -> String {
-    let negative = (numerator < 0) != (denominator < 0);
-    let (numerator, denominator) = (numerator.unsigned_abs(), denominator.unsigned_abs().max(1));
-    let whole = numerator / denominator;
-    let mut remainder = numerator % denominator;
-    let mut digits = String::new();
-    let mut steps = 0;
-    while remainder != 0 && steps < 18 {
-        remainder *= 10;
-        digits.push(char::from(b'0' + (remainder / denominator) as u8));
-        remainder %= denominator;
-        steps += 1;
-    }
-    let sign = if negative && (whole != 0 || !digits.is_empty()) {
-        "-"
-    } else {
-        ""
-    };
-    if digits.is_empty() {
-        format!("{sign}{whole}")
-    } else {
-        format!("{sign}{whole}.{digits}")
     }
 }

@@ -31,9 +31,14 @@ pub use inline_environment::{
     InlineEnvironmentTemplates, InlineTextStyle,
 };
 pub use math::{
-    Align, Equation, InlineMath, MATH_TREE_SCHEMA_VERSION, MAX_MATH_TREE_DEPTH,
-    MAX_MATH_TREE_NODES, MAX_MATH_TREE_PAYLOAD_BYTES, MathAlignRow, MathFlow, MathNode,
-    MathNodeKind, MathPathStep, MathTree,
+    Align, DEFAULT_MATH_MATRIX_STYLE, Equation, InlineMath, MATH_ACCENTS,
+    MATH_ALIGNED_MATRIX_STYLE, MATH_ATOM_CLASSES, MATH_DELIMITER_SIZES, MATH_DELIMITER_VALUES,
+    MATH_MATRIX_STYLES, MATH_TREE_SCHEMA_VERSION, MAX_MATH_TREE_DEPTH, MAX_MATH_TREE_NODES,
+    MAX_MATH_TREE_PAYLOAD_BYTES, MathAccent, MathAccentPlacement, MathAccentRendering,
+    MathAlignRow, MathAtomClass, MathDelimiterSize, MathFlow, MathMatrixAlignment,
+    MathMatrixCellSize, MathMatrixColumnGap, MathMatrixStyle, MathNode, MathNodeKind, MathPathStep,
+    MathTree, is_valid_math_delimiter, math_accent_by_command, math_accent_by_value,
+    math_matrix_style,
 };
 pub(crate) use math::{math_node_attributes_supported, math_node_structure_supported};
 pub use paragraph::{Paragraph, ParagraphLayoutOverrides};

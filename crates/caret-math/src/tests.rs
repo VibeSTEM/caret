@@ -6,8 +6,8 @@
 use std::collections::BTreeMap;
 
 use caret_doc::{
-    InlineEnvironment, InlineEnvironmentKind, MathContent, MathFlow, MathNode, MathNodeKind as K,
-    MathTree, NodeId, Run, TextFlow,
+    InlineEnvironment, InlineEnvironmentKind, MATH_ACCENTS, MATH_MATRIX_STYLES, MathContent,
+    MathFlow, MathNode, MathNodeKind as K, MathTree, NodeId, Run, TextFlow,
 };
 
 use crate::{
@@ -360,6 +360,93 @@ fn encodes_delimiters_spaces_and_colors() {
         root_shape(r"\textcolor{red}{x}"),
         r##"TextColor{"color": "#ff0000"}[Symbol("x"){"atomClass": "ord"}]"##
     );
+}
+
+#[test]
+fn every_document_matrix_style_parses_serializes_and_parses_again() {
+    for style in MATH_MATRIX_STYLES {
+        let column_spec = if style.has_column_spec { "{c|r}" } else { "" };
+        let source = format!(
+            r"\begin{{{}}}{} a&b\\c&d\end{{{}}}",
+            style.name, column_spec, style.name
+        );
+        let parsed = match parse(&source, MathInputKind::Inline) {
+            Ok(ParsedMath::Tree(tree)) => tree,
+            other => panic!("{} should parse as a matrix: {other:?}", style.name),
+        };
+        let Some(MathContent::Math(matrix)) = parsed.root.content.first() else {
+            panic!("{} should produce a matrix node", style.name);
+        };
+        assert_eq!(matrix.kind, K::Matrix, "{}", style.name);
+        assert_eq!(
+            matrix.attributes.get("style").map(String::as_str),
+            Some(style.name),
+            "{}",
+            style.name
+        );
+        assert_eq!(
+            matrix.attributes.get("columns").map(String::as_str),
+            Some(if style.has_column_spec { "c|r" } else { "" }),
+            "{}",
+            style.name
+        );
+        let serialized = serialize_tree(&parsed);
+        assert!(
+            serialized.contains(&format!(r"\begin{{{}}}", style.name)),
+            "{serialized}"
+        );
+        assert!(
+            serialized.contains(&format!(r"\end{{{}}}", style.name)),
+            "{serialized}"
+        );
+        if style.has_column_spec {
+            assert!(
+                serialized.contains(&format!(r"\begin{{{}}}{{c|r}}", style.name)),
+                "{serialized}"
+            );
+        }
+        let reparsed = match parse(&serialized, MathInputKind::Inline) {
+            Ok(ParsedMath::Tree(tree)) => tree,
+            other => panic!("{} should round-trip: {serialized} → {other:?}", style.name),
+        };
+        assert_eq!(serialize_tree(&reparsed), serialized, "{}", style.name);
+    }
+}
+
+#[test]
+fn ring_attribute_uses_mathring_and_rejects_ring_command() {
+    assert_eq!(
+        root_shape(r"\mathring{x}"),
+        r#"Accent{"accent": "ring"}[Symbol("x"){"atomClass": "ord"}]"#
+    );
+    assert!(parse(r"\ring{x}", MathInputKind::Inline).is_err());
+}
+
+#[test]
+fn every_document_accent_mapping_parses_and_serializes_to_its_canonical_command() {
+    for accent in MATH_ACCENTS {
+        let source = format!(r"\{}{{x}}", accent.command);
+        let parsed = tree(&source);
+        let Some(MathContent::Math(node)) = parsed.root.content.first() else {
+            panic!("{} should parse as an accent node", accent.command);
+        };
+        assert_eq!(node.kind, K::Accent);
+        assert_eq!(
+            node.attributes.get("accent").map(String::as_str),
+            Some(accent.value)
+        );
+
+        let serialized = serialize_tree(&parsed);
+        assert!(
+            serialized.contains(&format!("\\{}", accent.command)),
+            "{serialized}"
+        );
+        assert_eq!(
+            shape(&tree(&serialized).root),
+            shape(&parsed.root),
+            "{source}"
+        );
+    }
 }
 
 #[test]

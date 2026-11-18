@@ -8,6 +8,7 @@
 // 署名：Yuki Lu
 
 mod backend;
+mod dimension;
 mod fonts;
 pub mod layout;
 mod parser;
