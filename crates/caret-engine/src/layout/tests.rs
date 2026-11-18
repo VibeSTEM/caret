@@ -19,19 +19,19 @@ use super::{DocumentLayoutError, DocumentLayoutService};
 #[test]
 fn math_tree_sequence_caret_uses_affinity_order_at_sibling_boundaries() {
     assert_eq!(
-        super::math_sequence_edge_child_indices(1, 2, MathPositionAffinity::Upstream,),
+        super::shared::math_sequence_edge_child_indices(1, 2, MathPositionAffinity::Upstream,),
         [Some(0), Some(1)]
     );
     assert_eq!(
-        super::math_sequence_edge_child_indices(1, 2, MathPositionAffinity::Downstream,),
+        super::shared::math_sequence_edge_child_indices(1, 2, MathPositionAffinity::Downstream,),
         [Some(1), Some(0)]
     );
     assert_eq!(
-        super::math_sequence_edge_child_indices(0, 2, MathPositionAffinity::Upstream),
+        super::shared::math_sequence_edge_child_indices(0, 2, MathPositionAffinity::Upstream),
         [None, Some(0)]
     );
     assert_eq!(
-        super::math_sequence_edge_child_indices(2, 2, MathPositionAffinity::Downstream),
+        super::shared::math_sequence_edge_child_indices(2, 2, MathPositionAffinity::Downstream),
         [None, Some(1)]
     );
 }
@@ -102,11 +102,11 @@ fn math_text_base_language_uses_paragraph_then_document_then_base_priority() {
     base_style.language = Some("fr".to_owned());
 
     assert_eq!(
-        super::resolved_math_base_style(&base_style, &settings, Some("zh")).language,
+        super::produce::resolved_math_base_style(&base_style, &settings, Some("zh")).language,
         Some("zh".to_owned())
     );
     assert_eq!(
-        super::resolved_math_base_style(&base_style, &settings, None).language,
+        super::produce::resolved_math_base_style(&base_style, &settings, None).language,
         Some("en".to_owned())
     );
 
@@ -116,7 +116,7 @@ fn math_text_base_language_uses_paragraph_then_document_then_base_priority() {
     )
     .unwrap_or_else(|error| panic!("document text settings should resolve: {error}"));
     assert_eq!(
-        super::resolved_math_base_style(&base_style, &settings, None).language,
+        super::produce::resolved_math_base_style(&base_style, &settings, None).language,
         Some("fr".to_owned())
     );
 }
@@ -152,13 +152,13 @@ fn math_run_style_uses_shared_run_properties_and_font_environment() {
         style: Default::default(),
     };
 
-    let span = super::math_text_span(&math_run, &base, &settings);
+    let span = super::produce::math_text_span(&math_run, &base, &settings);
     assert_eq!(span.style.requested_family.as_deref(), Some("Base Family"));
     assert_eq!(span.style.language.as_deref(), Some("zh-Hans"));
     assert!(span.underline);
 
     math_run.style.font_family = Some("Environment Font".to_owned());
-    let span = super::math_text_span(&math_run, &base, &settings);
+    let span = super::produce::math_text_span(&math_run, &base, &settings);
     assert_eq!(
         span.style.requested_family.as_deref(),
         Some("Environment Font")
@@ -208,8 +208,7 @@ fn body_and_equation_textflow_share_run_language_fallback_and_glyphs() {
         .unwrap_or_else(|error| panic!("body and equation should lay out: {error}"));
     let body = laid_out_paragraph(&snapshot, &paragraph_id);
     let math_text = snapshot
-        .math_block_text_layouts
-        .get(&equation_id)
+        .math_text_layouts_for_block(&equation_id)
         .and_then(|sidecars| sidecars.values().next())
         .unwrap_or_else(|| panic!("equation TextFlow should have a Parley sidecar"));
 
@@ -377,12 +376,12 @@ fn math_softbreak_and_opaque_nodes_require_text_shaping_even_with_empty_text_flo
         let without_empty_text = flow(vec![boundary.clone()]);
         let with_empty_text = flow(vec![boundary, empty_text()]);
         assert!(
-            super::math_flow_contains_text(&without_empty_text),
+            super::produce::math_flow_contains_text(&without_empty_text),
             "{name} must activate the text shaper"
         );
         assert_eq!(
-            super::math_flow_contains_text(&without_empty_text),
-            super::math_flow_contains_text(&with_empty_text),
+            super::produce::math_flow_contains_text(&without_empty_text),
+            super::produce::math_flow_contains_text(&with_empty_text),
             "adding an empty TextFlow must not change the shaping path for {name}"
         );
     }
@@ -454,7 +453,9 @@ fn equation_soft_break_uses_two_lines_and_preserves_text_caret_paths() {
     let snapshot = DocumentLayoutService::new()
         .layout(&document, 8, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("equation should layout: {error}"));
-    let sidecars = &snapshot.math_block_text_layouts[&block_id];
+    let sidecars = &snapshot
+        .math_text_layouts_for_block(&block_id)
+        .unwrap_or_else(|| panic!("block sidecars should exist"));
     assert_eq!(sidecars.len(), 1);
     let sidecar = sidecars
         .values()
@@ -538,7 +539,7 @@ fn display_math_uses_the_body_line_grid_as_its_stable_base() {
             .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
             .unwrap_or_else(|error| panic!("equation should layout: {error}"));
         let fragment = &snapshot.pages[0].layout.math_fragments[0];
-        let projection = &snapshot.math_projections[0];
+        let projection = &snapshot.math_page_projections()[0];
         let target = MathEditTarget::Block {
             block_id: equation_id.clone(),
             align: false,
@@ -597,7 +598,7 @@ fn display_math_uses_the_body_line_grid_as_its_stable_base() {
         let snapshot = service
             .layout(&document, 2, &mut catalog, &ShapingStyle::new(1200))
             .unwrap_or_else(|error| panic!("inline equation should layout: {error}"));
-        let projection = &snapshot.math_projections[0];
+        let projection = &snapshot.math_page_projections()[0];
         (
             snapshot.paragraphs[0].layout.paragraph.lines[0]
                 .metrics
@@ -668,10 +669,9 @@ fn align_outer_boundary_uses_first_and_last_row_under_natural_spacing() {
         .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("multiline Align should layout: {error}"));
     let projection = snapshot
-        .math_projections_by_id
-        .get(&align_id)
-        .and_then(|indices| indices.first())
-        .and_then(|index| snapshot.math_projections.get(*index))
+        .math_page_projections()
+        .iter()
+        .find(|projection| projection.math_id == align_id)
         .unwrap_or_else(|| panic!("Align should have a page projection"));
     assert_eq!(projection.row_baselines.len(), 2);
     let fallback = super::PageCaretGeometry {
@@ -703,16 +703,19 @@ fn display_math_host_spacing_matches_body_line_spacing_rules() {
         descent_pt: 2.0,
         leading_pt: 2.0,
     };
-    let natural =
-        super::calculate_math_host_metrics(&layout, grid, caret_layout::LineSpacing::Natural)
-            .unwrap_or_else(|error| panic!("natural math metrics should resolve: {error}"));
-    let multiple = super::calculate_math_host_metrics(
+    let natural = super::produce::calculate_math_host_metrics(
+        &layout,
+        grid,
+        caret_layout::LineSpacing::Natural,
+    )
+    .unwrap_or_else(|error| panic!("natural math metrics should resolve: {error}"));
+    let multiple = super::produce::calculate_math_host_metrics(
         &layout,
         grid,
         caret_layout::LineSpacing::Multiple { percent: 115 },
     )
     .unwrap_or_else(|error| panic!("multiple math metrics should resolve: {error}"));
-    let at_least = super::calculate_math_host_metrics(
+    let at_least = super::produce::calculate_math_host_metrics(
         &layout,
         grid,
         caret_layout::LineSpacing::AtLeast {
@@ -720,7 +723,7 @@ fn display_math_host_spacing_matches_body_line_spacing_rules() {
         },
     )
     .unwrap_or_else(|error| panic!("at-least math metrics should resolve: {error}"));
-    let exactly = super::calculate_math_host_metrics(
+    let exactly = super::produce::calculate_math_host_metrics(
         &layout,
         grid,
         caret_layout::LineSpacing::Exactly { centipoints: 500 },
@@ -852,7 +855,9 @@ fn align_cell_soft_break_keeps_both_text_caret_paths() {
     let MathEditTarget::Block { block_id, .. } = &target else {
         unreachable!();
     };
-    let sidecars = &snapshot.math_block_text_layouts[block_id];
+    let sidecars = snapshot
+        .math_text_layouts_for_block(block_id)
+        .unwrap_or_else(|| panic!("block should publish sidecars"));
     let sidecar = sidecars
         .values()
         .next()
@@ -1095,7 +1100,9 @@ fn equation_text_hit_keeps_block_host_and_text_flow_path() {
     let page = &snapshot.pages[0];
     let fragment = &page.layout.math_fragments[0];
     let layout = &snapshot.math_blocks[&block_id];
-    let sidecars = &snapshot.math_block_text_layouts[&block_id];
+    let sidecars = &snapshot
+        .math_text_layouts_for_block(&block_id)
+        .unwrap_or_else(|| panic!("block sidecars should exist"));
     let (x_pt, y_pt, expected_position, expected_visual_affinity) = text_hit_point(
         page.margin_left_pt + f64::from(fragment.x_offset_pt),
         page.margin_top_pt + f64::from(fragment.y_offset_pt) + layout.ascent,
@@ -1147,7 +1154,7 @@ fn equation_empty_math_operand_uses_its_published_structure_slot_geometry() {
         .find(|node| {
             node.is_flow
                 && !node.is_text_flow
-                && super::math_flow_at_layout_path(&math_root, &node.path)
+                && super::shared::math_flow_at_layout_path(&math_root, &node.path)
                     .is_some_and(|flow| {
                         flow.content.is_empty()
                             || matches!(flow.content.as_slice(), [caret_doc::MathContent::Math(node)] if node.kind == caret_doc::MathNodeKind::Placeholder)
@@ -1222,7 +1229,7 @@ fn optional_placeholder_identity_markers_are_not_structural_hit_targets() {
         .find(|node| {
             node.is_flow
                 && !node.is_text_flow
-                && super::math_flow_at_layout_path(&math_root, &node.path).is_some_and(|flow| {
+                && super::shared::math_flow_at_layout_path(&math_root, &node.path).is_some_and(|flow| {
                     matches!(flow.content.as_slice(), [caret_doc::MathContent::Math(node)] if node.kind == caret_doc::MathNodeKind::Placeholder)
                 })
         })
@@ -1278,7 +1285,7 @@ fn replacing_placeholder_with_unknown_metadata_is_rejected_atomically() -> Resul
         .find(|node| {
             node.is_flow
                 && !node.is_text_flow
-                && super::math_flow_at_layout_path(&math_root, &node.path).is_some_and(|flow| {
+                && super::shared::math_flow_at_layout_path(&math_root, &node.path).is_some_and(|flow| {
                     matches!(flow.content.as_slice(), [caret_doc::MathContent::Math(node)] if node.kind == caret_doc::MathNodeKind::Placeholder)
                 })
         })
@@ -1343,7 +1350,7 @@ fn session_focuses_and_edits_only_a_current_empty_math_structure_hit() -> Result
         .find(|node| {
             node.is_flow
                 && !node.is_text_flow
-                && super::math_flow_at_layout_path(&math_root, &node.path).is_some_and(|flow| {
+                && super::shared::math_flow_at_layout_path(&math_root, &node.path).is_some_and(|flow| {
                     flow.content.is_empty()
                         || matches!(flow.content.as_slice(), [caret_doc::MathContent::Math(node)] if node.kind == caret_doc::MathNodeKind::Placeholder)
                 })
@@ -1491,7 +1498,7 @@ fn math_tree_caret_uses_inline_environment_children_geometry() {
         })
         .unwrap_or_else(|| panic!("first environment symbol should have a layout box"));
     let projection = snapshot
-        .math_projections
+        .math_page_projections()
         .iter()
         .find(|projection| projection.math_id == equation_id)
         .unwrap_or_else(|| panic!("equation should have a page projection"));
@@ -1597,7 +1604,7 @@ fn math_tree_selection_geometry_matches_equation_symbol_carets() {
         .math_tree_caret(&target, &anchor)
         .unwrap_or_else(|| panic!("first equation symbol start should have caret geometry"));
     let projection = snapshot
-        .math_projections
+        .math_page_projections()
         .iter()
         .find(|projection| projection.math_id == equation_id)
         .unwrap_or_else(|| panic!("equation should have a page projection"));
@@ -1686,7 +1693,7 @@ fn math_tree_selection_geometry_matches_inline_math_symbol_carets() {
         .math_tree_caret(&target, &anchor)
         .unwrap_or_else(|| panic!("inline math start should have caret geometry"));
     let projection = snapshot
-        .math_projections
+        .math_page_projections()
         .iter()
         .find(|projection| projection.math_id == math_id)
         .unwrap_or_else(|| panic!("inline math should have a page projection"));
@@ -1752,7 +1759,7 @@ fn math_tree_selection_geometry_clips_align_selection_to_its_row() {
         .unwrap_or_else(|| panic!("align cell symbol should have selection geometry"));
     assert_eq!(rectangles.len(), 1);
     let projection = snapshot
-        .math_projections
+        .math_page_projections()
         .iter()
         .find(|projection| projection.math_id == align_id)
         .unwrap_or_else(|| panic!("align should have a page projection"));
@@ -1829,7 +1836,7 @@ fn math_tree_selection_geometry_keeps_nested_environment_atomic() {
         .unwrap_or_else(|| panic!("environment child should have selection geometry"));
     assert_eq!(rectangles.len(), 1, "嵌套环境必须作为一个原子矩形");
     let projection = snapshot
-        .math_projections
+        .math_page_projections()
         .iter()
         .find(|projection| projection.math_id == equation_id)
         .unwrap_or_else(|| panic!("equation should have a page projection"));
@@ -1884,7 +1891,7 @@ fn math_structure_hit_enters_bold_environment_child_sequence() {
         .layout(&document, 19, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("bold equation should layout: {error}"));
     let projection = snapshot
-        .math_projections
+        .math_page_projections()
         .iter()
         .find(|projection| projection.math_id == equation_id)
         .unwrap_or_else(|| panic!("equation should have a page projection"));
@@ -1937,7 +1944,7 @@ fn math_structure_hit_falls_back_to_parent_sequence_in_operator_gaps() {
         .find(|node| node.path == [caret_doc::MathPathStep::Content(0)])
         .unwrap_or_else(|| panic!("fraction should have a layout box"));
     let projection = snapshot
-        .math_projections
+        .math_page_projections()
         .iter()
         .find(|projection| projection.math_id == equation_id)
         .unwrap_or_else(|| panic!("equation should have a page projection"));
@@ -1974,7 +1981,9 @@ fn session_accepts_only_current_structurally_valid_math_text_hits() -> Result<()
     let page = &snapshot.pages[0];
     let fragment = &page.layout.math_fragments[0];
     let layout = &snapshot.math_blocks[&block_id];
-    let sidecars = &snapshot.math_block_text_layouts[&block_id];
+    let sidecars = &snapshot
+        .math_text_layouts_for_block(&block_id)
+        .unwrap_or_else(|| panic!("block sidecars should exist"));
     let (x_pt, y_pt, _, _) = text_hit_point(
         page.margin_left_pt + f64::from(fragment.x_offset_pt),
         page.margin_top_pt + f64::from(fragment.y_offset_pt) + layout.ascent,
@@ -2127,7 +2136,9 @@ fn align_cell_text_hit_keeps_stable_row_and_cell_identity() {
     let page = &snapshot.pages[0];
     let fragment = &page.layout.math_fragments[0];
     let layout = &snapshot.math_blocks[&block_id];
-    let sidecars = &snapshot.math_block_text_layouts[&block_id];
+    let sidecars = &snapshot
+        .math_text_layouts_for_block(&block_id)
+        .unwrap_or_else(|| panic!("block sidecars should exist"));
     let (x_pt, y_pt, expected_position, expected_visual_affinity) = text_hit_point(
         page.margin_left_pt + f64::from(fragment.x_offset_pt),
         page.margin_top_pt + f64::from(fragment.y_offset_pt) + layout.ascent,
@@ -2172,7 +2183,9 @@ fn vertical_math_text_navigation_enters_the_adjacent_align_row() {
     let page = &snapshot.pages[0];
     let fragment = &page.layout.math_fragments[0];
     let layout = &snapshot.math_blocks[&align.id];
-    let sidecars = &snapshot.math_block_text_layouts[&align.id];
+    let sidecars = &snapshot
+        .math_text_layouts_for_block(&align.id)
+        .unwrap_or_else(|| panic!("align sidecars should exist"));
     let (x_pt, y_pt, _, _) = text_hit_point(
         page.margin_left_pt + f64::from(fragment.x_offset_pt),
         page.margin_top_pt + f64::from(fragment.y_offset_pt) + layout.ascent,
@@ -2222,7 +2235,9 @@ fn vertical_math_text_navigation_enters_an_empty_align_text_island() {
     let page = &snapshot.pages[0];
     let fragment = &page.layout.math_fragments[0];
     let layout = &snapshot.math_blocks[&align.id];
-    let sidecars = &snapshot.math_block_text_layouts[&align.id];
+    let sidecars = &snapshot
+        .math_text_layouts_for_block(&align.id)
+        .unwrap_or_else(|| panic!("align sidecars should exist"));
     let (x_pt, y_pt, _, _) = text_hit_point(
         page.margin_left_pt + f64::from(fragment.x_offset_pt),
         page.margin_top_pt + f64::from(fragment.y_offset_pt) + layout.ascent,
@@ -2447,8 +2462,7 @@ fn unchanged_display_math_reuses_layout_and_text_sidecars() {
             .get(&id)
             .unwrap_or_else(|| panic!("display math {id} should be laid out"));
         let text = previous
-            .math_block_text_layouts
-            .get(&id)
+            .math_text_layouts_for_block(&id)
             .and_then(|sidecars| sidecars.values().next())
             .unwrap_or_else(|| panic!("display text sidecar {id} should exist"))
             .layout
@@ -2490,8 +2504,7 @@ fn unchanged_display_math_reuses_layout_and_text_sidecars() {
                 .unwrap_or_else(|| panic!("display math {id} should remain laid out")),
         ));
         let updated_text_layout = updated
-            .math_block_text_layouts
-            .get(&id)
+            .math_text_layouts_for_block(&id)
             .and_then(|sidecars| sidecars.values().next())
             .unwrap_or_else(|| panic!("display text sidecar {id} should remain available"));
         assert!(std::sync::Arc::ptr_eq(
@@ -4099,7 +4112,7 @@ fn empty_formula_projections_keep_host_geometry_without_placeholder_rectangles()
     }
     for id in [&inline_id, &equation_id, &align_id] {
         let projection = snapshot
-            .math_projections
+            .math_page_projections()
             .iter()
             .find(|projection| &projection.math_id == id)
             .unwrap_or_else(|| panic!("missing page projection"));
@@ -4212,7 +4225,7 @@ fn clipped_multiline_inline_math_publishes_only_visible_geometry() {
         paragraph_id,
         math_id: math_id.clone(),
     };
-    let raw = super::MathTextItemGeometry {
+    let raw = super::items::MathTextItemGeometry {
         object_x_pt: projection.object_x_pt,
         object_baseline_y_pt: projection.baseline_y_pt,
         projection,
@@ -4227,9 +4240,12 @@ fn clipped_multiline_inline_math_publishes_only_visible_geometry() {
         let position = sidecar
             .position_at_offset(offset, MathPositionAffinity::Downstream)
             .unwrap_or_else(|| panic!("missing position"));
-        if let Some((caret, _)) =
-            super::math_text_caret_in_items(&raw, &target, &position, VisualAffinity::Downstream)
-        {
+        if let Some((caret, _)) = super::items::math_text_caret_in_items(
+            &raw,
+            &target,
+            &position,
+            VisualAffinity::Downstream,
+        ) {
             raw_ranges.push((caret.y0_pt, caret.y1_pt));
             outside |= caret.y0_pt < top || caret.y1_pt > bottom;
             if caret.y1_pt <= top || caret.y0_pt >= bottom {

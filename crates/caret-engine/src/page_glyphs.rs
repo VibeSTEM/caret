@@ -375,25 +375,10 @@ impl DocumentLayoutSnapshot {
                         let PositionedGlyphLayoutItem::InlineBox(inline_box) = item else {
                             return Err(PageGlyphError::UnsupportedInlineBox);
                         };
-                        let math_layout = paragraph
-                            .inline_math_layouts
-                            .get(
-                                usize::try_from(inline_box.id)
-                                    .map_err(|_| PageGlyphError::UnsupportedInlineBox)?,
-                            )
-                            .ok_or(PageGlyphError::UnsupportedInlineBox)?;
-                        let math_text_layouts = paragraph
-                            .inline_math_text_layouts
-                            .get(
-                                usize::try_from(inline_box.id)
-                                    .map_err(|_| PageGlyphError::UnsupportedInlineBox)?,
-                            )
-                            .ok_or(PageGlyphError::UnsupportedInlineBox)?;
                         let index = usize::try_from(inline_box.id)
                             .map_err(|_| PageGlyphError::UnsupportedInlineBox)?;
-                        let math_id = paragraph
-                            .inline_math_ids
-                            .get(index)
+                        let (math_layout, math_text_layouts, math_id) = paragraph
+                            .inline_math_glyph_data(index)
                             .ok_or(PageGlyphError::UnsupportedInlineBox)?;
                         let projection = self
                             .math_projection(page_index, math_id)
@@ -452,8 +437,7 @@ impl DocumentLayoutSnapshot {
                 .get(&fragment.math_id)
                 .ok_or(PageGlyphError::MissingMathBlock)?;
             let text_layouts = self
-                .math_block_text_layouts
-                .get(&fragment.math_id)
+                .math_text_layouts_for_block(&fragment.math_id)
                 .ok_or(PageGlyphError::MissingMathBlock)?;
             let projection = self
                 .math_projection(page_index, &fragment.math_id)

@@ -3,10 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
+use super::shared::{
+    MathSequenceEnd, math_environment_at_layout_path, math_flow_at_layout_path, math_sequence_path,
+};
 use super::{
-    DocumentLayoutSnapshot, MathSequenceEnd, MathTextVerticalTarget, MathTreeVerticalTarget,
-    PageCaretGeometry, PageMathStructureHit, math_environment_at_layout_path,
-    math_flow_at_layout_path, math_sequence_path,
+    DocumentLayoutSnapshot, MathTextVerticalTarget, MathTreeVerticalTarget, PageCaretGeometry,
+    PageMathStructureHit,
 };
 use crate::{
     MathEditTarget, MathPositionAffinity, MathPositionHost, MathSequencePath, MathSequenceStep,

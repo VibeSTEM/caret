@@ -242,7 +242,9 @@ fn mandatory_breaks_in_math_textflow_keep_multiline_metrics_and_page_glyphs() {
     }));
 
     let snapshot = layout(&document);
-    let text_layout = snapshot.math_block_text_layouts[&equation_id]
+    let text_layout = snapshot
+        .math_text_layouts_for_block(&equation_id)
+        .unwrap_or_else(|| panic!("equation sidecars should exist"))
         .values()
         .next()
         .unwrap_or_else(|| panic!("the equation should retain its text layout"));
@@ -410,7 +412,9 @@ fn math_text_run_and_environment_cover_the_trailing_empty_line_caret() {
                 _ => None,
             })
             .unwrap_or_else(|| panic!("text island missing: {text:?}"));
-        let sidecar = &snapshot.math_block_text_layouts[&equation_id][&token];
+        let sidecar = &snapshot
+            .math_text_layouts_for_block(&equation_id)
+            .unwrap_or_else(|| panic!("equation sidecars should exist"))[&token];
         let first_baseline = sidecar
             .layout
             .layout
@@ -536,8 +540,7 @@ fn math_text_font_and_reset_commands_reach_parley_and_page_glyphs() {
         .page_glyphs(0)
         .unwrap_or_else(|error| panic!("math text glyph extraction failed: {error}"));
     let sidecars = snapshot
-        .math_block_text_layouts
-        .get(&equation_id)
+        .math_text_layouts_for_block(&equation_id)
         .unwrap_or_else(|| panic!("equation text should publish Parley sidecars"));
     let mut signatures = Vec::new();
     for sidecar in sidecars.values() {
@@ -1079,7 +1082,7 @@ fn equation_and_align_blocks_paginate_and_use_the_shared_page_glyph_path() {
             && clip.y0 < clip.y1
     }));
     let align_projection = snapshot
-        .math_projections
+        .math_page_projections()
         .iter()
         .find(|projection| projection.math_id == align_id)
         .unwrap_or_else(|| panic!("Align should have a page projection"));
