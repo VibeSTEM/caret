@@ -1,11 +1,13 @@
 // Qt/QML 画布几何、输入和缩放行为的集成测试。
+#include "shell_document_canvas_test.hpp"
+
 #include "canvas_policy.hpp"
 #include "document_canvas.hpp"
 #include "document_canvas/scene_graph_geometry.hpp"
 #include "glyph_frame_adapter.hpp"
 #include "icon_provider.hpp"
 #include "layout_view_model.hpp"
-#include "shell_load_test.hpp"
+#include "shell_test_support.hpp"
 #include "theme_view_model.hpp"
 #ifdef CARET_ENABLE_APP
 #include "caret_ffi.h"
@@ -67,7 +69,7 @@
 #include <string_view>
 #include <utility>
 
-void ShellLoadTest::preeditCancellationDoesNotReenterTheInputMethodHandler() {
+void ShellDocumentCanvasTest::preeditCancellationDoesNotReenterTheInputMethodHandler() {
     caret::DocumentCanvas canvas;
     int event_count = 0;
     QObject::connect(&canvas, &caret::DocumentCanvas::inputMethodEventRequested, &canvas,
@@ -81,7 +83,7 @@ void ShellLoadTest::preeditCancellationDoesNotReenterTheInputMethodHandler() {
     QCOMPARE(event_count, 1);
 }
 
-void ShellLoadTest::mathSourceDisablesInputMethodAndCancelsPreedit() {
+void ShellDocumentCanvasTest::mathSourceDisablesInputMethodAndCancelsPreedit() {
     caret::DocumentCanvas canvas;
     int event_count = 0;
     QObject::connect(
@@ -106,7 +108,7 @@ void ShellLoadTest::mathSourceDisablesInputMethodAndCancelsPreedit() {
 }
 
 #ifdef CARET_ENABLE_APP
-void ShellLoadTest::glyphFrameAdapterRejectsFramesOutsideCanvasLimits() {
+void ShellDocumentCanvasTest::glyphFrameAdapterRejectsFramesOutsideCanvasLimits() {
     const auto invalid_scale_result =
         caret::glyph_frame_adapter::to_variant_map(caret::ffi::PageGlyphFrame{}, 0.0);
     QVERIFY(!invalid_scale_result.value(QStringLiteral("valid")).toBool());
@@ -171,7 +173,7 @@ void ShellLoadTest::glyphFrameAdapterRejectsFramesOutsideCanvasLimits() {
                 .toBool());
 }
 
-void ShellLoadTest::underlinedTextRendersTheRustFfiDecorationInTheQtCanvas() {
+void ShellDocumentCanvasTest::underlinedTextRendersTheRustFfiDecorationInTheQtCanvas() {
     const QPointF phase_baseline(10.0, 20.0);
     const QRectF adjusted_glyph_rect = caret::canvas_detail::glyph_image_rect(
         phase_baseline, QPointF(3.0, -8.0), QSizeF(7.0, 9.0), 2.0, QPointF(0.25, 0.5), true);
@@ -684,7 +686,7 @@ void ShellLoadTest::underlinedTextRendersTheRustFfiDecorationInTheQtCanvas() {
 }
 #endif
 
-void ShellLoadTest::canvasPolicyPublishesDocumentedZoomLimits() {
+void ShellDocumentCanvasTest::canvasPolicyPublishesDocumentedZoomLimits() {
     const caret::CanvasPolicy policy;
     QCOMPARE(policy.defaultZoomPercent(), 100);
     QCOMPARE(policy.minimumZoomPercent(), 50);
@@ -692,7 +694,7 @@ void ShellLoadTest::canvasPolicyPublishesDocumentedZoomLimits() {
     QCOMPARE(policy.zoomStepPercent(), 10);
 }
 
-void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
+void ShellDocumentCanvasTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     constexpr int kTestCursorFlashPeriodMs = 100;
     constexpr int kTestBlinkTransitionTimeoutMs = 500;
     constexpr int kDisabledBlinkObservationMs = 250;

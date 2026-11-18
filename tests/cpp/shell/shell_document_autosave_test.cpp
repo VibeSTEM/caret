@@ -1,5 +1,5 @@
 // 验证 Rust AutoSave 策略经 Qt 单次 deadline 写入当前文档修订。
-#include "shell_load_test.hpp"
+#include "shell_document_autosave_test.hpp"
 
 #ifdef CARET_ENABLE_APP
 #include "layout_view_model.hpp"
@@ -13,7 +13,7 @@
 #include <QtTest/qtestcase.h>
 #include <qcontainerfwd.h>
 
-void ShellLoadTest::autoSaveWritesTheCurrentRevisionAfterTheDeadline() {
+void ShellDocumentAutoSaveTest::autoSaveWritesTheCurrentRevisionAfterTheDeadline() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
 

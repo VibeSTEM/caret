@@ -7,6 +7,7 @@
 #include "preferences_view_model.hpp"
 #include "settings_dialog_controller.hpp"
 #include "settings_view_model.hpp"
+#include "shell_test_support.hpp"
 #include "theme_view_model.hpp"
 #include <cstddef>
 #ifdef CARET_ENABLE_APP
@@ -53,52 +54,6 @@
 #include <memory>
 #include <qcontainerfwd.h>
 #include <utility>
-
-Q_IMPORT_QML_PLUGIN(Caret_AdaptersPlugin)
-Q_IMPORT_QML_PLUGIN(Caret_ShellPlugin)
-Q_IMPORT_QML_PLUGIN(Caret_CanvasPlugin)
-Q_IMPORT_QML_PLUGIN(Caret_ViewModelsPlugin)
-
-namespace {} // namespace
-
-namespace caret::shell_test {
-
-QVariantMap snapshot_from_theme_facade(const QString& path, const QColor& background, int body) {
-    QFile file(path);
-    QVariantMap tokens;
-    if (!file.open(QIODevice::ReadOnly)) {
-        return tokens;
-    }
-    const QString source = QString::fromUtf8(file.readAll());
-    static const QRegularExpression declaration(
-        QStringLiteral("readonly property (color|int|real|string) (\\w+)"));
-    auto match = declaration.globalMatch(source);
-    while (match.hasNext()) {
-        const auto found = match.next();
-        const QString kind = found.captured(1);
-        const QString name = found.captured(2);
-        if (kind == QStringLiteral("color")) {
-            tokens.insert(name, QColor(QStringLiteral("#808080")));
-        } else if (kind == QStringLiteral("real")) {
-            tokens.insert(name, 0.5);
-        } else if (kind == QStringLiteral("string")) {
-            tokens.insert(name, QStringLiteral("caret"));
-        } else {
-            tokens.insert(name, 16);
-        }
-    }
-    tokens.insert(QStringLiteral("colorPanel"), background);
-    tokens.insert(QStringLiteral("colorPanelLine"), QColor(QStringLiteral("#c9c9c9")));
-    tokens.insert(QStringLiteral("colorTransparent"), QColor(Qt::transparent));
-    tokens.insert(QStringLiteral("colorCaret"), QColor(QStringLiteral("#1c1c1c")));
-    tokens.insert(QStringLiteral("caretWidthCentipixels"), 100);
-    tokens.insert(QStringLiteral("fontBody"), body);
-    return tokens;
-}
-
-} // namespace caret::shell_test
-
-void ShellLoadTest::initTestCase() { QQuickStyle::setStyle(QStringLiteral("Basic")); }
 
 void ShellLoadTest::moduleImportsAndThemeBindingTracksSnapshot() {
     const QString theme =
@@ -940,11 +895,4 @@ void ShellLoadTest::documentUnitsConvertThroughIntegerCentipixels() {
              std::numeric_limits<qint64>::max());
     QCOMPARE(units.factorToPercent(std::numeric_limits<qreal>::infinity()), 0);
     QCOMPARE(units.factorToPercent(std::numeric_limits<qreal>::max()), 0);
-}
-
-int main(int argc, char* argv[]) {
-    QQuickWindow::setSceneGraphBackend(QStringLiteral("software"));
-    const QGuiApplication app(argc, argv);
-    ShellLoadTest test;
-    return QTest::qExec(&test, argc, argv);
 }

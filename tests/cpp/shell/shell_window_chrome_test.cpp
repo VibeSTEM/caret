@@ -1,5 +1,6 @@
 // 验证标题栏指标对窗口替换、生命周期与系统几何事件的通知行为。
-#include "shell_load_test.hpp"
+#include "shell_window_chrome_test.hpp"
+
 #include "window_chrome_metrics.hpp"
 #include <QCoreApplication>
 #include <QEvent>
@@ -9,7 +10,7 @@
 #include <QtTest/qtestcase.h>
 #include <memory>
 
-void ShellLoadTest::windowChromeMetricsTracksWindowLifecycleAndRefreshEvents() {
+void ShellWindowChromeTest::windowChromeMetricsTracksWindowLifecycleAndRefreshEvents() {
     caret::WindowChromeMetrics metrics;
     QSignalSpy leading_spy(&metrics,
                            &caret::WindowChromeMetrics::leadingSystemControlsInsetChanged);

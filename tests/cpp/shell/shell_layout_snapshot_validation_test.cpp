@@ -1,5 +1,5 @@
 // 验证无效布局快照被拒绝且不会替换当前页面。
-#include "shell_load_test.hpp"
+#include "shell_layout_snapshot_validation_test.hpp"
 
 #ifdef CARET_ENABLE_APP
 #include "caret_ffi.h"
@@ -21,7 +21,8 @@
 #include <utility>
 
 #ifdef CARET_ENABLE_APP
-void ShellLoadTest::invalidLayoutSnapshotsAreRejectedWithoutReplacingPublishedPages() {
+void ShellLayoutSnapshotValidationTest::
+    invalidLayoutSnapshotsAreRejectedWithoutReplacingPublishedPages() {
     auto runtime = caret::ffi::new_blank_document_runtime();
     const rust::String empty_snapshot = caret::ffi::layout_snapshot_json(*runtime);
     QVERIFY(!std::string_view(empty_snapshot.data(), empty_snapshot.size()).starts_with("error:"));

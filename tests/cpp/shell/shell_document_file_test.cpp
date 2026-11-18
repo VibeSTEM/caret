@@ -1,5 +1,5 @@
 // 验证桌面文档的保存状态、失败保留与异步重开流程。
-#include "shell_load_test.hpp"
+#include "shell_document_file_test.hpp"
 
 #ifdef CARET_ENABLE_APP
 #include "caret_ffi.h"
@@ -19,30 +19,8 @@
 #include <QtTest/qtestcase.h>
 #include <cstddef>
 #include <cstdint>
-#include <string_view>
-#include <utility>
 
-bool ShellLoadTest::configureDocumentRecovery(const QString& recovery_root) {
-    const QByteArray root = recovery_root.toUtf8();
-    return caret::ffi::configure_document_recovery(
-               rust::String(root.constData(), static_cast<std::size_t>(root.size())))
-        .empty();
-}
-
-bool ShellLoadTest::installBlankDocumentRuntime() {
-    auto runtime = caret::ffi::new_blank_document_runtime();
-    const rust::String snapshot = caret::ffi::layout_snapshot_json(*runtime);
-    if (std::string_view(snapshot.data(), snapshot.size()).starts_with("error:")) {
-        return false;
-    }
-    if (!caret::install_layout_snapshot(
-            QString::fromUtf8(snapshot.data(), static_cast<qsizetype>(snapshot.size())))) {
-        return false;
-    }
-    return caret::install_document_runtime(std::move(runtime));
-}
-
-void ShellLoadTest::documentFileFlowPreservesSaveStateAndReopens() {
+void ShellDocumentFileTest::documentFileFlowPreservesSaveStateAndReopens() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
 
@@ -218,7 +196,7 @@ void ShellLoadTest::documentFileFlowPreservesSaveStateAndReopens() {
              QStringLiteral("段落追加！旧快照新快照"));
 }
 
-void ShellLoadTest::saveConflictCannotReplaceAPreviousDocumentAfterSaveAs() {
+void ShellDocumentFileTest::saveConflictCannotReplaceAPreviousDocumentAfterSaveAs() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
     QVERIFY(configureDocumentRecovery(directory.path()));
@@ -316,7 +294,7 @@ void ShellLoadTest::saveConflictCannotReplaceAPreviousDocumentAfterSaveAs() {
     QCOMPARE(copy_file.readAll(), external_copy);
 }
 
-void ShellLoadTest::confirmedConflictReplacementWritesCurrentDocument() {
+void ShellDocumentFileTest::confirmedConflictReplacementWritesCurrentDocument() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
     QVERIFY(configureDocumentRecovery(directory.path()));
@@ -380,7 +358,7 @@ void ShellLoadTest::confirmedConflictReplacementWritesCurrentDocument() {
 #endif
 
 #ifdef CARET_ENABLE_APP
-void ShellLoadTest::documentHistoryUndoRedoTracksRustSession() {
+void ShellDocumentFileTest::documentHistoryUndoRedoTracksRustSession() {
     QVERIFY(installBlankDocumentRuntime());
 
     caret::LayoutViewModel view_model;
