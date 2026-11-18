@@ -45,26 +45,30 @@ Window {
     onClosing: close => {
         if (allowClose)
             return;
-        close.accepted = false;
         if (LayoutViewModel.documentFileBusy) {
+            close.accepted = false;
             waitForCloseAfterFileOperation = true;
             return;
         }
         if (LayoutViewModel.documentMathSourceDraftPending) {
+            close.accepted = false;
             closeConfirmation.open();
             return;
         }
         if (PreferencesViewModel.autoSaveEnabled && LayoutViewModel.documentPath.length > 0 && LayoutViewModel.documentEdited) {
+            close.accepted = false;
             closeAfterSaveRequested = true;
             closeAfterSaveSucceeded = false;
             closeAfterAutoSaveFlush = true;
             Qt.callLater(rootWindow.saveDocument);
             return;
         }
-        if (LayoutViewModel.documentEdited)
+        if (LayoutViewModel.documentEdited) {
+            close.accepted = false;
             closeConfirmation.open();
-        else
-            closeWindow();
+        } else {
+            allowClose = true;
+        }
     }
 
     Component.onCompleted: {
@@ -324,6 +328,7 @@ Window {
 
     MessageDialog {
         id: documentOperationError
+        objectName: "documentOperationError"
         title: qsTr("Document operation failed")
         buttons: MessageDialog.Ok
         property string operationError: ""

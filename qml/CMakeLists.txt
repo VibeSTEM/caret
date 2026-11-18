@@ -145,6 +145,7 @@ if(BUILD_TESTING)
     ../tests/cpp/shell/shell_document_canvas_test.cpp
     ../tests/cpp/shell/shell_document_interaction_test.cpp
     ../tests/cpp/shell/shell_document_file_test.cpp
+    ../tests/cpp/shell/shell_document_close_test.cpp
     ../tests/cpp/shell/shell_document_navigation_test.cpp
     ../tests/cpp/shell/shell_layout_snapshot_validation_test.cpp
     ../tests/cpp/shell/shell_document_autosave_test.cpp
@@ -197,6 +198,24 @@ if(BUILD_TESTING)
   if(CARET_ENABLE_APP)
     caret_add_qml_test(Qml.PreferencesWithoutRuntime caret_shell_load_test qml
                        preferencesWithoutRuntimeRejectChangesAndKeepDefaults)
+    caret_add_qml_test(Qml.CloseUnedited caret_shell_load_test qml
+                       closingAnUneditedWindowClosesImmediately)
+    caret_add_qml_test(Qml.CloseCancelEdited caret_shell_load_test qml
+                       cancellingEditedDocumentCloseKeepsChanges)
+    caret_add_qml_test(Qml.CloseDiscardEdited caret_shell_load_test qml
+                       discardingEditedDocumentClosesWithoutSaving)
+    caret_add_qml_test(Qml.CloseSaveEdited caret_shell_load_test qml
+                       savingEditedDocumentBeforeClosePersistsChanges)
+    caret_add_qml_test(Qml.CloseAutoSaveFlush caret_shell_load_test qml
+                       autoSaveFlushCompletesBeforeClosing)
+    caret_add_qml_test(Qml.CloseAutoSaveFailure caret_shell_load_test qml
+                       autoSaveFailureReopensCloseConfirmation)
+    caret_add_qml_test(Qml.CloseInFlightSaveFailure caret_shell_load_test qml
+                       closeRequestDuringFailedSaveDoesNotReopenConfirmation)
+    caret_add_qml_test(Qml.CloseSaveConflict caret_shell_load_test qml
+                       saveConflictKeepsWindowAndRecoveryCopy)
+    caret_add_qml_test(Qml.CloseRecoveryWriteFailure caret_shell_load_test qml
+                       recoveryWriteFailureReopensCloseConfirmation)
   endif()
 
   find_program(

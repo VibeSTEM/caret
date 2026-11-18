@@ -24,8 +24,17 @@ class ShellLoadTest : public QObject {
     void unknownIconRefusesColoring();
     void documentModeSelectorTracksLocalChoice();
     void newDocumentDialogHasNoProcessFields();
-    void unsavedChangesDialogUsesStyledActionsInRequestedOrder();
-    void closeFailureDoesNotReopenPendingConfirmation();
+#ifdef CARET_ENABLE_APP
+    void closingAnUneditedWindowClosesImmediately();
+    void cancellingEditedDocumentCloseKeepsChanges();
+    void discardingEditedDocumentClosesWithoutSaving();
+    void savingEditedDocumentBeforeClosePersistsChanges();
+    void autoSaveFlushCompletesBeforeClosing();
+    void autoSaveFailureReopensCloseConfirmation();
+    void closeRequestDuringFailedSaveDoesNotReopenConfirmation();
+    void saveConflictKeepsWindowAndRecoveryCopy();
+    void recoveryWriteFailureReopensCloseConfirmation();
+#endif
     void documentCanvasMapsPageCoordinatesAndHitsPages();
     void documentUnitsConvertThroughIntegerCentipixels();
     void canvasPolicyPublishesDocumentedZoomLimits();
