@@ -256,21 +256,8 @@ Item {
     }
 
     function comparePosition(left, right) {
-        if (left.kind === "body" && right.kind === "body") {
-            if (left.paragraphIndex !== right.paragraphIndex)
-                return left.paragraphIndex < right.paragraphIndex ? -1 : 1;
-            return compareDecimal(left.orderUtf8, right.orderUtf8);
-        }
-        if (left.kind === "math" && right.kind === "math")
-            return compareDecimal(left.orderUtf8, right.orderUtf8);
-        return 0;
-    }
-
-    function compareDecimal(left, right) {
-        const leftValue = String(left);
-        const rightValue = String(right);
-        if (leftValue.length !== rightValue.length)
-            return leftValue.length < rightValue.length ? -1 : 1;
-        return leftValue < rightValue ? -1 : (leftValue > rightValue ? 1 : 0);
+        if (left.kind !== "math" || right.kind !== "math")
+            return 0;
+        return left.orderOrdinal < right.orderOrdinal ? -1 : (left.orderOrdinal > right.orderOrdinal ? 1 : 0);
     }
 }

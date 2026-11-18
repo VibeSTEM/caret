@@ -29,9 +29,11 @@ class ShellLoadTest : public QObject {
     void cancellingEditedDocumentCloseKeepsChanges();
     void discardingEditedDocumentClosesWithoutSaving();
     void savingEditedDocumentBeforeClosePersistsChanges();
+    void unnamedDocumentSaveAsContinuesCloseAndCancelCanRetry();
     void autoSaveFlushCompletesBeforeClosing();
     void autoSaveFailureReopensCloseConfirmation();
     void closeRequestDuringFailedSaveDoesNotReopenConfirmation();
+    void unrelatedFileFailuresDoNotCorruptCloseSaveState();
     void saveConflictKeepsWindowAndRecoveryCopy();
     void recoveryWriteFailureReopensCloseConfirmation();
 #endif

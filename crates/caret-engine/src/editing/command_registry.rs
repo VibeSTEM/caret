@@ -267,7 +267,39 @@ pub fn math_candidates() -> Vec<CommandCandidate> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MATH_INSERT_COMMAND_ID, math_candidates};
+    use super::{CANDIDATES, MATH_CANDIDATES, MATH_INSERT_COMMAND_ID, math_candidates};
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn command_completion_translation_sources_match_the_rust_registry() {
+        let qml = include_str!("../../../../qml/Canvas/CommandSuggestionPopup.qml");
+        let start_index = qml.find("function translationSourcesForLupdateOnly() {");
+        assert!(
+            start_index.is_some(),
+            "generated translation sources should exist"
+        );
+        let start = start_index.unwrap_or_default();
+        let end_index = qml[start..]
+            .find("function labelFor(candidate)")
+            .map(|offset| start + offset);
+        assert!(
+            end_index.is_some(),
+            "candidate label renderer should follow translation sources"
+        );
+        let end = end_index.unwrap_or(start);
+        let marker = "qsTranslate(\"CommandCompletion\", \"";
+        let actual = qml[start..end]
+            .split(marker)
+            .skip(1)
+            .filter_map(|tail| tail.split_once("\")").map(|(label, _)| label))
+            .collect::<BTreeSet<_>>();
+        let expected = CANDIDATES
+            .iter()
+            .map(|candidate| candidate.label)
+            .chain(MATH_CANDIDATES.iter().map(|(_, label, _)| *label))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(actual, expected);
+    }
 
     #[test]
     fn math_text_command_is_registered_as_an_insertable_text_island() {

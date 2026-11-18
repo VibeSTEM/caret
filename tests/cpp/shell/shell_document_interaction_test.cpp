@@ -469,7 +469,7 @@ void ShellLoadTest::commandLineQueryProjectsRustCandidatesWithoutEditingTheDocum
     QCOMPARE(candidates.size(), 1);
     const QVariantMap candidate = candidates.first().toMap();
     QCOMPARE(candidate.value(QStringLiteral("alias")).toString(), QStringLiteral("\\section"));
-    QVERIFY(!candidate.contains(QStringLiteral("label")));
+    QCOMPARE(candidate.value(QStringLiteral("label")).toString(), QStringLiteral("Section"));
     QCOMPARE(view_model->documentGeneration(), QStringLiteral("0"));
 
     const QVariantMap complete = view_model->commandLineCommand(QStringLiteral("tab"));

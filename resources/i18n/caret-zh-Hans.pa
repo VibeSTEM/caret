@@ -70,6 +70,26 @@ message_121:
   tr: 替换此文档前，请完成或取消尚未完成的公式编辑。
   st: finished
 
+message_122:
+  src: The document operation could not be completed.
+  tr: 文档操作未能完成。
+  st: finished
+
+message_123:
+  src: The recovery operation could not be completed.
+  tr: 恢复操作未能完成。
+  st: finished
+
+message_124:
+  src: Automatic saving could not be completed.
+  tr: 自动保存未能完成。
+  st: finished
+
+message_125:
+  src: The settings could not be saved.
+  tr: 设置无法保存。
+  st: finished
+
 [DialogAction]
 message_012:
   src: OK
@@ -855,4 +875,9 @@ message_157:
 message_158:
   src: Text
   tr: 文本
+  st: finished
+
+message_159:
+  src: Default font
+  tr: 默认字体
   st: finished

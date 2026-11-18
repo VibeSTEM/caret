@@ -16,6 +16,10 @@ Caret 有两类不同用途的背景：
 
 结构选区覆盖的 Equation/Align 属于文本选区层：Rust 用同代布局快照的 MathFragment 生成整栏对象矩形，与选区端点文本矩形、块环境范围矩形合并后交给选区绘制；它不是块焦点高亮，只在范围完整覆盖该公式对象时出现。公式宿主内部的 MathTree 局部选区也属于文本选区层：Rust 从同代布局快照把同一结构序列中锚点到焦点之间的结构项盒投影为选区矩形，嵌套 Math/Environment 作为整体、Align 按所属行裁切，空范围不发布矩形；Qt 只消费该矩形列表，不重算公式内部选区。块与 inline 焦点是文稿画布内容的临时视觉投影。Paragraph 虽是 Block，但普通段落焦点不自动产生块背景；只有活动环境或公式适配器提供有效高亮范围时才绘制块底色。两个层级可同时显示，各取本层级的活动范围；Qt/QML 保留并绘制两组独立矩形与颜色。文本范围按视觉行切片，公式块使用 MathFragment，数学文本使用 TextFlow island 几何。InlineMath 和 InlineEnvironment 共用 inline 空范围槽位策略：MathBox 已有占位宽度时复用其几何；空格式环境或活动的空光标 PendingInlineStyle 则以布局提供的 caret/行框几何生成非零背景槽位，不能因范围长度为零或尚未产生环境节点就丢失活动反馈。槽位仅用于绘制，不创建文档字符或环境节点；PendingInlineStyle 关闭或焦点移走后不再投影。所有几何必须与页面缩放、分页裁剪、文字、选区和光标处于同一画布坐标与场景图顺序中。Rust 提供领域范围及布局几何，Qt 校验快照并合并同视觉层的来源，QSG 在字形之前绘制背景；这些层不遍历文档树、不重复塑形，也不改写文档或布局状态。
 
+## 公式文本岛拖选
+
+数学文本岛的拖选停靠点与片段端点由 Rust 从同代布局快照生成。位置同时提供十进制字符串 `orderUtf8` 与可直接供界面比较的数值 `orderOrdinal`，二者表示同一 UTF-8 字节边界；MathTree 的 8 MiB 负载上限使该数值可由 JavaScript 精确表示。该序号只在相同 `domainId`、相同布局快照内有序，不定义正文段落或不同宿主之间的全序。QML 只在拖选预览时按这个局部序号筛选区间相交的片段，松手时仍将停靠点交给 Rust 一次性提交选区；正文拖选继续直接提交 Rust 选区投影。
+
 ## 活动公式焦点
 
 活动 MathEdit target 为块级 Equation 或 Align 时，Rust 以经过 revision 校验的 `MathEditTarget::Block` 匹配同代 `MathFragment`，生成奶油黄宿主矩形。矩形横跨页面版心宽度，纵向采用 MathFragment 的位置与高度并裁切到页面；Align 按整个宿主着色，不单独着色 cell。InlineMath 不产生块背景。

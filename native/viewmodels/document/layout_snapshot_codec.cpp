@@ -218,6 +218,7 @@ bool parse_command_line(const QJsonValue& value, QVariantMap& result, QString& e
             const QJsonObject candidate = candidate_value.toObject();
             if (!candidate.value(QStringLiteral("alias")).isString() ||
                 !candidate.value(QStringLiteral("commandId")).isString() ||
+                !candidate.value(QStringLiteral("label")).isString() ||
                 !candidate.value(QStringLiteral("available")).isBool()) {
                 error = QStringLiteral("layout.invalid_command_candidate");
                 return false;

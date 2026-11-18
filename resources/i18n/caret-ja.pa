@@ -70,6 +70,26 @@ message_121:
   tr: この文書を置き換える前に、未完了の数式編集を完了するかキャンセルしてください。
   st: finished
 
+message_122:
+  src: The document operation could not be completed.
+  tr: 文書の操作を完了できませんでした。
+  st: finished
+
+message_123:
+  src: The recovery operation could not be completed.
+  tr: 復元操作を完了できませんでした。
+  st: finished
+
+message_124:
+  src: Automatic saving could not be completed.
+  tr: 自動保存を完了できませんでした。
+  st: finished
+
+message_125:
+  src: The settings could not be saved.
+  tr: 設定を保存できませんでした。
+  st: finished
+
 [DialogAction]
 message_012:
   src: OK
@@ -855,4 +875,9 @@ message_157:
 message_158:
   src: Text
   tr: テキスト
+  st: finished
+
+message_159:
+  src: Default font
+  tr: 既定のフォント
   st: finished

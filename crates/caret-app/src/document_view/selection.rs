@@ -756,6 +756,8 @@ fn math_hit_stop_json(
             "fontGeneration": snapshot.font_generation.to_string(),
             "token": stop.token,
             "orderUtf8": stop.order_utf8.to_string(),
+            // MathTree 的 UTF-8 负载上限为 8 MiB，因此此数值可由 JavaScript 精确表示。
+            "orderOrdinal": stop.order_utf8 as u64,
             "offsetUtf8": stop.position.offset.to_string(),
             "affinity": math_affinity_name(stop.position.affinity),
             "visualAffinity": visual_affinity_name(stop.visual_affinity),
@@ -834,10 +836,12 @@ fn math_segment_json(
         "startPosition": {
             "kind": "math",
             "orderUtf8": start_offset.to_string(),
+            "orderOrdinal": start_offset as u64,
         },
         "endPosition": {
             "kind": "math",
             "orderUtf8": end_offset.to_string(),
+            "orderOrdinal": end_offset as u64,
         },
     });
     if let Some(object) = segment.as_object_mut() {

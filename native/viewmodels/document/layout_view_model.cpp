@@ -6,10 +6,12 @@
 #include "layout_view_model.hpp"
 
 #include "layout_snapshot_codec.hpp"
+#include <QCoreApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
+#include <QLatin1Char>
 #include <QObject>
 #include <QString>
 #include <qtmetamacros.h>
@@ -70,6 +72,39 @@ LayoutViewModel::LayoutViewModel(QObject* parent) : QObject(parent) {
     m_math_text_highlight_rects = parsed_snapshot.math_text_highlight_rects;
     m_document_generation = parsed_snapshot.document_generation;
     m_font_generation = parsed_snapshot.font_generation;
+}
+
+QString LayoutViewModel::documentOperationMessage(const QString& error) const {
+    const QString normalized_error = error.startsWith(QStringLiteral("error:"))
+                                         ? error.mid(QStringLiteral("error:").size())
+                                         : error;
+    const QString code = normalized_error.section(QLatin1Char(':'), 0, 0);
+    if (code == QStringLiteral("document.save_incomplete_math_source_draft")) {
+        return QCoreApplication::translate(
+            "App", "Finish or cancel the incomplete formula edit before saving this document.");
+    }
+    if (code == QStringLiteral("document.math_incomplete_source_draft")) {
+        return QCoreApplication::translate(
+            "App", "Finish or cancel the incomplete formula edit before replacing this document.");
+    }
+    if (code == QStringLiteral("document.folder_unavailable")) {
+        return QCoreApplication::translate("App", "The document folder is unavailable.");
+    }
+    if (code.startsWith(QStringLiteral("document.")) || code.startsWith(QStringLiteral("cdoc."))) {
+        return QCoreApplication::translate("App", "The document operation could not be completed.");
+    }
+    if (code.startsWith(QStringLiteral("recovery."))) {
+        return QCoreApplication::translate("App", "The recovery operation could not be completed.");
+    }
+    if (code.startsWith(QStringLiteral("autosave."))) {
+        return QCoreApplication::translate("App", "Automatic saving could not be completed.");
+    }
+    if (code.startsWith(QStringLiteral("preferences.")) ||
+        code.startsWith(QStringLiteral("settings.")) ||
+        code.startsWith(QStringLiteral("language."))) {
+        return QCoreApplication::translate("App", "The settings could not be saved.");
+    }
+    return QCoreApplication::translate("App", "An unknown error occurred.");
 }
 
 bool LayoutViewModel::installSnapshot(const QString& snapshot_json, bool replace_document) {
