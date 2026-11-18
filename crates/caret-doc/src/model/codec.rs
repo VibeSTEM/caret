@@ -5,6 +5,7 @@
 
 use super::*;
 use serde_json::Map;
+use std::collections::BTreeSet;
 
 pub(crate) fn block_from_value(value: Value) -> Result<Block, ModelError> {
     let Some(object) = value.as_object() else {
@@ -13,18 +14,26 @@ pub(crate) fn block_from_value(value: Value) -> Result<Block, ModelError> {
         ));
     };
     match object.get("type").and_then(Value::as_str) {
-        Some("equation") if supported_math_tree(object.get("mathTree")) => {
-            serde_json::from_value(without_fields(value, &["type"])?)
-                .map(Block::Equation)
-                .map_err(|error| ModelError::InvalidDocument(error.to_string()))
+        Some("equation") => {
+            let mut ids = BTreeSet::new();
+            if !valid_node_id(object) || !insert_known_id(object, &mut ids) {
+                return Err(invalid_math_encoding("equation id"));
+            }
+            match supported_math_tree_with_ids(object.get("mathTree"), &mut ids) {
+                MathTreeSupport::Known => serde_json::from_value(without_fields(value, &["type"])?)
+                    .map(Block::Equation)
+                    .map_err(|error| ModelError::InvalidDocument(error.to_string())),
+                MathTreeSupport::FutureOpaque => Ok(Block::Opaque(OpaqueNode { raw: value })),
+                MathTreeSupport::Invalid => Err(invalid_math_encoding("equation mathTree")),
+            }
         }
-        Some("equation") => Ok(Block::Opaque(OpaqueNode { raw: value })),
-        Some("align") if supported_align(object) => {
-            serde_json::from_value(without_fields(value, &["type"])?)
+        Some("align") => match supported_align(object) {
+            MathTreeSupport::Known => serde_json::from_value(without_fields(value, &["type"])?)
                 .map(Block::Align)
-                .map_err(|error| ModelError::InvalidDocument(error.to_string()))
-        }
-        Some("align") => Ok(Block::Opaque(OpaqueNode { raw: value })),
+                .map_err(|error| ModelError::InvalidDocument(error.to_string())),
+            MathTreeSupport::FutureOpaque => Ok(Block::Opaque(OpaqueNode { raw: value })),
+            MathTreeSupport::Invalid => Err(invalid_math_encoding("align mathTree")),
+        },
         Some("paragraph") => serde_json::from_value(without_fields(value, &["type"])?)
             .map(Block::Paragraph)
             .map_err(|error| ModelError::InvalidDocument(error.to_string())),
@@ -49,12 +58,21 @@ pub(crate) fn paragraph_content_from_value(value: Value) -> Result<ParagraphCont
         ));
     };
     match object.get("type").and_then(Value::as_str) {
-        Some("inlineMath") if supported_math_tree(object.get("mathTree")) => {
-            serde_json::from_value(without_fields(value, &["type"])?)
-                .map(ParagraphContent::Math)
-                .map_err(|error| ModelError::InvalidDocument(error.to_string()))
+        Some("inlineMath") => {
+            let mut ids = BTreeSet::new();
+            if !valid_node_id(object) || !insert_known_id(object, &mut ids) {
+                return Err(invalid_math_encoding("inlineMath id"));
+            }
+            match supported_math_tree_with_ids(object.get("mathTree"), &mut ids) {
+                MathTreeSupport::Known => serde_json::from_value(without_fields(value, &["type"])?)
+                    .map(ParagraphContent::Math)
+                    .map_err(|error| ModelError::InvalidDocument(error.to_string())),
+                MathTreeSupport::FutureOpaque => {
+                    Ok(ParagraphContent::Opaque(OpaqueNode { raw: value }))
+                }
+                MathTreeSupport::Invalid => Err(invalid_math_encoding("inlineMath mathTree")),
+            }
         }
-        Some("inlineMath") => Ok(ParagraphContent::Opaque(OpaqueNode { raw: value })),
         Some("text") if object.get("runs").is_some() && !object.contains_key("text") => {
             parse_text_flow(value).map(ParagraphContent::Text)
         }
@@ -127,88 +145,266 @@ fn parse_text_flow(value: Value) -> Result<TextFlow, ModelError> {
     })
 }
 
-/// 判定原始 JSON 是否声明当前数学树 schema，且根流属于当前解码器可解释的形态。
-fn supported_math_tree(value: Option<&Value>) -> bool {
-    let Some(tree) = value else {
-        return false;
-    };
-    super::MathTree::storage_schema_is_current(tree)
-        && tree
-            .get("root")
-            .is_some_and(|root| supported_math_flow(root, None))
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MathTreeSupport {
+    Known,
+    FutureOpaque,
+    Invalid,
 }
 
-fn supported_math_flow(value: &Value, parent: Option<super::MathNodeKind>) -> bool {
-    let Some(flow) = value.as_object() else {
-        return false;
-    };
-    flow.get("content")
-        .and_then(Value::as_array)
-        .is_some_and(|content| {
-            content
-                .iter()
-                .all(|item| match item.get("type").and_then(Value::as_str) {
-                    Some("math") => supported_math_node(item, parent),
-                    Some("text") => {
-                        item.get("runs")
-                            .and_then(Value::as_array)
-                            .is_some_and(|runs| runs.iter().all(Value::is_object))
-                            && item.get("text").is_none()
-                    }
-                    Some("softBreak") => true,
-                    Some("environment")
-                        if item.get("scope").and_then(Value::as_str) == Some("inline") =>
-                    {
-                        item.get("kind")
-                            .and_then(Value::as_str)
-                            .and_then(InlineEnvironmentKind::from_storage_name)
-                            .is_some()
-                            && item
-                                .get("children")
-                                .and_then(Value::as_array)
-                                .is_some_and(|children| children.iter().all(supported_math_content))
-                    }
-                    _ => false,
-                })
-        })
-}
-
-fn supported_math_content(value: &Value) -> bool {
-    let Some(content) = value.as_object() else {
-        return false;
-    };
-    match content.get("type").and_then(Value::as_str) {
-        Some("math") => supported_math_node(value, None),
-        Some("text") => {
-            content
-                .get("runs")
-                .and_then(Value::as_array)
-                .is_some_and(|runs| runs.iter().all(Value::is_object))
-                && content.get("text").is_none()
+impl MathTreeSupport {
+    fn combine(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Invalid, _) | (_, Self::Invalid) => Self::Invalid,
+            (Self::FutureOpaque, _) | (_, Self::FutureOpaque) => Self::FutureOpaque,
+            _ => Self::Known,
         }
-        Some("softBreak") => true,
-        Some("environment") if content.get("scope").and_then(Value::as_str) == Some("inline") => {
-            let kind = content.get("kind").and_then(Value::as_str);
-            kind.and_then(InlineEnvironmentKind::from_storage_name)
-                .is_some()
-                && content
-                    .get("children")
-                    .and_then(Value::as_array)
-                    .is_some_and(|children| children.iter().all(supported_math_content))
-        }
-        _ => false,
     }
 }
 
-fn supported_align(object: &Map<String, Value>) -> bool {
-    let Some(rows) = object.get("rows").and_then(Value::as_array) else {
+fn invalid_math_encoding(where_: &str) -> ModelError {
+    ModelError::InvalidDocument(format!("invalid known math encoding: {where_}"))
+}
+
+fn valid_node_id(object: &Map<String, Value>) -> bool {
+    object
+        .get("id")
+        .and_then(Value::as_str)
+        .and_then(|id| NodeId::parse(id.to_owned()).ok())
+        .is_some()
+}
+
+/// 判定当前数学树的编码：当前节点严格校验，未来节点只允许作为不透明数据保留。
+pub(crate) fn supported_math_tree(value: Option<&Value>) -> MathTreeSupport {
+    supported_math_tree_with_ids(value, &mut BTreeSet::new())
+}
+
+fn supported_math_tree_with_ids(
+    value: Option<&Value>,
+    ids: &mut BTreeSet<String>,
+) -> MathTreeSupport {
+    let Some(tree) = value.and_then(Value::as_object) else {
+        return MathTreeSupport::Invalid;
+    };
+    let Some(version) = tree.get("schemaVersion").and_then(Value::as_u64) else {
+        return MathTreeSupport::Invalid;
+    };
+    if version > super::MATH_TREE_SCHEMA_VERSION as u64 {
+        return MathTreeSupport::FutureOpaque;
+    }
+    if version != super::MATH_TREE_SCHEMA_VERSION as u64 {
+        return MathTreeSupport::Invalid;
+    }
+    let Some(root) = tree.get("root") else {
+        return MathTreeSupport::Invalid;
+    };
+    let support = supported_math_flow(root, None);
+    if support == MathTreeSupport::Invalid {
+        return support;
+    }
+    if support == MathTreeSupport::FutureOpaque && !known_math_ids_are_unique(root, ids) {
+        return MathTreeSupport::Invalid;
+    }
+    support
+}
+
+fn known_math_ids_are_unique(flow: &Value, ids: &mut BTreeSet<String>) -> bool {
+    let Some(flow) = flow.as_object() else {
         return false;
     };
-    rows.iter().all(|row| {
-        row.as_object()
-            .and_then(|row| row.get("cells"))
-            .and_then(Value::as_array)
-            .is_some_and(|cells| cells.iter().all(|cell| supported_math_tree(Some(cell))))
+    if !insert_known_id(flow, ids) {
+        return false;
+    }
+    let Some(content) = flow.get("content").and_then(Value::as_array) else {
+        return false;
+    };
+    content
+        .iter()
+        .all(|item| known_math_ids_are_unique_in_content(item, ids))
+}
+
+fn known_math_ids_are_unique_in_content(value: &Value, ids: &mut BTreeSet<String>) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    if object.get("type").and_then(Value::as_str) == Some("math") {
+        let Some(kind) = object.get("kind").and_then(Value::as_str) else {
+            return false;
+        };
+        if serde_json::from_value::<super::MathNodeKind>(Value::String(kind.to_owned())).is_err() {
+            return true;
+        }
+        return insert_known_id(object, ids)
+            && object.get("children").is_none_or(|children| {
+                children.as_array().is_some_and(|children| {
+                    children
+                        .iter()
+                        .all(|child| known_math_ids_are_unique(child, ids))
+                })
+            });
+    }
+    if object.get("type").and_then(Value::as_str) == Some("environment")
+        && object.get("scope").and_then(Value::as_str) == Some("inline")
+    {
+        let Some(kind) = object.get("kind").and_then(Value::as_str) else {
+            return false;
+        };
+        return InlineEnvironmentKind::from_storage_name(kind).is_none()
+            || (insert_known_id(object, ids)
+                && object
+                    .get("children")
+                    .and_then(Value::as_array)
+                    .is_some_and(|children| {
+                        children
+                            .iter()
+                            .all(|child| known_math_ids_are_unique_in_content(child, ids))
+                    }));
+    }
+    true
+}
+
+fn insert_known_id(object: &Map<String, Value>, ids: &mut BTreeSet<String>) -> bool {
+    object
+        .get("id")
+        .and_then(Value::as_str)
+        .is_some_and(|id| ids.insert(id.to_owned()))
+}
+
+fn supported_math_flow(value: &Value, parent: Option<super::MathNodeKind>) -> MathTreeSupport {
+    let Some(flow) = value.as_object() else {
+        return MathTreeSupport::Invalid;
+    };
+    if !valid_node_id(flow) {
+        return MathTreeSupport::Invalid;
+    }
+    let Some(content) = flow.get("content").and_then(Value::as_array) else {
+        return MathTreeSupport::Invalid;
+    };
+    content.iter().fold(MathTreeSupport::Known, |result, item| {
+        result.combine(supported_math_content_with_parent(item, parent))
+    })
+}
+
+fn supported_math_content(value: &Value) -> MathTreeSupport {
+    supported_math_content_with_parent(value, None)
+}
+
+fn supported_math_content_with_parent(
+    value: &Value,
+    parent: Option<super::MathNodeKind>,
+) -> MathTreeSupport {
+    let Some(content) = value.as_object() else {
+        return MathTreeSupport::Invalid;
+    };
+    match content.get("type").and_then(Value::as_str) {
+        Some("math") => supported_math_node(value, parent),
+        Some("text") => supported_math_text(value),
+        Some("softBreak") => MathTreeSupport::Known,
+        Some("environment") => match content.get("scope").and_then(Value::as_str) {
+            Some("inline") => supported_inline_environment(value),
+            Some("block") => MathTreeSupport::Invalid,
+            Some(_) => MathTreeSupport::FutureOpaque,
+            None => MathTreeSupport::Invalid,
+        },
+        Some(_) => MathTreeSupport::FutureOpaque,
+        None => MathTreeSupport::Invalid,
+    }
+}
+
+fn supported_math_text(value: &Value) -> MathTreeSupport {
+    let Some(object) = value.as_object() else {
+        return MathTreeSupport::Invalid;
+    };
+    if object.contains_key("text") || !matches!(object.get("runs"), Some(Value::Array(_))) {
+        return MathTreeSupport::Invalid;
+    }
+    let Ok(value) = without_fields(value.clone(), &["type"]) else {
+        return MathTreeSupport::Invalid;
+    };
+    let Ok(text) = serde_json::from_value::<TextFlow>(value) else {
+        return MathTreeSupport::Invalid;
+    };
+    if text
+        .runs
+        .iter()
+        .any(|run| super::validation::validate_run(run).is_err())
+    {
+        MathTreeSupport::Invalid
+    } else {
+        MathTreeSupport::Known
+    }
+}
+
+fn supported_inline_environment(value: &Value) -> MathTreeSupport {
+    let Some(object) = value.as_object() else {
+        return MathTreeSupport::Invalid;
+    };
+    let Some(kind_name) = object.get("kind").and_then(Value::as_str) else {
+        return MathTreeSupport::Invalid;
+    };
+    let Some(kind) = InlineEnvironmentKind::from_storage_name(kind_name) else {
+        return MathTreeSupport::FutureOpaque;
+    };
+    if !valid_node_id(object) {
+        return MathTreeSupport::Invalid;
+    }
+    if object
+        .get("definitionId")
+        .is_some_and(|value| !value.is_null() && !value.is_string())
+    {
+        return MathTreeSupport::Invalid;
+    }
+    let props = match object.get("props") {
+        None => BTreeMap::new(),
+        Some(Value::Object(props)) => props.clone().into_iter().collect(),
+        Some(_) => return MathTreeSupport::Invalid,
+    };
+    if super::validation::validate_environment_props(kind, &props).is_err() {
+        return MathTreeSupport::Invalid;
+    }
+    let Some(children) = object.get("children").and_then(Value::as_array) else {
+        return MathTreeSupport::Invalid;
+    };
+    children
+        .iter()
+        .fold(MathTreeSupport::Known, |state, child| {
+            state.combine(supported_math_content(child))
+        })
+}
+
+fn supported_align(object: &Map<String, Value>) -> MathTreeSupport {
+    if !valid_node_id(object) {
+        return MathTreeSupport::Invalid;
+    }
+    let Some(rows) = object.get("rows").and_then(Value::as_array) else {
+        return MathTreeSupport::Invalid;
+    };
+    let mut ids = BTreeSet::new();
+    if !insert_known_id(object, &mut ids) {
+        return MathTreeSupport::Invalid;
+    }
+    rows.iter().fold(MathTreeSupport::Known, |result, row| {
+        let Some(row) = row.as_object() else {
+            return result.combine(MathTreeSupport::Invalid);
+        };
+        if !valid_node_id(row) || !insert_known_id(row, &mut ids) {
+            return result.combine(MathTreeSupport::Invalid);
+        }
+        let Some(cells) = row.get("cells").and_then(Value::as_array) else {
+            return result.combine(MathTreeSupport::Invalid);
+        };
+        cells.iter().fold(result, |state, cell| {
+            let tree_support = supported_math_tree(Some(cell));
+            let unique = !super::MathTree::storage_schema_is_current(cell)
+                || cell
+                    .get("root")
+                    .is_none_or(|root| known_math_ids_are_unique(root, &mut ids));
+            state.combine(if unique {
+                tree_support
+            } else {
+                MathTreeSupport::Invalid
+            })
+        })
     })
 }
 
@@ -220,31 +416,19 @@ impl super::MathTree {
     }
 }
 
-/// 类型解码器与 raw 扫描对畸形数学 JSON 的既有容忍边界。
+/// raw 扫描历史边界策略。
 ///
-/// 两条路径历史上对同一份 JSON 可能给出不同结论：类型解码器把非字符串 `text`
-/// 视为缺失，但要求操作数流能给出确定的类别；raw 扫描把非字符串 `text` 视为
-/// 不可解释，却把类别无法确定的单元素操作数流按 `Row` 继续检查。共享实现必须
-/// 保留这两套输入边界，由调用方显式选择，不能向任何一侧对齐。
+/// 类型解码严格校验已知节点；raw 扫描保留较早的输入容忍政策，以免改变
+/// capability/retired-field 扫描的遍历范围。
 #[derive(Clone, Copy)]
 struct MathNodeSupportPolicy {
-    text: MathTextPolicy,
     flows: MathFlowKindPolicy,
-}
-
-/// `text` 字段的既有容忍边界。
-#[derive(Clone, Copy)]
-enum MathTextPolicy {
-    /// 类型解码器：非字符串 `text` 按缺失处理。
-    Lenient,
-    /// raw 扫描：非字符串 `text` 视为不可解释。
-    Strict,
 }
 
 /// 操作数流 primary kind 的既有推断方式。
 #[derive(Clone, Copy)]
 enum MathFlowKindPolicy {
-    /// 类型解码器：任一操作数流无法确定 primary kind 即视为不可解释。
+    /// 类型解码器：按 typed 校验规则取首个已知数学项，未知项不改变槽位推断。
     Decoder,
     /// raw 退役字段扫描：类别无法确定的单元素操作数流按 `Row` 继续检查。
     RawScan,
@@ -254,15 +438,12 @@ enum MathFlowKindPolicy {
 
 impl MathNodeSupportPolicy {
     const DECODER: Self = Self {
-        text: MathTextPolicy::Lenient,
         flows: MathFlowKindPolicy::Decoder,
     };
     const RAW_SCAN: Self = Self {
-        text: MathTextPolicy::Strict,
         flows: MathFlowKindPolicy::RawScan,
     };
     const RAW_CAPABILITY: Self = Self {
-        text: MathTextPolicy::Strict,
         flows: MathFlowKindPolicy::RawCapability,
     };
 }
@@ -270,8 +451,9 @@ impl MathNodeSupportPolicy {
 impl super::MathNodeKind {
     /// 判定单个原始数学节点是否为类型解码器可解释的形态。
     ///
-    /// 返回值是该节点的类别；`None` 表示只能按不透明数据处理。与 raw 扫描共用同一
-    /// 属性/结构实现，但保留类型解码器的既有输入边界（见 `MathNodeSupportPolicy`）。
+    /// 返回值是该节点的类别；`None` 表示当前 schema 的节点字段或结构无效。未知 kind
+    /// 在此调用前由 raw JSON 边界识别为未来格式。与 raw 扫描共用属性/结构实现，
+    /// 但保留类型解码器的既有输入边界（见 `MathNodeSupportPolicy`）。
     pub(crate) fn supported_from_storage(
         object: &Map<String, Value>,
         parent: Option<Self>,
@@ -325,13 +507,10 @@ impl super::MathNodeKind {
                 .collect::<Option<Vec<_>>>()?,
             Some(_) => return None,
         };
-        let text = match policy.text {
-            MathTextPolicy::Lenient => object.get("text").and_then(Value::as_str),
-            MathTextPolicy::Strict => match object.get("text") {
-                None | Some(Value::Null) => None,
-                Some(Value::String(text)) => Some(text.as_str()),
-                Some(_) => return None,
-            },
+        let text = match object.get("text") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(text)) => Some(text.as_str()),
+            Some(_) => return None,
         };
         (math_node_attributes_supported(kind, text, &attributes)
             && math_node_structure_supported(parent, kind, text, &child_flows))
@@ -339,20 +518,36 @@ impl super::MathNodeKind {
     }
 }
 
-fn supported_math_node(value: &Value, parent: Option<super::MathNodeKind>) -> bool {
+fn supported_math_node(value: &Value, parent: Option<super::MathNodeKind>) -> MathTreeSupport {
     let Some(node) = value.as_object() else {
-        return false;
+        return MathTreeSupport::Invalid;
     };
-    let Some(kind) = super::MathNodeKind::supported_from_storage(node, parent) else {
-        return false;
+    let Some(kind_name) = node.get("kind").and_then(Value::as_str) else {
+        return MathTreeSupport::Invalid;
     };
-    node.get("children").is_none_or(|children| {
-        children.as_array().is_some_and(|children| {
-            children
-                .iter()
-                .all(|child| supported_math_flow(child, Some(kind)))
+    let Ok(kind) =
+        serde_json::from_value::<super::MathNodeKind>(Value::String(kind_name.to_owned()))
+    else {
+        return MathTreeSupport::FutureOpaque;
+    };
+    if !valid_node_id(node) {
+        return MathTreeSupport::Invalid;
+    }
+    let Some(validated_kind) = super::MathNodeKind::supported_from_storage(node, parent) else {
+        return MathTreeSupport::Invalid;
+    };
+    debug_assert_eq!(validated_kind, kind);
+    let Some(children) = node.get("children") else {
+        return MathTreeSupport::Known;
+    };
+    let Some(children) = children.as_array() else {
+        return MathTreeSupport::Invalid;
+    };
+    children
+        .iter()
+        .fold(MathTreeSupport::Known, |state, child| {
+            state.combine(supported_math_flow(child, Some(kind)))
         })
-    })
 }
 
 /// 按调用方的既有边界推断操作数流的 primary kind。
@@ -364,25 +559,25 @@ fn math_flow_primary_kind(flow: &Value, policy: MathFlowKindPolicy) -> Option<su
     }
 }
 
-/// 类型解码器：单元素流必须能给出确定的类别，否则视为不可解释。
+/// 类型解码器：按类型验证器的规则取流中首个已知数学项；未知项按 Opaque 忽略。
 fn decoder_flow_primary_kind(flow: &Value) -> Option<super::MathNodeKind> {
     let content = flow.as_object()?.get("content")?.as_array()?;
-    if content.len() == 1 {
-        let item = content[0].as_object()?;
-        if item.get("type")?.as_str()? == "math" {
-            let kind = item
-                .get("kind")?
-                .as_str()
-                .and_then(|kind| serde_json::from_value(Value::String(kind.to_owned())).ok())?;
-            return Some(match kind {
-                super::MathNodeKind::Placeholder
-                | super::MathNodeKind::Hline
-                | super::MathNodeKind::Intertext => kind,
-                _ => super::MathNodeKind::Row,
-            });
+    let kind = content.iter().find_map(|item| {
+        if item.get("type").and_then(Value::as_str) != Some("math") {
+            return None;
         }
-    }
-    Some(super::MathNodeKind::Row)
+        item.get("kind").and_then(Value::as_str).and_then(|kind| {
+            serde_json::from_value::<super::MathNodeKind>(Value::String(kind.to_owned())).ok()
+        })
+    });
+    Some(match kind {
+        Some(
+            kind @ (super::MathNodeKind::Placeholder
+            | super::MathNodeKind::Hline
+            | super::MathNodeKind::Intertext),
+        ) => kind,
+        _ => super::MathNodeKind::Row,
+    })
 }
 
 /// raw 退役字段扫描：类别无法确定的单元素流按 `Row` 继续检查。
@@ -392,14 +587,15 @@ fn raw_scan_flow_primary_kind(flow: &Value) -> Option<super::MathNodeKind> {
         && let Some(item) = item.as_object()
         && item.get("type").and_then(Value::as_str) == Some("math")
     {
-        let kind = item
-            .get("kind")?
-            .as_str()
-            .and_then(|kind| serde_json::from_value(Value::String(kind.to_owned())).ok())?;
+        let kind_name = item.get("kind")?.as_str()?;
+        let kind =
+            serde_json::from_value::<super::MathNodeKind>(Value::String(kind_name.to_owned())).ok();
         return Some(match kind {
-            super::MathNodeKind::Placeholder
-            | super::MathNodeKind::Hline
-            | super::MathNodeKind::Intertext => kind,
+            Some(
+                kind @ (super::MathNodeKind::Placeholder
+                | super::MathNodeKind::Hline
+                | super::MathNodeKind::Intertext),
+            ) => kind,
             _ => super::MathNodeKind::Row,
         });
     }

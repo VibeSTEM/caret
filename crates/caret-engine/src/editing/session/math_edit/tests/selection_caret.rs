@@ -10,17 +10,15 @@ fn caret_snapshot_rejects_a_rebuilt_source_projection_in_the_same_generation()
     let mut document = Document::blank();
     document.body.push(block);
     let mut session = Session::new(document)?;
-    session.math_edit = Some(MathEdit {
-        target: MathEditTarget::Block {
+    session.math_edit = Some(MathEdit::editing_source(
+        MathEditTarget::Block {
             block_id: block_id.clone(),
             align: false,
         },
-        source_projection: Some(Arc::new(projection)),
-        source_draft: None,
-        revision: session.current_math_edit_revision(),
-        cursor: 1,
-        branch: MathEditBranch::Source,
-    });
+        Some(Arc::new(projection)),
+        1,
+        session.current_math_edit_revision(),
+    ));
 
     let snapshot = session.current_caret_snapshot()?;
     session.validate_caret_snapshot_revision(&snapshot)?;
@@ -1358,23 +1356,22 @@ fn tree_native_align_text_navigation_crosses_cells_in_both_directions() -> Resul
     let mut document = Document::blank();
     document.body.push(Block::Align(align_block));
     let mut session = Session::new(document)?;
-    session.math_edit = Some(MathEdit {
-        target: MathEditTarget::Block {
+    session.math_edit = Some(math_edit_for_test(
+        MathEditTarget::Block {
             block_id: block_id.clone(),
             align: true,
         },
-        source_projection: None,
-        source_draft: None,
-        revision: session.current_math_edit_revision(),
-        cursor: 1,
-        branch: MathEditBranch::Text {
+        1,
+        MathEditBranch::Text {
             path: text_path.clone(),
             anchor: MathTextPosition::new(text_path, 1, MathPositionAffinity::Downstream),
             focus_affinity: MathPositionAffinity::Downstream,
             anchor_visual_affinity: crate::VisualAffinity::Downstream,
             visual_affinity: crate::VisualAffinity::Downstream,
         },
-    });
+        session.current_math_edit_revision(),
+        None,
+    ));
 
     session.run(Command::MoveCaret(Direction::Forward))?;
     let edit = session.math_edit().ok_or(EditError::InvalidPosition)?;
@@ -2518,23 +2515,22 @@ fn math_text_selection_rejects_cross_align_cell_range_atomically()
     let mut document = Document::blank();
     document.body.push(align_block);
     let mut session = Session::new(document)?;
-    session.math_edit = Some(MathEdit {
-        target: MathEditTarget::Block {
+    session.math_edit = Some(math_edit_for_test(
+        MathEditTarget::Block {
             block_id,
             align: true,
         },
-        source_projection: None,
-        source_draft: None,
-        revision: session.current_math_edit_revision(),
-        cursor: 0,
-        branch: MathEditBranch::Text {
+        0,
+        MathEditBranch::Text {
             path: path_zero.clone(),
             anchor: MathTextPosition::new(path_zero.clone(), 0, MathPositionAffinity::Downstream),
             focus_affinity: MathPositionAffinity::Downstream,
             anchor_visual_affinity: crate::VisualAffinity::Downstream,
             visual_affinity: crate::VisualAffinity::Downstream,
         },
-    });
+        session.current_math_edit_revision(),
+        None,
+    ));
     let before_document = session.document().clone();
     let before_edit = session.math_edit().cloned();
     let before_generation = session.document_generation();
@@ -2856,17 +2852,15 @@ fn caret_comparison_uses_align_edit_source_and_valid_utf8_boundaries()
         ],
         ..caret_doc::Document::blank()
     })?;
-    session.math_edit = Some(MathEdit {
-        target: MathEditTarget::Block {
+    session.math_edit = Some(MathEdit::editing_source(
+        MathEditTarget::Block {
             block_id: align_id,
             align: true,
         },
-        source_projection: Some(std::sync::Arc::new(source_projection)),
-        source_draft: None,
-        revision: session.current_math_edit_revision(),
-        cursor: 0,
-        branch: MathEditBranch::Source,
-    });
+        Some(std::sync::Arc::new(source_projection)),
+        0,
+        session.current_math_edit_revision(),
+    ));
     let start = session.current_caret_snapshot()?;
     if let Some(edit) = session.math_edit.as_mut() {
         edit.cursor = "é".len();
@@ -2923,17 +2917,15 @@ fn caret_comparison_rejects_source_delimiter_positions_but_accepts_body_edges()
         })],
         ..caret_doc::Document::blank()
     })?;
-    session.math_edit = Some(MathEdit {
-        target: MathEditTarget::Inline {
+    session.math_edit = Some(MathEdit::editing_source(
+        MathEditTarget::Inline {
             paragraph_id,
             math_id,
         },
-        source_projection: Some(std::sync::Arc::new(source_projection)),
-        source_draft: None,
-        revision: session.current_math_edit_revision(),
-        cursor: 0,
-        branch: MathEditBranch::Source,
-    });
+        Some(std::sync::Arc::new(source_projection)),
+        0,
+        session.current_math_edit_revision(),
+    ));
     let range = super::navigation::math_input_body_range(
         session
             .math_edit

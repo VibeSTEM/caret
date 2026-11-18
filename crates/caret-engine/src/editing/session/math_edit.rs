@@ -649,17 +649,20 @@ impl MathEdit {
     }
 
     fn command_snapshot(&self) -> Self {
-        Self {
-            target: self.target.clone(),
-            source_projection: self.source_projection.clone(),
-            source_draft: self
-                .source_draft
-                .as_ref()
-                .map(MathSourceDraft::command_snapshot),
-            revision: self.revision.clone(),
-            cursor: self.cursor,
-            branch: self.branch.clone(),
-        }
+        let mut snapshot = Self::entering(
+            self.target.clone(),
+            self.cursor,
+            self.branch.clone(),
+            self.revision.clone(),
+        );
+        snapshot
+            .source_projection
+            .clone_from(&self.source_projection);
+        snapshot.source_draft = self
+            .source_draft
+            .as_ref()
+            .map(MathSourceDraft::command_snapshot);
+        snapshot
     }
 
     /// 当前编辑分支对应的源码视图；Align 不包含环境包围命令。

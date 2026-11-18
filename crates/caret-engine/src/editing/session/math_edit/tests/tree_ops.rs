@@ -920,23 +920,37 @@ fn math_text_font_family_writes_environment_that_undo_redo_and_serialization_pre
 fn math_text_pending_font_family_tracks_history_and_styles_inserted_text()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut pending = inline_math_text_session_with_selection(r"\frac{x}{\textsf{ab}}", 1, 1)?;
+    let document_before = pending.document().clone();
+    let generation_before = pending.document_generation();
+    let state_id_before = pending.history_state_id();
     pending.run(Command::SetInlineFontFamily("Noto Serif".to_owned()))?;
+    assert_eq!(pending.document(), &document_before);
+    assert_eq!(pending.document_generation(), generation_before);
+    assert_eq!(pending.history_state_id(), state_id_before);
     assert_eq!(
         pending.pending_inline_style.active_font_family(),
         Some("Noto Serif")
     );
     pending.run(Command::SetInlineFontFamily("sans-serif".to_owned()))?;
+    assert_eq!(pending.document(), &document_before);
+    assert_eq!(pending.document_generation(), generation_before);
+    assert_eq!(pending.history_state_id(), state_id_before);
     assert_eq!(
         pending.pending_inline_style.active_font_family(),
         Some("sans-serif")
     );
     pending.run(Command::Undo)?;
+    assert_eq!(pending.document_generation(), generation_before);
+    assert_eq!(pending.history_state_id(), state_id_before);
     assert_eq!(
         pending.pending_inline_style.active_font_family(),
         Some("Noto Serif")
     );
     pending.run(Command::Redo)?;
+    assert_eq!(pending.document_generation(), generation_before);
+    assert_eq!(pending.history_state_id(), state_id_before);
     pending.run(Command::InsertText("X".to_owned()))?;
+    assert_eq!(pending.document_generation(), generation_before + 1);
     assert!(math_tree_has_font_environment_for(
         &pending
             .math_tree_for_edit(pending.math_edit().ok_or(EditError::InvalidPosition)?, None)?
@@ -1229,20 +1243,19 @@ fn empty_fixed_math_operand_backspace_exits_or_removes_structure() -> Result<(),
             offset: 0,
             affinity: MathPositionAffinity::Downstream,
         };
-        session.math_edit = Some(MathEdit {
-            target: MathEditTarget::Block {
+        session.math_edit = Some(math_edit_for_test(
+            MathEditTarget::Block {
                 block_id: id,
                 align: false,
             },
-            source_projection: None,
-            source_draft: None,
-            revision: session.current_math_edit_revision(),
-            cursor: 0,
-            branch: MathEditBranch::Tree {
+            0,
+            MathEditBranch::Tree {
                 path: position.path.clone(),
                 anchor: position,
             },
-        });
+            session.current_math_edit_revision(),
+            None,
+        ));
         session.run(Command::Delete(Direction::Backward))?;
         let edit = session.math_edit().ok_or(EditError::InvalidPosition)?;
         let MathEditBranch::Tree { path, .. } = &edit.branch else {
@@ -1298,20 +1311,19 @@ fn empty_math_operand_backspace_preserves_opaque_metadata_atomically() -> Result
             offset: 0,
             affinity: MathPositionAffinity::Downstream,
         };
-        session.math_edit = Some(MathEdit {
-            target: MathEditTarget::Block {
+        session.math_edit = Some(math_edit_for_test(
+            MathEditTarget::Block {
                 block_id: id,
                 align: false,
             },
-            source_projection: None,
-            source_draft: None,
-            revision: session.current_math_edit_revision(),
-            cursor: 0,
-            branch: MathEditBranch::Tree {
+            0,
+            MathEditBranch::Tree {
                 path: position.path.clone(),
                 anchor: position,
             },
-        });
+            session.current_math_edit_revision(),
+            None,
+        ));
 
         let document_before = session.document().clone();
         let selection_before = session.selection().clone();
@@ -1359,20 +1371,19 @@ fn empty_align_cell_backspace_keeps_other_cells_and_moves_out() -> Result<(), Ed
         offset: 0,
         affinity: MathPositionAffinity::Downstream,
     };
-    session.math_edit = Some(MathEdit {
-        target: MathEditTarget::Block {
+    session.math_edit = Some(math_edit_for_test(
+        MathEditTarget::Block {
             block_id: id.clone(),
             align: true,
         },
-        source_projection: None,
-        source_draft: None,
-        revision: session.current_math_edit_revision(),
-        cursor: 0,
-        branch: MathEditBranch::Tree {
+        0,
+        MathEditBranch::Tree {
             path: position.path.clone(),
             anchor: position,
         },
-    });
+        session.current_math_edit_revision(),
+        None,
+    ));
 
     let second_cell_position = session
         .active_host_caret_position()
@@ -1403,20 +1414,19 @@ fn empty_align_cell_backspace_keeps_other_cells_and_moves_out() -> Result<(), Ed
         offset: 0,
         affinity: MathPositionAffinity::Downstream,
     };
-    first_cell_session.math_edit = Some(MathEdit {
-        target: MathEditTarget::Block {
+    first_cell_session.math_edit = Some(math_edit_for_test(
+        MathEditTarget::Block {
             block_id: id.clone(),
             align: true,
         },
-        source_projection: None,
-        source_draft: None,
-        revision: first_cell_session.current_math_edit_revision(),
-        cursor: 0,
-        branch: MathEditBranch::Tree {
+        0,
+        MathEditBranch::Tree {
             path: first_cell_position.path.clone(),
             anchor: first_cell_position,
         },
-    });
+        first_cell_session.current_math_edit_revision(),
+        None,
+    ));
     assert_ne!(
         second_cell_position,
         first_cell_session
@@ -2300,10 +2310,23 @@ fn pending_math_text_format_applies_to_inserted_text_and_history()
         anchor: 1,
         focus: 1,
     })?;
+    let document_before = session.document().clone();
+    let generation_before = session.document_generation();
+    let state_id_before = session.history_state_id();
     session.run(Command::ToggleInlineFormat(InlineEnvironmentKind::Bold))?;
+    assert_eq!(session.document(), &document_before);
+    assert_eq!(session.document_generation(), generation_before);
+    assert_eq!(session.history_state_id(), state_id_before);
     session.run(Command::ToggleInlineFormat(InlineEnvironmentKind::Italic))?;
+    assert_eq!(session.document(), &document_before);
+    assert_eq!(session.document_generation(), generation_before);
+    assert_eq!(session.history_state_id(), state_id_before);
     session.run(Command::ToggleRunUnderline)?;
+    assert_eq!(session.document(), &document_before);
+    assert_eq!(session.document_generation(), generation_before);
+    assert_eq!(session.history_state_id(), state_id_before);
     session.run(Command::InsertText("b".to_owned()))?;
+    assert_eq!(session.document_generation(), generation_before + 1);
 
     assert!(
         inline_source(&session)
@@ -3532,21 +3555,20 @@ fn backspace_removes_empty_construct_in_align_cell_and_history_restores_it()
         first_align(&session)?.rows[0].cells[1].root.id,
         second_cell_id
     );
-    session.math_edit = Some(MathEdit {
-        target: MathEditTarget::Block {
+    session.math_edit = Some(math_edit_for_test(
+        MathEditTarget::Block {
             block_id: block_id.clone(),
             align: true,
         },
-        source_projection: Some(Arc::new(projection)),
-        source_draft: None,
-        revision: MathEditRevision {
+        cursor,
+        MathEditBranch::Source,
+        MathEditRevision {
             session_id: session.session_id.clone(),
             document_generation: session.document_generation,
             projection_id: NodeId::generate(),
         },
-        cursor,
-        branch: MathEditBranch::Source,
-    });
+        Some(Arc::new(projection)),
+    ));
 
     assert_eq!(
         session
@@ -3648,21 +3670,20 @@ fn backspace_in_empty_fraction_argument_keeps_nonempty_sibling_recoverable()
         extra: Default::default(),
     })];
     let mut session = Session::new(document)?;
-    session.math_edit = Some(MathEdit {
-        target: MathEditTarget::Inline {
+    session.math_edit = Some(math_edit_for_test(
+        MathEditTarget::Inline {
             paragraph_id,
             math_id,
         },
-        source_projection: Some(Arc::new(projection)),
-        source_draft: None,
-        revision: MathEditRevision {
+        r"\frac{a}{".len(),
+        MathEditBranch::Source,
+        MathEditRevision {
             session_id: session.session_id.clone(),
             document_generation: session.document_generation,
             projection_id: NodeId::generate(),
         },
-        cursor: r"\frac{a}{".len(),
-        branch: MathEditBranch::Source,
-    });
+        Some(Arc::new(projection)),
+    ));
     let before_document = session.document.clone();
     let before_generation = session.document_generation;
 

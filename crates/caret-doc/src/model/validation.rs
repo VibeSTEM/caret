@@ -497,12 +497,12 @@ fn validate_text_flow(text: &TextFlow) -> Result<(), ModelError> {
     Ok(())
 }
 
-fn validate_math_text_flow(text: &TextFlow) -> Result<(), ModelError> {
+pub(super) fn validate_math_text_flow(text: &TextFlow) -> Result<(), ModelError> {
     reject_retired_math_fields(&text.extra, &["sourceRange", "sourceMap"])?;
     validate_text_flow(text)
 }
 
-fn validate_run(run: &Run) -> Result<(), ModelError> {
+pub(super) fn validate_run(run: &Run) -> Result<(), ModelError> {
     if let Some(language) = &run.language {
         validate_language_tag(language)?;
     }
@@ -621,7 +621,7 @@ fn validate_math_content<'a>(
     }
 }
 
-fn validate_environment_props(
+pub(super) fn validate_environment_props(
     kind: InlineEnvironmentKind,
     props: &BTreeMap<String, Value>,
 ) -> Result<(), ModelError> {

@@ -516,6 +516,11 @@ fn inspect_math_tree_encoding(value: Option<&Value>) -> Result<(), DocumentError
     if version.is_some_and(|version| version > crate::model::MATH_TREE_SCHEMA_VERSION as u64) {
         return Ok(());
     }
+    if crate::model::supported_math_tree(value) == crate::model::MathTreeSupport::Invalid {
+        return Err(DocumentError::InvalidDocument(
+            "invalid known math node encoding".to_owned(),
+        ));
+    }
     inspect_math_flow_encoding(tree.get("root"))
 }
 

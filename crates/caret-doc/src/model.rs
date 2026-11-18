@@ -25,6 +25,7 @@ pub(crate) use features::math_node_requires_syntax;
 pub use validation::{MAX_DOCUMENT_NESTING_DEPTH, is_valid_language_tag};
 
 pub use block::{Block, BlockEnvironment, BlockEnvironmentKind, ExplicitBreak};
+pub(crate) use codec::{MathTreeSupport, supported_math_tree};
 pub use inline::{FlowContent, MathContent, ParagraphContent, SoftBreak, TextFlow};
 pub use inline_environment::{
     InlineEnvironment, InlineEnvironmentKind, InlineEnvironmentTemplateError,

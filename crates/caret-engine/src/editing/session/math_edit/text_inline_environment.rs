@@ -219,7 +219,11 @@ impl Session {
             state_id,
         )
         .with_math_edit(Some(after_math));
-        self.commit_document_edit_with_states(DocumentPatch::PendingStyle, before, after, false);
+        self.commit_document_edit(
+            DocumentPatch::PendingStyle,
+            before,
+            super::super::history::DocumentEditSnapshot::Explicit(Box::new(after)),
+        );
         Ok(Effect::default())
     }
 
@@ -254,7 +258,11 @@ impl Session {
             before_state_id,
         )
         .with_math_edit(Some(after_math));
-        self.commit_document_edit_with_states(DocumentPatch::PendingStyle, before, after, false);
+        self.commit_document_edit(
+            DocumentPatch::PendingStyle,
+            before,
+            super::super::history::DocumentEditSnapshot::Explicit(Box::new(after)),
+        );
         Ok(Effect::default())
     }
 }

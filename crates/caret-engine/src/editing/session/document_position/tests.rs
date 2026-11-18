@@ -362,14 +362,12 @@ fn session_caret_comparison_uses_the_validated_math_tree_adapter() {
         offset: 0,
         affinity: MathPositionAffinity::Downstream,
     };
-    session.math_edit = Some(MathEdit {
+    session.math_edit = Some(MathEdit::entering(
         target,
-        source_projection: None,
-        source_draft: None,
-        revision: session.current_math_edit_revision(),
-        cursor: 0,
-        branch: MathEditBranch::Tree { path, anchor },
-    });
+        0,
+        MathEditBranch::Tree { path, anchor },
+        session.current_math_edit_revision(),
+    ));
     let start = session
         .current_caret_snapshot()
         .unwrap_or_else(|error| panic!("math caret snapshot failed: {error}"));
@@ -1009,14 +1007,12 @@ fn session_caret_comparison_rejects_mixed_source_and_semantic_script_order()
         paragraph_id,
         math_id: math_id.clone(),
     };
-    session.math_edit = Some(MathEdit {
-        target: target.clone(),
-        source_projection: Some(std::sync::Arc::new(source_projection)),
-        source_draft: None,
-        revision: session.current_math_edit_revision(),
-        cursor: 0,
-        branch: MathEditBranch::Source,
-    });
+    session.math_edit = Some(MathEdit::editing_source(
+        target.clone(),
+        Some(std::sync::Arc::new(source_projection)),
+        0,
+        session.current_math_edit_revision(),
+    ));
     let source_position = session.current_caret_snapshot()?;
     let tree_position = |operand_index| {
         caret_snapshot(
@@ -1554,13 +1550,10 @@ fn session_caret_comparison_orders_align_cells_by_row_and_column() {
         align: true,
     };
     let root_path = MathSequencePath::root();
-    session.math_edit = Some(MathEdit {
-        target: target.clone(),
-        source_projection: None,
-        source_draft: None,
-        revision: session.current_math_edit_revision(),
-        cursor: 0,
-        branch: MathEditBranch::Tree {
+    session.math_edit = Some(MathEdit::entering(
+        target.clone(),
+        0,
+        MathEditBranch::Tree {
             path: root_path.clone(),
             anchor: MathTreePosition {
                 host: MathPositionHost::AlignCell {
@@ -1572,17 +1565,15 @@ fn session_caret_comparison_orders_align_cells_by_row_and_column() {
                 affinity: MathPositionAffinity::Downstream,
             },
         },
-    });
+        session.current_math_edit_revision(),
+    ));
     let first_current = session
         .current_caret_snapshot()
         .unwrap_or_else(|error| panic!("Align 首单元格焦点快照失败：{error}"));
-    session.math_edit = Some(MathEdit {
+    session.math_edit = Some(MathEdit::entering(
         target,
-        source_projection: None,
-        source_draft: None,
-        revision: session.current_math_edit_revision(),
-        cursor: 0,
-        branch: MathEditBranch::Tree {
+        0,
+        MathEditBranch::Tree {
             path: root_path.clone(),
             anchor: MathTreePosition {
                 host: MathPositionHost::AlignCell {
@@ -1594,7 +1585,8 @@ fn session_caret_comparison_orders_align_cells_by_row_and_column() {
                 affinity: MathPositionAffinity::Downstream,
             },
         },
-    });
+        session.current_math_edit_revision(),
+    ));
     let third_current = session
         .current_caret_snapshot()
         .unwrap_or_else(|error| panic!("Align 末单元格焦点快照失败：{error}"));

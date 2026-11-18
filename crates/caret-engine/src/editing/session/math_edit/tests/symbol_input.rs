@@ -1525,20 +1525,19 @@ fn tree_boundary_delete_removes_one_text_grapheme_and_preserves_text_metadata()
         offset: text_index,
         affinity: MathPositionAffinity::Downstream,
     };
-    session.math_edit = Some(MathEdit {
-        target: MathEditTarget::Block {
+    session.math_edit = Some(math_edit_for_test(
+        MathEditTarget::Block {
             block_id: equation_id.clone(),
             align: false,
         },
-        source_projection: None,
-        source_draft: None,
-        revision: session.current_math_edit_revision(),
-        cursor: text_index,
-        branch: MathEditBranch::Tree {
+        text_index,
+        MathEditBranch::Tree {
             path: MathSequencePath::root(),
             anchor: position,
         },
-    });
+        session.current_math_edit_revision(),
+        None,
+    ));
 
     let edit = session.math_edit().ok_or(EditError::InvalidPosition)?;
     let tree = session.math_tree_for_edit(edit, None)?;
