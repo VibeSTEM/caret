@@ -44,7 +44,6 @@
 #include <QtCore/qtestsupport_core.h>
 #include <QtGui/qtestsupport_gui.h>
 #include <QtQml/qqmlextensionplugin.h>
-#include <QtQuickControls2/qquickstyle.h>
 #include <QtTest/QTest>
 #include <QtTest/qtest.h>
 #include <QtTest/qtestcase.h>

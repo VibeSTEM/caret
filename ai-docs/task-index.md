@@ -130,7 +130,7 @@
 | 096 | 架构 | [caret-engine 布局模块生产/查询拆分](task/096-engine-layout-produce-query-split.md) | P1 | 093 | L | done |
 | 097 | 数学 | [跨 crate 数学符号与属性单一来源](task/097-math-symbol-single-source.md) | P1 | 093、084 | M | done |
 | 098 | QML 架构 | [QML 状态机与跨语言契约收敛](task/098-qml-state-and-cross-language-contracts.md) | P2 | 093、083 | L | done |
-| 099 | 测试 | [ShellLoadTest 单类按域拆分](task/099-shell-load-test-split.md) | P2 | 093 | M | done |
+| 099 | 测试 | [ShellLoadTest 单类按域拆分](task/099-shell-load-test-split.md) | P2 | 093 | M | in-progress |
 | 100 | 测试 | [测试确定性与诊断基础设施](task/100-test-determinism-and-diagnostics.md) | P2 | 093 | L | planned |
 | 101 | native 架构 | [native 边界协议与渲染期重复校验收敛](task/101-native-protocol-and-render-revalidation.md) | P2 | 093 | L | planned |
 | 102 | 质量清理 | [Brooks sweep 后续收敛项](task/102-sweep-followup-convergence.md) | P2 | 093、095 | M | planned |

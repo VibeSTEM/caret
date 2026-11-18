@@ -17,7 +17,6 @@
 #include <QtCore/qstringlist.h>
 #include <QtCore/qvariant.h>
 #include <QtTest/qtestcase.h>
-#include <cstddef>
 #include <cstdint>
 
 void ShellDocumentFileTest::documentFileFlowPreservesSaveStateAndReopens() {

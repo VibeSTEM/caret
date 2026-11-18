@@ -33,7 +33,6 @@
 #include <QtGui/qtestsupport_gui.h>
 #include <QtTest/qtest.h>
 #include <QtTest/qtestcase.h>
-#include <cstddef>
 #include <memory>
 
 namespace {

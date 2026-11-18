@@ -4,12 +4,10 @@
 #include <QtCore/qcontainerfwd.h>
 #include <QtCore/qfile.h>
 #include <QtCore/qiodevice.h>
-#include <QtCore/qmetaobject.h>
 #include <QtCore/qnamespace.h>
 #include <QtCore/qobject.h>
 #include <QtCore/qregularexpression.h>
 #include <QtCore/qstring.h>
-#include <QtCore/qvariantmap.h>
 #include <QtGui/qcolor.h>
 #include <QtGui/qtestsupport_gui.h>
 #include <QtQuick/qquickwindow.h>
