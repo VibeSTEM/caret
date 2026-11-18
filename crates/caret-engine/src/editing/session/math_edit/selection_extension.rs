@@ -125,11 +125,11 @@ impl Session {
                 // install_structure_selection 拒绝，这里不调用安装入口，直接写覆盖
                 // U+FFFC 的普通文本选区。
                 self.clear_structure_selection_state();
-                self.math_edit = None;
+                self.clear_math_edit();
                 self.selection = Selection { anchor, focus };
                 self.selection_visual_affinity = focus_visual_affinity;
                 self.selection_anchor_visual_affinity = anchor_visual_affinity;
-                self.host_caret_position = None;
+                self.clear_host_caret_position();
             }
             MathEditTarget::Block { block_id, .. } => {
                 let location = find_document_node(&self.document, &block_id)
@@ -154,7 +154,7 @@ impl Session {
                 let (caret, host_caret_position) =
                     self.park_beside_block_host(&block_id, direction)?;
                 self.install_structure_selection(structure_selection)?;
-                self.math_edit = None;
+                self.clear_math_edit();
                 self.selection = Selection {
                     anchor: caret.clone(),
                     focus: caret,
@@ -165,7 +165,7 @@ impl Session {
                         Direction::Forward => Direction::Backward,
                         Direction::Backward => Direction::Forward,
                     });
-                self.host_caret_position = Some(host_caret_position);
+                self.set_host_caret_position(Some(host_caret_position));
             }
         }
         self.pending_inline_style.clear();

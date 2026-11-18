@@ -382,17 +382,15 @@ impl Session {
                         "split formula cannot be bound to its source map".to_owned(),
                     ));
                 }
-                next_math_edit = Some(super::math_edit::MathEdit {
-                    target: super::math_edit::MathEditTarget::Inline {
+                next_math_edit = Some(super::math_edit::MathEdit::editing_source(
+                    super::math_edit::MathEditTarget::Inline {
                         paragraph_id: paragraph_id.clone(),
                         math_id,
                     },
-                    source_projection: Some(std::sync::Arc::new(source_projection)),
-                    source_draft: None,
-                    revision: self.current_math_edit_revision(),
+                    Some(std::sync::Arc::new(source_projection)),
                     cursor,
-                    branch: super::math_edit::MathEditBranch::Source,
-                });
+                    self.current_math_edit_revision(),
+                ));
                 next_visual_affinity = crate::VisualAffinity::Upstream;
             }
             None => {
@@ -430,16 +428,23 @@ impl Session {
                             super::math_edit::MathEditBranch::Source,
                         )
                     };
-                    next_math_edit = Some(super::math_edit::MathEdit {
-                        target: super::math_edit::MathEditTarget::Inline {
-                            paragraph_id: paragraph_id.clone(),
-                            math_id,
-                        },
-                        source_projection,
-                        source_draft: None,
-                        revision: self.current_math_edit_revision(),
-                        cursor,
-                        branch,
+                    let target = super::math_edit::MathEditTarget::Inline {
+                        paragraph_id: paragraph_id.clone(),
+                        math_id,
+                    };
+                    let revision = self.current_math_edit_revision();
+                    next_math_edit = Some(match branch {
+                        super::math_edit::MathEditBranch::Source => {
+                            super::math_edit::MathEdit::editing_source(
+                                target,
+                                source_projection,
+                                cursor,
+                                revision,
+                            )
+                        }
+                        branch => {
+                            super::math_edit::MathEdit::entering(target, cursor, branch, revision)
+                        }
                     });
                 }
             }
@@ -467,7 +472,7 @@ impl Session {
         }
         self.text_map_cache.clear();
         self.selection = next_selection;
-        self.math_edit = next_math_edit;
+        self.set_math_edit(next_math_edit);
         self.sync_math_edit_revision();
         self.selection_visual_affinity = next_visual_affinity;
         Ok(Effect {

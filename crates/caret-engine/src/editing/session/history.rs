@@ -507,9 +507,21 @@ impl Session {
             before_state.state_id
         };
         let after_state = snapshot.history_state(self, after_state_id);
+        self.commit_document_edit_with_states(patch, before_state, after_state, document_changed);
+    }
+
+    /// 提交调用方已采集好提交后状态的编辑；共享历史登记与代际推进入口。
+    pub(super) fn commit_document_edit_with_states(
+        &mut self,
+        patch: DocumentPatch,
+        before_state: SessionHistoryState,
+        after_state: SessionHistoryState,
+        advance_document_generation: bool,
+    ) {
+        let after_state_id = after_state.state_id;
         self.record_history_edit(SessionHistoryEdit::new(patch, before_state, after_state));
         self.history_state_id = after_state_id;
-        if document_changed {
+        if advance_document_generation {
             self.advance_document_generation();
         }
     }

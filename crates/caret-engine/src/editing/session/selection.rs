@@ -380,7 +380,7 @@ impl Session {
         };
         self.selection_visual_affinity = visual_affinity;
         self.selection_anchor_visual_affinity = visual_affinity;
-        self.host_caret_position = host_caret_position;
+        self.set_host_caret_position(host_caret_position);
         self.pending_inline_style.clear();
         self.advance_history_merge_epoch();
         Ok(Effect {
@@ -687,16 +687,16 @@ impl Session {
             || self.selection.focus != focus
             || self.selection_anchor_visual_affinity != anchor_visual_affinity
             || self.selection_visual_affinity != focus_visual_affinity;
-        self.math_edit = None;
+        self.clear_math_edit();
         self.selection = Selection {
             anchor: focus.clone(),
             focus: focus.clone(),
         };
         self.selection_anchor_visual_affinity = anchor_visual_affinity;
         self.selection_visual_affinity = focus_visual_affinity;
-        self.host_caret_position = None;
+        self.clear_host_caret_position();
         if cancels_command_line_preedit {
-            self.command_line = None;
+            self.clear_command_line();
         }
         Ok(Effect {
             selection_changed: changed,
@@ -731,14 +731,14 @@ impl Session {
         let changed = self.structure_selection != previous_selection
             || self.selected_block_environments != previous_environments
             || self.selected_math_blocks != previous_math_blocks;
-        self.math_edit = None;
+        self.clear_math_edit();
         self.selection = Selection {
             anchor: focus.clone(),
             focus,
         };
         self.selection_anchor_visual_affinity = anchor_visual_affinity;
         self.selection_visual_affinity = focus_visual_affinity;
-        self.host_caret_position = None;
+        self.clear_host_caret_position();
         Ok(Effect {
             selection_changed: changed,
             ..Effect::default()
@@ -985,7 +985,7 @@ impl Session {
             || self.has_structure_selection()
             || !self.selected_block_environments.is_empty()
             || !self.selected_math_blocks.is_empty();
-        self.host_caret_position = None;
+        self.clear_host_caret_position();
         self.clear_structure_selection_state();
         self.selection = next;
         Ok(Effect {

@@ -227,11 +227,11 @@ impl Session {
         self.selection = restore.selection;
         self.selection_anchor_visual_affinity = restore.selection_anchor_visual_affinity;
         self.selection_visual_affinity = restore.selection_visual_affinity;
-        self.math_edit = restore.math_edit;
+        self.set_math_edit(restore.math_edit);
         self.selected_block_environments = restore.selected_block_environments;
         self.selected_math_blocks = restore.selected_math_blocks;
         self.structure_selection = restore.structure_selection;
-        self.host_caret_position = restore.host_caret_position;
+        self.set_host_caret_position(restore.host_caret_position);
         self.pending_inline_style = restore.pending_inline_style;
         self.history_state_id = restore.history_state_id;
         self.history_merge_epoch = restore.history_merge_epoch;
@@ -260,9 +260,9 @@ impl Session {
         };
         self.selection_visual_affinity = visual_affinity_for(caret.affinity);
         self.selection_anchor_visual_affinity = self.selection_visual_affinity;
-        self.math_edit = None;
+        self.clear_math_edit();
         self.clear_structure_selection_state();
-        self.host_caret_position = None;
+        self.clear_host_caret_position();
         self.text_map_cache.clear();
     }
 

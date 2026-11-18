@@ -25,7 +25,7 @@ impl Session {
         let result = self.math_mod_backspace_transaction();
         if result.is_err() {
             self.document = before_document;
-            self.math_edit = before_edit;
+            self.set_math_edit(before_edit);
         }
         result
     }
@@ -269,7 +269,7 @@ impl Session {
         self.selection = Selection { anchor, focus };
         self.selection_visual_affinity = visual_affinity;
         self.pending_inline_style.clear();
-        self.math_edit = None;
+        self.clear_math_edit();
         let after_states = history::paragraph_states_for_ids(
             &self.document,
             &self.paragraph_index,

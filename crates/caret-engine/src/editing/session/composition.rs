@@ -790,7 +790,7 @@ impl Session {
         }
         let next = Some(InputComposition { id, preedit });
         let changed = self.composition != next;
-        self.composition = next;
+        self.set_composition(next);
         Ok(Effect {
             composition_changed: changed,
             ..Effect::default()
@@ -808,7 +808,7 @@ impl Session {
         {
             return Err(EditError::InvalidCompositionId);
         }
-        let prior = self.composition.take();
+        let prior = self.take_composition();
         let result = if self.math_text_edit_is_active() {
             self.math_text_insert(text)
         } else if self.block_boundary_exit().is_some() {
@@ -823,7 +823,7 @@ impl Session {
                 Ok(effect)
             }
             Err(error) => {
-                self.composition = prior;
+                self.set_composition(prior);
                 Err(error)
             }
         }
@@ -837,7 +837,7 @@ impl Session {
         {
             return Err(EditError::InvalidCompositionId);
         }
-        self.composition = None;
+        self.clear_composition();
         Ok(Effect {
             composition_changed: true,
             ..Effect::default()

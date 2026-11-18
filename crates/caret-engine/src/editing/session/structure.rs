@@ -286,8 +286,8 @@ impl Session {
             Affinity::Downstream => VisualAffinity::Downstream,
         };
         self.selection_anchor_visual_affinity = self.selection_visual_affinity;
-        self.math_edit = Some(edit);
-        self.host_caret_position = None;
+        self.set_math_edit(Some(edit));
+        self.clear_host_caret_position();
         self.finalize_structure_edit_with_boundary(
             super::super::paragraph_ops::build_paragraph_index(&self.document.body),
             DocumentPatch::BlockRange {
@@ -435,7 +435,7 @@ impl Session {
             anchor: position.clone(),
             focus: position,
         };
-        self.host_caret_position = None;
+        self.clear_host_caret_position();
         self.selection_visual_affinity = VisualAffinity::Upstream;
         self.selection_anchor_visual_affinity = VisualAffinity::Upstream;
         let paragraphs_estimated_bytes = paragraphs
@@ -560,7 +560,7 @@ impl Session {
                             Affinity::Upstream => VisualAffinity::Upstream,
                             Affinity::Downstream => VisualAffinity::Downstream,
                         };
-                        self.host_caret_position = None;
+                        self.clear_host_caret_position();
                         return Ok(Effect {
                             selection_changed: true,
                             ..Effect::default()
@@ -584,7 +584,7 @@ impl Session {
                         }
                         super::super::HostCaretTransition::EnterStart
                         | super::super::HostCaretTransition::EnterEnd => {
-                            self.host_caret_position = None;
+                            self.clear_host_caret_position();
                             self.selection.focus.affinity = match direction {
                                 Direction::Forward => Affinity::Downstream,
                                 Direction::Backward => Affinity::Upstream,
@@ -602,10 +602,10 @@ impl Session {
                         _ => return Ok(Effect::default()),
                     }
                 }
-                self.host_caret_position = Some(HostCaretPosition::outside(
+                self.set_host_caret_position(Some(HostCaretPosition::outside(
                     environment.id.clone(),
                     *direction,
-                ));
+                )));
                 self.selection.focus.affinity = match direction {
                     Direction::Backward => Affinity::Upstream,
                     Direction::Forward => Affinity::Downstream,
@@ -668,7 +668,7 @@ impl Session {
             anchor: target.clone(),
             focus: target,
         };
-        self.host_caret_position = None;
+        self.clear_host_caret_position();
         self.clear_structure_selection_state();
         self.selection_visual_affinity = if move_to_end {
             caret_layout::VisualAffinity::Upstream

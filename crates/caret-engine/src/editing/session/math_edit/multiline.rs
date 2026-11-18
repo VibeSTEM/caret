@@ -306,7 +306,7 @@ pub(super) fn commit_align_tree_edit(
         before_pending_style,
     );
     session.refresh_math_edit_revision(&mut after_edit);
-    session.math_edit = Some(after_edit);
+    session.set_math_edit(Some(after_edit));
     Ok(Effect {
         document_changed: true,
         selection_changed: true,

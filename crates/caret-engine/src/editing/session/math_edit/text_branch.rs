@@ -397,7 +397,7 @@ impl Session {
             }
         }
         self.refresh_math_edit_revision(&mut after_edit);
-        self.math_edit = Some(after_edit);
+        self.set_math_edit(Some(after_edit));
         Ok(Effect {
             document_changed: true,
             selection_changed,
@@ -426,7 +426,7 @@ impl Session {
         let result = self.math_text_enter_math_at_transaction(initial_source, cursor_in_body);
         if result.is_err() {
             self.document = before_document;
-            self.math_edit = before_edit;
+            self.set_math_edit(before_edit);
         }
         result
     }
