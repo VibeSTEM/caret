@@ -1,5 +1,5 @@
 // 验证主题目录的类型化 token 安装、无效输入拒绝及失败原子性。
-#include "shell_load_test.hpp"
+#include "shell_theme_catalog_test.hpp"
 
 #ifdef CARET_ENABLE_APP
 #include "caret_ffi.h"
@@ -34,7 +34,7 @@ class BuiltinThemeRestorer final {
 
 } // namespace
 
-void ShellLoadTest::themeCatalogInstallsTypedTokensAndRejectsInvalidSnapshotsAtomically() {
+void ShellThemeCatalogTest::themeCatalogInstallsTypedTokensAndRejectsInvalidSnapshotsAtomically() {
     const BuiltinThemeRestorer restore_builtin_theme;
     const QByteArray valid = R"({
         "active":"custom",

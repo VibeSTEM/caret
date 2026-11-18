@@ -138,19 +138,33 @@ if(BUILD_TESTING)
 
   add_executable(
     caret_shell_load_test
+    ../tests/cpp/shell/main.cpp
+    ../tests/cpp/shell/shell_test_support.cpp
+    ../tests/cpp/shell/shell_test_support.hpp
     ../tests/cpp/shell/shell_load_test.cpp
     ../tests/cpp/shell/shell_load_test.hpp
     ../tests/cpp/shell/shell_document_path_test.cpp
+    ../tests/cpp/shell/shell_document_path_test.hpp
     ../tests/cpp/shell/shell_window_chrome_test.cpp
+    ../tests/cpp/shell/shell_window_chrome_test.hpp
     ../tests/cpp/shell/shell_document_canvas_test.cpp
+    ../tests/cpp/shell/shell_document_canvas_test.hpp
     ../tests/cpp/shell/shell_document_interaction_test.cpp
+    ../tests/cpp/shell/shell_document_interaction_test.hpp
     ../tests/cpp/shell/shell_document_file_test.cpp
+    ../tests/cpp/shell/shell_document_file_test.hpp
     ../tests/cpp/shell/shell_document_close_test.cpp
+    ../tests/cpp/shell/shell_document_close_test.hpp
     ../tests/cpp/shell/shell_document_navigation_test.cpp
+    ../tests/cpp/shell/shell_document_navigation_test.hpp
     ../tests/cpp/shell/shell_layout_snapshot_validation_test.cpp
+    ../tests/cpp/shell/shell_layout_snapshot_validation_test.hpp
     ../tests/cpp/shell/shell_document_autosave_test.cpp
+    ../tests/cpp/shell/shell_document_autosave_test.hpp
     ../tests/cpp/shell/shell_document_recovery_test.cpp
-    ../tests/cpp/shell/shell_theme_catalog_test.cpp)
+    ../tests/cpp/shell/shell_document_recovery_test.hpp
+    ../tests/cpp/shell/shell_theme_catalog_test.cpp
+    ../tests/cpp/shell/shell_theme_catalog_test.hpp)
   caret_native_defaults(caret_shell_load_test)
   target_compile_definitions(
     caret_shell_load_test PRIVATE "CARET_SOURCE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/..\""

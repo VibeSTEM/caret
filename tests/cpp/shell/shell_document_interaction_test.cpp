@@ -1,9 +1,11 @@
 // Qt/QML 文档命中、输入法与编辑交互的集成测试。
+#include "shell_document_interaction_test.hpp"
+
 #include "document_canvas.hpp"
 #include "icon_provider.hpp"
 #include "keyboard_modifier_policy.hpp"
 #include "layout_view_model.hpp"
-#include "shell_load_test.hpp"
+#include "shell_test_support.hpp"
 #include "theme_view_model.hpp"
 #ifdef CARET_ENABLE_APP
 #include "caret_ffi.h"
@@ -103,7 +105,7 @@ struct LayoutViewModelTestProbe final {
 };
 } // namespace caret
 
-void ShellLoadTest::mathFontFallbackDiagnosticProjectsToViewModel() {
+void ShellDocumentInteractionTest::mathFontFallbackDiagnosticProjectsToViewModel() {
     auto runtime = caret::ffi::new_blank_document_runtime();
     const rust::String snapshot_json = caret::ffi::layout_snapshot_json(*runtime);
     QVERIFY(!std::string_view(snapshot_json.data(), snapshot_json.size()).starts_with("error:"));
@@ -177,7 +179,7 @@ void ShellLoadTest::mathFontFallbackDiagnosticProjectsToViewModel() {
     QCOMPARE(layout_changed.count(), 3);
 }
 
-void ShellLoadTest::textFontWarningStatusBarTracksLayoutDiagnostics() {
+void ShellDocumentInteractionTest::textFontWarningStatusBarTracksLayoutDiagnostics() {
     const QString theme_path =
         QString::fromUtf8(CARET_SOURCE_DIR) + QStringLiteral("/qml/Themes/Theme.qml");
     QHash<QString, QVariantMap> themes;
@@ -230,7 +232,7 @@ Item { WindowStatusBar { objectName: "statusBar" } }
     QVERIFY(warning->property("text").toString().isEmpty());
 }
 
-void ShellLoadTest::environmentHighlightSnapshotSelectsAndClearsActiveRects() {
+void ShellDocumentInteractionTest::environmentHighlightSnapshotSelectsAndClearsActiveRects() {
     auto runtime = caret::ffi::new_blank_document_runtime();
     const rust::String snapshot = caret::ffi::layout_snapshot_json(*runtime);
     QVERIFY(!std::string_view(snapshot.data(), snapshot.size()).starts_with("error:"));
@@ -424,7 +426,8 @@ void ShellLoadTest::environmentHighlightSnapshotSelectsAndClearsActiveRects() {
     QVERIFY(empty_view_model.inlineHighlightRects().isEmpty());
 }
 
-void ShellLoadTest::commandLineQueryProjectsRustCandidatesWithoutEditingTheDocument() {
+void ShellDocumentInteractionTest::
+    commandLineQueryProjectsRustCandidatesWithoutEditingTheDocument() {
     auto runtime = caret::ffi::new_blank_document_runtime();
     const rust::String snapshot = caret::ffi::layout_snapshot_json(*runtime);
     QVERIFY(!std::string_view(snapshot.data(), snapshot.size()).starts_with("error:"));
@@ -563,7 +566,7 @@ void ShellLoadTest::commandLineQueryProjectsRustCandidatesWithoutEditingTheDocum
     delete probe;
 }
 
-void ShellLoadTest::inputMethodContextFlowsFromViewModelToCanvas() {
+void ShellDocumentInteractionTest::inputMethodContextFlowsFromViewModelToCanvas() {
     auto runtime = caret::ffi::new_blank_document_runtime();
     const rust::String snapshot = caret::ffi::layout_snapshot_json(*runtime);
     QVERIFY(!std::string_view(snapshot.data(), snapshot.size()).starts_with("error:"));
@@ -630,7 +633,7 @@ void ShellLoadTest::inputMethodContextFlowsFromViewModelToCanvas() {
     delete root;
 }
 
-void ShellLoadTest::cancelledInputMethodStateAllowsTheNextCommit() {
+void ShellDocumentInteractionTest::cancelledInputMethodStateAllowsTheNextCommit() {
     caret::DocumentCanvas canvas;
     canvas.setInputMethodContext({{QStringLiteral("enabled"), true}});
     QSignalSpy input_method_spy(&canvas, &caret::DocumentCanvas::inputMethodEventRequested);
@@ -653,7 +656,7 @@ void ShellLoadTest::cancelledInputMethodStateAllowsTheNextCommit() {
     QCOMPARE(input_method_spy.last().at(1).toString(), QStringLiteral("new"));
 }
 
-void ShellLoadTest::documentCanvasRoutesCommandKeysAndKeepsNormalEditingBehavior() {
+void ShellDocumentInteractionTest::documentCanvasRoutesCommandKeysAndKeepsNormalEditingBehavior() {
     QQuickWindow window;
     window.resize(320, 180);
     auto* canvas = new caret::DocumentCanvas(window.contentItem());
@@ -1194,7 +1197,7 @@ bool prepareDocumentInteractionAt(DocumentInteractionFixture& fixture, int gener
 
 } // namespace
 
-void ShellLoadTest::documentHitTestReturnsRustPosition() {
+void ShellDocumentInteractionTest::documentHitTestReturnsRustPosition() {
     auto runtime = caret::ffi::new_blank_document_runtime();
     const rust::String snapshot = caret::ffi::layout_snapshot_json(*runtime);
     QVERIFY(!std::string_view(snapshot.data(), snapshot.size()).starts_with("error:"));
@@ -1254,7 +1257,7 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
              qPrintable(rust_hit.value(QStringLiteral("error")).toString()));
 }
 
-void ShellLoadTest::documentCanvasClickAndTypingPublishRustSnapshot() {
+void ShellDocumentInteractionTest::documentCanvasClickAndTypingPublishRustSnapshot() {
     DocumentInteractionFixture fixture;
     QVERIFY2(prepareDocumentInteractionAt(fixture, 0), qPrintable(fixture.error));
     const QSizeF page_size = fixture.canvas->pageSizesPt().front().toSizeF();
@@ -1310,14 +1313,14 @@ void ShellLoadTest::documentCanvasClickAndTypingPublishRustSnapshot() {
     QVERIFY(!updated_glyph_frame.value(QStringLiteral("placements")).toList().isEmpty());
 }
 
-void ShellLoadTest::documentCanvasRasterizesTypedGlyphWithInk() {
+void ShellDocumentInteractionTest::documentCanvasRasterizesTypedGlyphWithInk() {
     DocumentInteractionFixture fixture;
     QVERIFY2(prepareDocumentInteractionAt(fixture, 1), qPrintable(fixture.error));
     QVERIFY2(waitForGlyphFrame(fixture, QStringLiteral("1")), qPrintable(fixture.error));
     QTRY_VERIFY_WITH_TIMEOUT(renderedGlyphHasInk(fixture, 0), 3000);
 }
 
-void ShellLoadTest::documentFontFallbackPreservesLatinBaseline() {
+void ShellDocumentInteractionTest::documentFontFallbackPreservesLatinBaseline() {
     DocumentInteractionFixture fixture;
     QVERIFY2(prepareDocumentInteractionAt(fixture, 1), qPrintable(fixture.error));
     QVERIFY2(waitForGlyphFrame(fixture, QStringLiteral("1")), qPrintable(fixture.error));
@@ -1360,7 +1363,7 @@ void ShellLoadTest::documentFontFallbackPreservesLatinBaseline() {
     QTRY_VERIFY_WITH_TIMEOUT(renderedGlyphHasInk(fixture, 1), 3000);
 }
 
-void ShellLoadTest::returnSplitsParagraphAndForwardsEditorKey() {
+void ShellDocumentInteractionTest::returnSplitsParagraphAndForwardsEditorKey() {
     DocumentInteractionFixture fixture;
     QVERIFY2(prepareDocumentInteractionAt(fixture, 2), qPrintable(fixture.error));
     QSignalSpy editor_key_spy(fixture.canvas, &caret::DocumentCanvas::editorKeyRequested);
@@ -1385,7 +1388,7 @@ void ShellLoadTest::returnSplitsParagraphAndForwardsEditorKey() {
              QString());
 }
 
-void ShellLoadTest::inputMethodCompositionUnderlineTracksPageTransforms() {
+void ShellDocumentInteractionTest::inputMethodCompositionUnderlineTracksPageTransforms() {
     DocumentInteractionFixture fixture;
     QVERIFY2(prepareDocumentInteractionAt(fixture, 3), qPrintable(fixture.error));
     const qulonglong composition_revision = fixture.layout_view_model->layoutRevision();
@@ -1437,7 +1440,7 @@ void ShellLoadTest::inputMethodCompositionUnderlineTracksPageTransforms() {
                              3000);
 }
 
-void ShellLoadTest::mixedCompositionPublishesOneUnderlinePerRect() {
+void ShellDocumentInteractionTest::mixedCompositionPublishesOneUnderlinePerRect() {
     DocumentInteractionFixture fixture;
     QVERIFY2(prepareDocumentInteractionAt(fixture, 3), qPrintable(fixture.error));
     const qulonglong composition_revision = fixture.layout_view_model->layoutRevision();
@@ -1467,7 +1470,7 @@ void ShellLoadTest::mixedCompositionPublishesOneUnderlinePerRect() {
     }
 }
 
-void ShellLoadTest::cancelledCompositionClearsPreeditAndCompositionRects() {
+void ShellDocumentInteractionTest::cancelledCompositionClearsPreeditAndCompositionRects() {
     DocumentInteractionFixture fixture;
     QVERIFY2(prepareDocumentInteractionAt(fixture, 3), qPrintable(fixture.error));
     QSignalSpy editor_key_spy(fixture.canvas, &caret::DocumentCanvas::editorKeyRequested);
@@ -1497,7 +1500,7 @@ void ShellLoadTest::cancelledCompositionClearsPreeditAndCompositionRects() {
     QCOMPARE(fixture.layout_view_model->documentGeneration(), QStringLiteral("3"));
 }
 
-void ShellLoadTest::escapeClosesCommandLineWithoutEditingTheDocument() {
+void ShellDocumentInteractionTest::escapeClosesCommandLineWithoutEditingTheDocument() {
     DocumentInteractionFixture fixture;
     QVERIFY2(prepareDocumentInteractionAt(fixture, 3), qPrintable(fixture.error));
     QSignalSpy editor_key_spy(fixture.canvas, &caret::DocumentCanvas::editorKeyRequested);
@@ -1515,7 +1518,7 @@ void ShellLoadTest::escapeClosesCommandLineWithoutEditingTheDocument() {
     QCOMPARE(fixture.layout_view_model->documentGeneration(), QStringLiteral("3"));
 }
 
-void ShellLoadTest::inputMethodContextTracksCaretNavigation() {
+void ShellDocumentInteractionTest::inputMethodContextTracksCaretNavigation() {
     DocumentInteractionFixture fixture;
     QVERIFY2(prepareDocumentInteractionAt(fixture, 3), qPrintable(fixture.error));
     QTest::keyClick(&fixture.window, Qt::Key_Left);
@@ -1534,7 +1537,7 @@ void ShellLoadTest::inputMethodContextTracksCaretNavigation() {
                               QString(), 3000);
 }
 
-void ShellLoadTest::backspaceMergesParagraphsAndDeletesText() {
+void ShellDocumentInteractionTest::backspaceMergesParagraphsAndDeletesText() {
     DocumentInteractionFixture fixture;
     QVERIFY2(prepareDocumentInteractionAt(fixture, 3), qPrintable(fixture.error));
     QSignalSpy editor_key_spy(fixture.canvas, &caret::DocumentCanvas::editorKeyRequested);
@@ -1575,7 +1578,7 @@ void ShellLoadTest::backspaceMergesParagraphsAndDeletesText() {
              QString());
 }
 
-void ShellLoadTest::shiftEnterInsertsSoftBreakWithoutSplittingParagraph() {
+void ShellDocumentInteractionTest::shiftEnterInsertsSoftBreakWithoutSplittingParagraph() {
     DocumentInteractionFixture fixture;
     QVERIFY2(prepareDocumentInteractionAt(fixture, 6), qPrintable(fixture.error));
     QSignalSpy editor_key_spy(fixture.canvas, &caret::DocumentCanvas::editorKeyRequested);
@@ -1587,7 +1590,7 @@ void ShellLoadTest::shiftEnterInsertsSoftBreakWithoutSplittingParagraph() {
                               3000);
 }
 
-void ShellLoadTest::shiftNavigationProjectsSelectionRects() {
+void ShellDocumentInteractionTest::shiftNavigationProjectsSelectionRects() {
     DocumentInteractionFixture fixture;
     QVERIFY2(prepareDocumentInteractionAt(fixture, 7), qPrintable(fixture.error));
     const QVariantMap drag_text = fixture.layout_view_model->insertText(QStringLiteral("abc"));
@@ -1612,7 +1615,7 @@ void ShellLoadTest::shiftNavigationProjectsSelectionRects() {
     QTRY_VERIFY_WITH_TIMEOUT(fixture.layout_view_model->selectionRects().isEmpty(), 3000);
 }
 
-void ShellLoadTest::dragSelectionCommitsSameRustSelectionProjection() {
+void ShellDocumentInteractionTest::dragSelectionCommitsSameRustSelectionProjection() {
     DocumentInteractionFixture fixture;
     QVERIFY2(prepareDocumentInteractionAt(fixture, 8), qPrintable(fixture.error));
     const QVariantMap hit_map = fixture.layout_view_model->dragHitMap(0);
@@ -1708,7 +1711,7 @@ void ShellLoadTest::dragSelectionCommitsSameRustSelectionProjection() {
              4);
 }
 
-void ShellLoadTest::reverseDragMovesInputMethodCaretToFocus() {
+void ShellDocumentInteractionTest::reverseDragMovesInputMethodCaretToFocus() {
     DocumentInteractionFixture fixture;
     QVERIFY2(prepareDocumentInteractionAt(fixture, 8), qPrintable(fixture.error));
     const DocumentDragStops stops = findDocumentDragStops(fixture);
@@ -1751,7 +1754,7 @@ void ShellLoadTest::reverseDragMovesInputMethodCaretToFocus() {
              reverse_focus.value(QStringLiteral("xPt")).toReal());
 }
 
-void ShellLoadTest::clipboardCopyPasteUsesRustSelectionProjection() {
+void ShellDocumentInteractionTest::clipboardCopyPasteUsesRustSelectionProjection() {
     DocumentInteractionFixture fixture;
     QVERIFY2(prepareDocumentInteractionAt(fixture, 8), qPrintable(fixture.error));
     const DocumentDragStops stops = findDocumentDragStops(fixture);
@@ -1777,7 +1780,7 @@ void ShellLoadTest::clipboardCopyPasteUsesRustSelectionProjection() {
                               3000);
 }
 
-void ShellLoadTest::selectionDragFromExistingSelectionPublishesCanvasRects() {
+void ShellDocumentInteractionTest::selectionDragFromExistingSelectionPublishesCanvasRects() {
     DocumentInteractionFixture fixture;
     QVERIFY2(prepareDocumentInteractionAt(fixture, 8), qPrintable(fixture.error));
     const DocumentDragStops stops = findDocumentDragStops(fixture);
@@ -1802,7 +1805,7 @@ void ShellLoadTest::selectionDragFromExistingSelectionPublishesCanvasRects() {
     QTRY_VERIFY_WITH_TIMEOUT(!fixture.canvas->selectionRects().isEmpty(), 3000);
 }
 
-void ShellLoadTest::mouseClickClearsSelectionInsideAndOutsideText() {
+void ShellDocumentInteractionTest::mouseClickClearsSelectionInsideAndOutsideText() {
     DocumentInteractionFixture fixture;
     QVERIFY2(prepareDocumentInteractionAt(fixture, 8), qPrintable(fixture.error));
     const DocumentDragStops stops = findDocumentDragStops(fixture);
@@ -1820,7 +1823,7 @@ void ShellLoadTest::mouseClickClearsSelectionInsideAndOutsideText() {
     QTRY_VERIFY_WITH_TIMEOUT(fixture.layout_view_model->selectionRects().isEmpty(), 3000);
 }
 
-void ShellLoadTest::multilinePasteSplitsParagraphs() {
+void ShellDocumentInteractionTest::multilinePasteSplitsParagraphs() {
     DocumentInteractionFixture fixture;
     QVERIFY2(prepareDocumentInteractionAt(fixture, 9), qPrintable(fixture.error));
     const DocumentDragStops stops = findDocumentDragStops(fixture);
@@ -1860,7 +1863,7 @@ void ShellLoadTest::multilinePasteSplitsParagraphs() {
              QStringLiteral("right"));
 }
 
-void ShellLoadTest::insertReplacementClearsSelectionAndPublishesInteractionChange() {
+void ShellDocumentInteractionTest::insertReplacementClearsSelectionAndPublishesInteractionChange() {
     DocumentInteractionFixture fixture;
     QVERIFY2(prepareDocumentInteractionAt(fixture, 10), qPrintable(fixture.error));
     const QVariantMap replacement_hit_map = fixture.layout_view_model->dragHitMap(0);
@@ -1906,7 +1909,7 @@ void ShellLoadTest::insertReplacementClearsSelectionAndPublishesInteractionChang
              QStringLiteral("replacement"));
 }
 
-void ShellLoadTest::crossPageDragPreviewIncludesIntermediatePages() {
+void ShellDocumentInteractionTest::crossPageDragPreviewIncludesIntermediatePages() {
     DocumentInteractionFixture fixture;
     QVERIFY2(prepareDocumentInteractionAt(fixture, 0), qPrintable(fixture.error));
     QVERIFY(fixture.layout_view_model->insertText(QStringLiteral("word ").repeated(4000))
@@ -1961,7 +1964,7 @@ void ShellLoadTest::crossPageDragPreviewIncludesIntermediatePages() {
     QVERIFY(fixture.canvas->caretPreviewGeometry().isEmpty());
 }
 
-void ShellLoadTest::mathTextDragUsesSharedPreviewAndCommitProtocol() {
+void ShellDocumentInteractionTest::mathTextDragUsesSharedPreviewAndCommitProtocol() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
     const QString path = directory.filePath(QStringLiteral("math-drag.cdoc"));
@@ -2383,7 +2386,7 @@ void ShellLoadTest::mathTextDragUsesSharedPreviewAndCommitProtocol() {
     delete surface;
 }
 
-void ShellLoadTest::documentInputDeltaKeepsUntouchedPagesAndParagraphs() {
+void ShellDocumentInteractionTest::documentInputDeltaKeepsUntouchedPagesAndParagraphs() {
     auto runtime = caret::ffi::new_blank_document_runtime();
     QString source;
     for (int index = 0; index < 100; ++index) {
@@ -2511,7 +2514,7 @@ void ShellLoadTest::documentInputDeltaKeepsUntouchedPagesAndParagraphs() {
                 .endsWith(QStringLiteral("x你")));
 }
 
-void ShellLoadTest::invalidDocumentFileStatusPreservesThePublishedProjection() {
+void ShellDocumentInteractionTest::invalidDocumentFileStatusPreservesThePublishedProjection() {
     auto runtime = caret::ffi::new_blank_document_runtime();
     QVERIFY(caret::install_document_runtime(std::move(runtime)));
     caret::LayoutViewModel view_model;
@@ -2572,7 +2575,7 @@ void ShellLoadTest::invalidDocumentFileStatusPreservesThePublishedProjection() {
              QStringLiteral("document.save_incomplete_math_source_draft"));
 }
 
-void ShellLoadTest::interactionResponseErrorsRefreshAutoSaveDeadline() {
+void ShellDocumentInteractionTest::interactionResponseErrorsRefreshAutoSaveDeadline() {
     auto runtime = caret::ffi::new_blank_document_runtime();
     QVERIFY(caret::install_document_runtime(std::move(runtime)));
     caret::LayoutViewModel view_model;

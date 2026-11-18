@@ -1,5 +1,5 @@
 // 验证恢复列表、恢复文档、导出外部版本与丢弃操作的用户可见结果。
-#include "shell_load_test.hpp"
+#include "shell_document_recovery_test.hpp"
 
 #ifdef CARET_ENABLE_APP
 #include "caret_ffi.h"
@@ -43,7 +43,7 @@ QList<QVariant> wait_for_operation(QSignalSpy& spy) {
 
 } // namespace
 
-void ShellLoadTest::recoveryEntriesCanBeRestoredExportedAndDiscarded() {
+void ShellDocumentRecoveryTest::recoveryEntriesCanBeRestoredExportedAndDiscarded() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
     QVERIFY(configureDocumentRecovery(directory.path()));
@@ -202,7 +202,7 @@ void ShellLoadTest::recoveryEntriesCanBeRestoredExportedAndDiscarded() {
     QVERIFY(restored_view_model.recoveryEntries().isEmpty());
 }
 
-void ShellLoadTest::missingRecoveryEntryFailsWithoutReplacingTheOpenDocument() {
+void ShellDocumentRecoveryTest::missingRecoveryEntryFailsWithoutReplacingTheOpenDocument() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
     QVERIFY(configureDocumentRecovery(directory.path()));

@@ -3,17 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-#include "shell_load_test.hpp"
+#include "shell_document_close_test.hpp"
+
+#include "shell_test_support.hpp"
 
 #ifdef CARET_ENABLE_APP
-#include "application_translator.hpp"
-#include "caret_ffi.h"
-#include "document_runtime_bridge.hpp"
-#include "icon_provider.hpp"
 #include "layout_view_model.hpp"
 #include "preferences_view_model.hpp"
-#include "settings_runtime_bridge.hpp"
-#include "theme_catalog.hpp"
 #include <QDir>
 #include <QFile>
 #include <QIODevice>
@@ -37,107 +33,9 @@
 #include <QtGui/qtestsupport_gui.h>
 #include <QtTest/qtest.h>
 #include <QtTest/qtestcase.h>
-#include <cstddef>
 #include <memory>
-#include <string_view>
-#include <utility>
 
 namespace {
-
-class AppFixture final {
-  public:
-    bool initialize(const QString& recovery_root, QString* error) {
-        const QByteArray settings_path =
-            directory.filePath(QStringLiteral("settings.json")).toUtf8();
-        auto settings = caret::ffi::new_settings_runtime(rust::String(
-            settings_path.constData(), static_cast<std::size_t>(settings_path.size())));
-        if (!caret::install_settings_runtime(std::move(settings))) {
-            *error = QStringLiteral("settings runtime install failed");
-            return false;
-        }
-        const rust::String theme_catalog =
-            caret::ffi::settings_theme_catalog(*caret::settings_runtime());
-        const QByteArray theme_bytes(theme_catalog.data(),
-                                     static_cast<qsizetype>(theme_catalog.size()));
-        if (!caret::install_theme_catalog(theme_bytes) ||
-            !caret::install_application_translator(
-                caret::prepare_application_translator(QStringLiteral("en")))) {
-            *error = QStringLiteral("theme or translator setup failed");
-            return false;
-        }
-        const QByteArray root = recovery_root.toUtf8();
-        if (!caret::ffi::configure_document_recovery(
-                 rust::String(root.constData(), static_cast<std::size_t>(root.size())))
-                 .empty()) {
-            *error = QStringLiteral("recovery storage setup failed");
-            return false;
-        }
-        auto document = caret::ffi::new_blank_document_runtime();
-        const rust::String snapshot = caret::ffi::layout_snapshot_json(*document);
-        if (std::string_view(snapshot.data(), snapshot.size()).starts_with("error:") ||
-            !caret::install_layout_snapshot(
-                QString::fromUtf8(snapshot.data(), static_cast<qsizetype>(snapshot.size()))) ||
-            !caret::install_document_runtime(std::move(document))) {
-            *error = QStringLiteral("document runtime setup failed");
-            return false;
-        }
-
-        engine = std::make_unique<QQmlApplicationEngine>();
-        caret::set_application_qml_engine(engine.get());
-        caret::install_icon_provider(*engine);
-        engine->addImportPath(QString::fromUtf8(CARET_QML_IMPORT_PATH));
-        engine->loadFromModule("Caret.Shell", "App");
-        if (engine->rootObjects().size() != 1) {
-            *error = engine->rootObjects().isEmpty()
-                         ? QStringLiteral("App.qml did not load")
-                         : QStringLiteral("unexpected app window count");
-            return false;
-        }
-        window = qobject_cast<QQuickWindow*>(engine->rootObjects().first());
-        if (window == nullptr) {
-            *error = QStringLiteral("App.qml root is not a window");
-            return false;
-        }
-        view_model = engine->singletonInstance<caret::LayoutViewModel*>("Caret.ViewModels",
-                                                                        "LayoutViewModel");
-        if (view_model == nullptr) {
-            *error = QStringLiteral("LayoutViewModel is unavailable");
-            return false;
-        }
-        if (!QTest::qWaitForWindowExposed(window)) {
-            *error = QStringLiteral("App window was not exposed");
-            return false;
-        }
-        return true;
-    }
-
-    bool saveTo(const QString& path) {
-        QSignalSpy operations(view_model, &caret::LayoutViewModel::documentFileOperationFinished);
-        const auto request = view_model->saveDocument(path);
-        if (!request.value(QStringLiteral("valid")).toBool())
-            return false;
-        if (operations.size() != 0 || !operations.wait(10000))
-            return false;
-        return operations.takeFirst().at(0).toBool();
-    }
-
-    bool insert(const QString& text) {
-        return view_model->insertText(text).value(QStringLiteral("valid")).toBool();
-    }
-
-    QObject* child(const QString& name) const { return window->findChild<QObject*>(name); }
-
-    bool click(const QString& name) const {
-        QObject* button = child(name);
-        return button != nullptr &&
-               QMetaObject::invokeMethod(button, "clicked", Qt::DirectConnection);
-    }
-
-    QTemporaryDir directory;
-    std::unique_ptr<QQmlApplicationEngine> engine;
-    QQuickWindow* window = nullptr;
-    caret::LayoutViewModel* view_model = nullptr;
-};
 
 bool documentContains(const QString& path, const QByteArray& expected) {
     QFile file(path);
@@ -156,7 +54,7 @@ auto recoveryFiles(const QString& root) {
 
 } // namespace
 
-void ShellLoadTest::closingAnUneditedWindowClosesImmediately() {
+void ShellDocumentCloseTest::closingAnUneditedWindowClosesImmediately() {
     AppFixture fixture;
     QString error;
     if (!fixture.directory.isValid()) {
@@ -175,7 +73,7 @@ void ShellLoadTest::closingAnUneditedWindowClosesImmediately() {
         !fixture.child(QStringLiteral("closeDocumentConfirmation"))->property("visible").toBool());
 }
 
-void ShellLoadTest::cancellingEditedDocumentCloseKeepsChanges() {
+void ShellDocumentCloseTest::cancellingEditedDocumentCloseKeepsChanges() {
     AppFixture fixture;
     QString error;
     if (!fixture.directory.isValid() || !fixture.initialize(fixture.directory.path(), &error)) {
@@ -219,7 +117,7 @@ void ShellLoadTest::cancellingEditedDocumentCloseKeepsChanges() {
              QStringLiteral("keep this edit"));
 }
 
-void ShellLoadTest::discardingEditedDocumentClosesWithoutSaving() {
+void ShellDocumentCloseTest::discardingEditedDocumentClosesWithoutSaving() {
     AppFixture fixture;
     QString error;
     if (!fixture.directory.isValid() || !fixture.initialize(fixture.directory.path(), &error)) {
@@ -241,7 +139,7 @@ void ShellLoadTest::discardingEditedDocumentClosesWithoutSaving() {
     QCOMPARE(documentBytes(path), saved_baseline);
 }
 
-void ShellLoadTest::savingEditedDocumentBeforeClosePersistsChanges() {
+void ShellDocumentCloseTest::savingEditedDocumentBeforeClosePersistsChanges() {
     AppFixture fixture;
     QString error;
     if (!fixture.directory.isValid() || !fixture.initialize(fixture.directory.path(), &error)) {
@@ -290,7 +188,7 @@ void ShellLoadTest::savingEditedDocumentBeforeClosePersistsChanges() {
     QVERIFY(hidden_after_save);
 }
 
-void ShellLoadTest::unnamedDocumentSaveAsContinuesCloseAndCancelCanRetry() {
+void ShellDocumentCloseTest::unnamedDocumentSaveAsContinuesCloseAndCancelCanRetry() {
     QString error;
     {
         AppFixture save_fixture;
@@ -357,7 +255,7 @@ void ShellLoadTest::unnamedDocumentSaveAsContinuesCloseAndCancelCanRetry() {
     QVERIFY(cancel_fixture.window->isVisible());
 }
 
-void ShellLoadTest::autoSaveFlushCompletesBeforeClosing() {
+void ShellDocumentCloseTest::autoSaveFlushCompletesBeforeClosing() {
     AppFixture fixture;
     QString error;
     if (!fixture.directory.isValid() || !fixture.initialize(fixture.directory.path(), &error)) {
@@ -402,7 +300,7 @@ void ShellLoadTest::autoSaveFlushCompletesBeforeClosing() {
     QVERIFY(hidden_after_flush);
 }
 
-void ShellLoadTest::autoSaveFailureReopensCloseConfirmation() {
+void ShellDocumentCloseTest::autoSaveFailureReopensCloseConfirmation() {
     AppFixture fixture;
     QString error;
     if (!fixture.directory.isValid() || !fixture.initialize(fixture.directory.path(), &error)) {
@@ -451,7 +349,7 @@ void ShellLoadTest::autoSaveFailureReopensCloseConfirmation() {
              QStringLiteral("local edit survives"));
 }
 
-void ShellLoadTest::saveConflictKeepsWindowAndRecoveryCopy() {
+void ShellDocumentCloseTest::saveConflictKeepsWindowAndRecoveryCopy() {
     AppFixture fixture;
     QString error;
     if (!fixture.directory.isValid() || !fixture.initialize(fixture.directory.path(), &error)) {
@@ -503,7 +401,7 @@ void ShellLoadTest::saveConflictKeepsWindowAndRecoveryCopy() {
     QVERIFY(QByteArray::fromBase64(payload).contains("local revision"));
 }
 
-void ShellLoadTest::recoveryWriteFailureReopensCloseConfirmation() {
+void ShellDocumentCloseTest::recoveryWriteFailureReopensCloseConfirmation() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
     const QString blocked_root = directory.filePath(QStringLiteral("recovery-blocker"));
@@ -562,7 +460,7 @@ void ShellLoadTest::recoveryWriteFailureReopensCloseConfirmation() {
              QStringLiteral("preserve local revision"));
 }
 
-void ShellLoadTest::closeRequestDuringFailedSaveDoesNotReopenConfirmation() {
+void ShellDocumentCloseTest::closeRequestDuringFailedSaveDoesNotReopenConfirmation() {
     AppFixture fixture;
     QString error;
     if (!fixture.directory.isValid() || !fixture.initialize(fixture.directory.path(), &error)) {
@@ -612,7 +510,7 @@ void ShellLoadTest::closeRequestDuringFailedSaveDoesNotReopenConfirmation() {
 }
 
 // 直接投递文件活动信号，隔离验证 QML 对关闭流程与后台操作的关联规则。
-void ShellLoadTest::unrelatedFileFailuresDoNotCorruptCloseSaveState() {
+void ShellDocumentCloseTest::unrelatedFileFailuresDoNotCorruptCloseSaveState() {
     {
         AppFixture fixture;
         QString error;

@@ -1,6 +1,7 @@
 // 验证文档默认保存位置与本地文件 URL 的边界转换。
+#include "shell_document_path_test.hpp"
+
 #include "document_path_adapter.hpp"
-#include "shell_load_test.hpp"
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -11,7 +12,7 @@
 #include <QtCore/qstring.h>
 #include <QtTest/qtestcase.h>
 
-void ShellLoadTest::documentPathAdapterCreatesDefaultSaveLocation() {
+void ShellDocumentPathTest::documentPathAdapterCreatesDefaultSaveLocation() {
     QTemporaryDir documents;
     QVERIFY(documents.isValid());
     caret::DocumentPathAdapter adapter;
@@ -34,7 +35,7 @@ void ShellLoadTest::documentPathAdapterCreatesDefaultSaveLocation() {
     QVERIFY(!adapter.defaultSaveFileUrlIn(QString{}).isValid());
 }
 
-void ShellLoadTest::documentPathAdapterConvertsLocalPaths() {
+void ShellDocumentPathTest::documentPathAdapterConvertsLocalPaths() {
     caret::DocumentPathAdapter adapter;
     const QString local_path = QDir(QDir::tempPath()).filePath(QStringLiteral("Caret 文档.cdoc"));
     QCOMPARE(adapter.localFileUrl(local_path), QUrl::fromLocalFile(local_path));

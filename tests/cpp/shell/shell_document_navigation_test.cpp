@@ -1,5 +1,5 @@
 // 验证 Qt 文档导航命令将用户移动结果同步到可观察的插入点状态。
-#include "shell_load_test.hpp"
+#include "shell_document_navigation_test.hpp"
 
 #ifdef CARET_ENABLE_APP
 #include "caret_ffi.h"
@@ -17,7 +17,7 @@
 #include <utility>
 
 #ifdef CARET_ENABLE_APP
-void ShellLoadTest::documentCaretNavigationUpdatesObservablePosition() {
+void ShellDocumentNavigationTest::documentCaretNavigationUpdatesObservablePosition() {
     auto runtime = caret::ffi::new_blank_document_runtime();
     const rust::String snapshot = caret::ffi::layout_snapshot_json(*runtime);
     QVERIFY(!std::string_view(snapshot.data(), snapshot.size()).starts_with("error:"));
