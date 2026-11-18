@@ -4,6 +4,7 @@
 // 署名：Yuki Lu
 
 #include "document_canvas.hpp"
+#include "shared/page_rect_validation.hpp"
 #include <QColor>
 #include <QString>
 #include <QVariant>
@@ -31,13 +32,12 @@ bool valid_highlight_rectangles(const QVariantList& rectangles,
         const double y1 = rectangle.value(QStringLiteral("y1Pt")).toDouble(&y1_ok);
         if (!page_ok || !std::isfinite(page) || page < 0.0 ||
             page > std::numeric_limits<int>::max() || std::floor(page) != page || !x0_ok ||
-            !y0_ok || !x1_ok || !y1_ok || !std::isfinite(x0) || !std::isfinite(y0) ||
-            !std::isfinite(x1) || !std::isfinite(y1) || x0 < 0.0 || y0 < 0.0 || x1 <= x0 ||
-            y1 <= y0) {
+            !y0_ok || !x1_ok || !y1_ok ||
+            !page_rect_validation::valid_coordinates(x0, y0, x1, y1)) {
             return false;
         }
         const QSizeF size = page_size(static_cast<int>(page));
-        if (size.isEmpty() || x1 > size.width() || y1 > size.height()) {
+        if (!page_rect_validation::within_page(x1, y1, size.width(), size.height())) {
             return false;
         }
     }

@@ -61,10 +61,11 @@ LayoutViewModel::LayoutViewModel(QObject* parent) : QObject(parent) {
     m_composition_rects = parsed_snapshot.composition_rects;
     m_paragraph_layouts = parsed_snapshot.paragraph_layouts;
     m_input_method_context = parsed_snapshot.input_method_context;
-    m_command_line = {{QStringLiteral("active"), false},
-                      {QStringLiteral("query"), QString{}},
-                      {QStringLiteral("selected"), 0},
-                      {QStringLiteral("candidates"), QVariantList{}}};
+    m_command_line = {
+        {layout_snapshot::protocol_field_name(QStringLiteral("Active")), false},
+        {layout_snapshot::protocol_field_name(QStringLiteral("Query")), QString{}},
+        {layout_snapshot::protocol_field_name(QStringLiteral("Selected")), 0},
+        {layout_snapshot::protocol_field_name(QStringLiteral("Candidates")), QVariantList{}}};
     m_current_structure = parsed_snapshot.current_structure;
     m_block_environment_highlight_rects = parsed_snapshot.block_environment_highlight_rects;
     m_inline_environment_highlight_rects = parsed_snapshot.inline_environment_highlight_rects;
@@ -233,8 +234,8 @@ bool LayoutViewModel::installInteraction(const QJsonObject& root) {
                              m_input_method_context.value(QStringLiteral("surroundingText")));
     }
     QVariantMap command_line;
-    if (!layout_snapshot::parse_command_line_state(root.value(QStringLiteral("commandLine")),
-                                                   command_line, m_error)) {
+    if (!layout_snapshot::parse_command_line_state(
+            layout_snapshot::command_line_snapshot_value(root), command_line, m_error)) {
         return false;
     }
     QVariantList block_environment_highlight_rects = m_block_environment_highlight_rects;

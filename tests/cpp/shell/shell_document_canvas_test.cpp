@@ -83,6 +83,26 @@ void ShellDocumentCanvasTest::preeditCancellationDoesNotReenterTheInputMethodHan
     QCOMPARE(event_count, 1);
 }
 
+void ShellDocumentCanvasTest::selectionAndPreviewKeepDifferentPageBoundsPolicies() {
+    caret::DocumentCanvas canvas;
+    canvas.setPageSizesPt({QSizeF(100.0, 100.0)});
+    const QVariantMap in_page{{QStringLiteral("pageIndex"), 0},
+                              {QStringLiteral("x0Pt"), 10.0},
+                              {QStringLiteral("y0Pt"), 10.0},
+                              {QStringLiteral("x1Pt"), 20.0},
+                              {QStringLiteral("y1Pt"), 20.0}};
+    const QVariantMap over_page{{QStringLiteral("pageIndex"), 0},
+                                {QStringLiteral("x0Pt"), 90.0},
+                                {QStringLiteral("y0Pt"), 10.0},
+                                {QStringLiteral("x1Pt"), 120.0},
+                                {QStringLiteral("y1Pt"), 30.0}};
+    canvas.setSelectionRects({in_page});
+    canvas.setSelectionRects({over_page});
+    QCOMPARE(canvas.selectionRects(), QVariantList{in_page});
+    canvas.setSelectionPreviewRects({over_page});
+    QCOMPARE(canvas.selectionPreviewRects(), QVariantList{over_page});
+}
+
 void ShellDocumentCanvasTest::mathSourceDisablesInputMethodAndCancelsPreedit() {
     caret::DocumentCanvas canvas;
     int event_count = 0;
@@ -736,11 +756,12 @@ void ShellDocumentCanvasTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
                                   QStringLiteral("\"sourceStart\":9223372036854775808"));
     QVERIFY(!caret::install_layout_snapshot(unsafe_index_snapshot));
     const QString split_utf8_snapshot = QStringLiteral(
-        R"({"documentGeneration":"0","fontGeneration":"1","marginsPt":{"top":72,"right":72,"bottom":72,"left":72},"pages":[],"paragraphs":[{"paragraphId":"p1","text":"éx","lines":[{"sourceStart":0,"sourceEnd":1,"consumedStart":0,"consumedEnd":1,"topPt":0,"baselinePt":9,"heightPt":12,"advancePt":6,"overflowsWidth":false},{"sourceStart":1,"sourceEnd":3,"consumedStart":1,"consumedEnd":3,"topPt":12,"baselinePt":21,"heightPt":12,"advancePt":6,"overflowsWidth":false}]}]})");
+        R"({"documentGeneration":"0","fontGeneration":"1","marginsPt":{"top":72,"right":72,"bottom":72,"left":72},"pages":[],"paragraphs":[{"paragraphId":"p1","text":"éx","lines":[{"sourceStart":0,"sourceEnd":1,"consumedStart":0,"consumedEnd":1,"topPt":0,"baselinePt":9,"heightPt":12,"advancePt":6,"overflowsWidth":false},{"sourceStart":1,"sourceEnd":3,"consumedStart":1,"consumedEnd":3,"topPt":12,"baselinePt":21,"heightPt":12,"advancePt":6,"overflowsWidth":false}]}],"inputMethodContext":{"surroundingText":"","cursorPosition":0,"anchorPosition":0,"enabled":true,"preferLatin":false}})");
     QVERIFY(!caret::install_layout_snapshot(split_utf8_snapshot));
     const QString overlapping_lines_snapshot = QStringLiteral(
-        R"({"documentGeneration":"0","fontGeneration":"1","marginsPt":{"top":72,"right":72,"bottom":72,"left":72},"pages":[],"paragraphs":[{"paragraphId":"p1","text":"ab","lines":[{"sourceStart":0,"sourceEnd":1,"consumedStart":0,"consumedEnd":1,"topPt":0,"baselinePt":9,"heightPt":12,"advancePt":6,"overflowsWidth":false},{"sourceStart":1,"sourceEnd":2,"consumedStart":1,"consumedEnd":2,"topPt":0,"baselinePt":9,"heightPt":12,"advancePt":6,"overflowsWidth":false}]}]})");
-    QVERIFY(!caret::install_layout_snapshot(overlapping_lines_snapshot));
+        R"({"documentGeneration":"0","fontGeneration":"1","marginsPt":{"top":72,"right":72,"bottom":72,"left":72},"pages":[],"paragraphs":[{"paragraphId":"p1","text":"ab","lines":[{"sourceStart":0,"sourceEnd":1,"consumedStart":0,"consumedEnd":1,"topPt":0,"baselinePt":9,"heightPt":12,"advancePt":6,"overflowsWidth":false},{"sourceStart":1,"sourceEnd":2,"consumedStart":1,"consumedEnd":2,"topPt":0,"baselinePt":9,"heightPt":12,"advancePt":6,"overflowsWidth":false}]}],"inputMethodContext":{"surroundingText":"","cursorPosition":0,"anchorPosition":0,"enabled":true,"preferLatin":false}})");
+    QVERIFY(caret::install_layout_snapshot(overlapping_lines_snapshot));
+    QVERIFY(caret::install_layout_snapshot(empty_snapshot));
     QString negative_line_top = empty_snapshot;
     negative_line_top.replace(QStringLiteral("\"topPt\":0"), QStringLiteral("\"topPt\":-1"));
     QVERIFY(!caret::install_layout_snapshot(negative_line_top));

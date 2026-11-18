@@ -7,6 +7,7 @@ class ShellLayoutSnapshotValidationTest final : public ShellTestBase {
     Q_OBJECT
 
   private slots:
+    void commandLineProtocolDescriptionMatchesCodecBehavior();
 #ifdef CARET_ENABLE_APP
     void invalidLayoutSnapshotsAreRejectedWithoutReplacingPublishedPages();
 #endif

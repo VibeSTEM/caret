@@ -1,5 +1,17 @@
 # Caret.ViewModels。按设置、主题和文档分类发布 Rust 的只读 Qt 投影。
 set(QT_QML_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/..")
+set(CARET_COMMAND_LINE_PROTOCOL_JSON
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../shared/command_line_protocol.json")
+file(READ "${CARET_COMMAND_LINE_PROTOCOL_JSON}" CARET_COMMAND_LINE_PROTOCOL_SOURCE)
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
+file(
+  WRITE "${CMAKE_CURRENT_BINARY_DIR}/generated/command_line_protocol_json.hpp"
+  "#pragma once\nnamespace caret::layout_snapshot {\ninline constexpr char kCommandLineProtocolJson[] = R\"caretprotocol(${CARET_COMMAND_LINE_PROTOCOL_SOURCE})caretprotocol\";\n}\n"
+)
+set_property(
+  DIRECTORY
+  APPEND
+  PROPERTY CMAKE_CONFIGURE_DEPENDS "${CARET_COMMAND_LINE_PROTOCOL_JSON}")
 if(UNIX AND NOT APPLE)
   set(CARET_QML_MODULE_OPTIONS __QT_INTERNAL_NO_GENERATE_QMLLS_BUILD_INI)
 endif()
@@ -50,5 +62,8 @@ qt_add_qml_module(
 set_target_properties(caret_viewmodels PROPERTIES EXPORT_NAME viewmodels)
 caret_native_defaults(caret_viewmodels)
 add_library(caret::viewmodels ALIAS caret_viewmodels)
-target_include_directories(caret_viewmodels PUBLIC document settings theme)
+target_include_directories(
+  caret_viewmodels
+  PUBLIC document settings theme "${CMAKE_CURRENT_SOURCE_DIR}/.."
+  PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(caret_viewmodels PUBLIC Qt6::Concurrent Qt6::Core Qt6::Qml Qt6::StateMachine)

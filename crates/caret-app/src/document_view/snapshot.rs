@@ -8,9 +8,9 @@ use super::{
 };
 use caret_doc::NodeId;
 use caret_engine::{
-    Affinity, CompositionRange, DocumentLayoutDeltaView, MathEditTarget, MathTextInputContext,
-    MathTreePosition, PageCaretGeometry, PageSelectionRect, Pos, Selection, StructureClass,
-    StructureKind, StructurePosition,
+    Affinity, CommandLineWireField as Field, CompositionRange, DocumentLayoutDeltaView,
+    MathEditTarget, MathTextInputContext, MathTreePosition, PageCaretGeometry, PageSelectionRect,
+    Pos, Selection, StructureClass, StructureKind, StructurePosition,
 };
 use serde_json::{Value, json};
 
@@ -29,12 +29,12 @@ fn command_line_state(session: &caret_engine::Session) -> Value {
                 .into_iter()
                 .map(|candidate| {
                     json!({
-                        "alias": candidate.alias,
-                        "commandId": candidate.command_id,
-                        "label": candidate.label,
-                        "available": candidate.available,
-                        "value": candidate.value,
-                        "hasChildren": candidate.has_children,
+                        (Field::Alias.wire_name()): candidate.alias,
+                        (Field::CommandId.wire_name()): candidate.command_id,
+                        (Field::Label.wire_name()): candidate.label,
+                        (Field::Available.wire_name()): candidate.available,
+                        (Field::Value.wire_name()): candidate.value,
+                        (Field::HasChildren.wire_name()): candidate.has_children,
                     })
                 })
                 .collect::<Vec<_>>();
@@ -45,38 +45,31 @@ fn command_line_state(session: &caret_engine::Session) -> Value {
             let cursor_utf16 =
                 command_line.prefix().encode_utf16().count() + query_prefix.encode_utf16().count();
             json!({
-                "active": true,
-                "mode": match command_line.mode {
-                    caret_engine::CommandLineMode::Command => "command",
-                    caret_engine::CommandLineMode::Math => "math",
-                    caret_engine::CommandLineMode::FontFamily => "fontFamily",
-                    caret_engine::CommandLineMode::DefaultFontTarget => "defaultFontTarget",
-                    caret_engine::CommandLineMode::DefaultFontScope => "defaultFontScope",
-                    caret_engine::CommandLineMode::DefaultFontLanguage => "defaultFontLanguage",
-                    caret_engine::CommandLineMode::DefaultFontFamily => "defaultFontFamily",
-                },
-                "prefix": command_line.prefix(),
-                "query": &command_line.query,
-                "cursor": command_line.cursor,
-                "cursorUtf16": cursor_utf16,
-                "preedit": &command_line.preedit,
-                "preeditCursorUtf16": command_line.preedit_cursor_utf16,
-                "codeFontFamily": effective_code_font_family,
-                "selected": command_line.selected,
-                "candidates": candidates,
+                (Field::Active.wire_name()): true,
+                (Field::Mode.wire_name()): command_line.mode.wire_name(),
+                (Field::Prefix.wire_name()): command_line.prefix(),
+                (Field::Query.wire_name()): &command_line.query,
+                (Field::Cursor.wire_name()): command_line.cursor,
+                (Field::CursorUtf16.wire_name()): cursor_utf16,
+                (Field::Preedit.wire_name()): &command_line.preedit,
+                (Field::PreeditCursorUtf16.wire_name()): command_line.preedit_cursor_utf16,
+                (Field::CodeFontFamily.wire_name()): effective_code_font_family,
+                (Field::Selected.wire_name()): command_line.selected,
+                (Field::Candidates.wire_name()): candidates,
             })
         })
         .unwrap_or_else(|| {
+            let (mode, prefix) = caret_engine::CommandLineMode::wire_default();
             json!({
-                "active": false,
-                "mode": "command",
-                "prefix": "\\",
-                "query": "",
-                "cursor": 0,
-                "cursorUtf16": 1,
-                "codeFontFamily": effective_code_font_family,
-                "selected": 0,
-                "candidates": [],
+                (Field::Active.wire_name()): false,
+                (Field::Mode.wire_name()): mode,
+                (Field::Prefix.wire_name()): prefix,
+                (Field::Query.wire_name()): "",
+                (Field::Cursor.wire_name()): 0,
+                (Field::CursorUtf16.wire_name()): prefix.encode_utf16().count(),
+                (Field::CodeFontFamily.wire_name()): effective_code_font_family,
+                (Field::Selected.wire_name()): 0,
+                (Field::Candidates.wire_name()): [],
             })
         })
 }
@@ -805,7 +798,10 @@ impl DocumentViewRuntime {
         .map_err(|error| format!("layout.serialize: {error}"))?;
         view.as_object_mut()
             .ok_or_else(|| "layout.invalid_view_object".to_owned())?
-            .insert("commandLine".to_owned(), command_line_state(&self.session));
+            .insert(
+                Field::CommandLine.wire_name().to_owned(),
+                command_line_state(&self.session),
+            );
         view.as_object_mut()
             .ok_or_else(|| "layout.invalid_view_object".to_owned())?
             .insert(
@@ -841,7 +837,7 @@ impl DocumentViewRuntime {
             view.as_object_mut()
                 .ok_or_else(|| "layout.invalid_view_object".to_owned())?
                 .insert(
-                    "compositionPreview".to_owned(),
+                    Field::CompositionPreview.wire_name().to_owned(),
                     serde_json::Value::Bool(true),
                 );
         }
@@ -1110,7 +1106,7 @@ impl DocumentViewRuntime {
             "fontGeneration": snapshot.font_generation.to_string(),
             "selectionRects": rectangles,
             "inputMethodContext": input_method_context,
-            "commandLine": command_line,
+            (Field::CommandLine.wire_name()): command_line,
             "currentStructure": current_structure,
             "blockEnvironmentHighlightRects": highlight_rectangles.block_environment,
             "mathBlockHighlightRects": highlight_rectangles.math_block,

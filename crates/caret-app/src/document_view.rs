@@ -19,6 +19,23 @@ mod snapshot;
 #[cfg(test)]
 mod tests;
 
+/// 返回命令行快照协议的默认模式和前缀。
+pub fn command_line_wire_default() -> (&'static str, &'static str) {
+    caret_engine::CommandLineMode::wire_default()
+}
+
+/// 校验 Rust 命令行模式名及其快照前缀。
+pub fn command_line_wire_valid(mode: &str, prefix: &str) -> bool {
+    caret_engine::CommandLineMode::from_wire_name(mode)
+        .is_some_and(|candidate| candidate.accepts_wire_prefix(prefix))
+}
+
+/// 返回给定命令行模式的缺省前缀；未知模式使用空字符串。
+pub fn command_line_wire_default_prefix(mode: &str) -> &'static str {
+    caret_engine::CommandLineMode::from_wire_name(mode)
+        .map_or("", caret_engine::CommandLineMode::wire_default_prefix)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MathInteractionContext {
     surrounding_text: String,

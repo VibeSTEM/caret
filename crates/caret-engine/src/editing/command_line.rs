@@ -24,6 +24,8 @@ pub enum CommandLineMode {
     Math,
 }
 
+include!(concat!(env!("OUT_DIR"), "/command_line_protocol.rs"));
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandLine {
     pub at: Pos,
@@ -190,23 +192,27 @@ impl CommandLine {
 
     pub fn prefix(&self) -> String {
         match self.mode {
-            CommandLineMode::Command | CommandLineMode::Math => "\\".to_owned(),
-            CommandLineMode::FontFamily => "\\font ".to_owned(),
-            CommandLineMode::DefaultFontTarget => "\\defaultfont ".to_owned(),
+            CommandLineMode::Command
+            | CommandLineMode::Math
+            | CommandLineMode::FontFamily
+            | CommandLineMode::DefaultFontTarget => self.mode.wire_default_prefix().to_owned(),
             CommandLineMode::DefaultFontScope => format!(
-                "\\defaultfont {} ",
+                "{}{} ",
+                self.mode.wire_default_prefix(),
                 self.font_picker
                     .as_ref()
                     .map_or_else(String::new, FontPicker::script)
             ),
             CommandLineMode::DefaultFontLanguage => format!(
-                "\\defaultfont {}: ",
+                "{}{}: ",
+                self.mode.wire_default_prefix(),
                 self.font_picker
                     .as_ref()
                     .map_or_else(String::new, FontPicker::script)
             ),
             CommandLineMode::DefaultFontFamily => format!(
-                "\\defaultfont {} ",
+                "{}{} ",
+                self.mode.wire_default_prefix(),
                 self.font_picker
                     .as_ref()
                     .map_or_else(String::new, FontPicker::target_prefix)
@@ -486,5 +492,79 @@ fn append_matches(
         let mut candidate = candidate;
         candidate.available &= is_available(&candidate);
         candidates.push(candidate);
+    }
+}
+
+#[cfg(test)]
+mod wire_tests {
+    use super::{CommandLine, CommandLineMode};
+    use crate::editing::position::{Affinity, Pos, StoryId};
+    use caret_doc::NodeId;
+
+    #[test]
+    fn every_command_line_mode_has_a_unique_wire_name_and_valid_default_prefix() {
+        let modes = [
+            CommandLineMode::Command,
+            CommandLineMode::Math,
+            CommandLineMode::FontFamily,
+            CommandLineMode::DefaultFontTarget,
+            CommandLineMode::DefaultFontScope,
+            CommandLineMode::DefaultFontLanguage,
+            CommandLineMode::DefaultFontFamily,
+        ];
+        for (index, mode) in modes.iter().enumerate() {
+            assert_eq!(
+                CommandLineMode::from_wire_name(mode.wire_name()),
+                Some(*mode)
+            );
+            assert!(
+                !modes[..index]
+                    .iter()
+                    .any(|previous| previous.wire_name() == mode.wire_name())
+            );
+        }
+        assert!(CommandLineMode::Command.accepts_wire_prefix("\\"));
+        assert!(CommandLineMode::FontFamily.accepts_wire_prefix("\\font "));
+        assert!(CommandLineMode::DefaultFontTarget.accepts_wire_prefix("\\defaultfont "));
+        assert!(CommandLineMode::DefaultFontScope.accepts_wire_prefix("\\defaultfont Latin "));
+        assert!(CommandLineMode::DefaultFontLanguage.accepts_wire_prefix("\\defaultfont Latin: "));
+        assert!(
+            CommandLineMode::DefaultFontFamily.accepts_wire_prefix("\\defaultfont Latin:zh-Hans ")
+        );
+
+        let base = CommandLine::new(Pos {
+            story: StoryId::Body,
+            paragraph_id: NodeId::generate(),
+            offset: 0,
+            affinity: Affinity::Downstream,
+        });
+        let target = caret_doc::DocumentFontTarget::ScriptLanguage {
+            script: "Latin".to_owned(),
+            language: "zh-Hans".to_owned(),
+        };
+        let target_picker = base
+            .default_font_target_picker(vec![(String::from("Latin"), target.clone())], Vec::new());
+        let scope_picker = target_picker.default_font_scope_picker("Latin".to_owned());
+        let language_picker = scope_picker.default_font_language_picker();
+        let default_font_family = target_picker.default_font_family_picker(target);
+        assert_eq!(scope_picker.prefix(), "\\defaultfont Latin ");
+        assert_eq!(language_picker.prefix(), "\\defaultfont Latin: ");
+        assert_eq!(default_font_family.prefix(), "\\defaultfont Latin:zh-Hans ");
+        let command_lines = [
+            base.clone(),
+            CommandLine::math(base.at.clone()),
+            base.font_family_picker(Vec::new()),
+            target_picker,
+            scope_picker,
+            language_picker,
+            default_font_family,
+        ];
+        for command_line in &command_lines {
+            assert!(
+                command_line
+                    .mode
+                    .accepts_wire_prefix(&command_line.prefix())
+            );
+        }
     }
 }

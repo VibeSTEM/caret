@@ -8,6 +8,7 @@ class ShellDocumentCanvasTest final : public ShellTestBase {
 
   private slots:
     void preeditCancellationDoesNotReenterTheInputMethodHandler();
+    void selectionAndPreviewKeepDifferentPageBoundsPolicies();
     void mathSourceDisablesInputMethodAndCancelsPreedit();
     void canvasPolicyPublishesDocumentedZoomLimits();
     void documentCanvasMapsPageCoordinatesAndHitsPages();

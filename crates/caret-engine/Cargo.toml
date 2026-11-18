@@ -22,6 +22,9 @@ fontique.workspace = true
 [dev-dependencies]
 criterion.workspace = true
 
+[build-dependencies]
+serde_json.workspace = true
+
 [[bench]]
 name = "novel_document_criterion"
 path = "../../tests/performance/rust/cpu/novel_document_criterion.rs"

@@ -22,7 +22,7 @@ mod tests;
 mod text_map;
 
 pub use command::{Command, Direction, EditorKey, NavigationCandidate, NavigationGeneration};
-pub use command_line::{CommandLine, CommandLineMode};
+pub use command_line::{CommandLine, CommandLineMode, CommandLineWireField};
 pub use command_registry::CommandCandidate;
 pub use environment::{
     Capabilities, CurrentEnvironmentView, EnvironmentEntry, EnvironmentKind, EnvironmentLevel,
