@@ -187,6 +187,8 @@ class LayoutViewModel final : public QObject {
     Q_INVOKABLE QVariantMap discardCurrentRecovery();
     /// 捕获当前修订后在后台原子保存；空路径表示保存到当前文档路径。
     Q_INVOKABLE QVariantMap saveDocument(const QString& path = QString{});
+    /// 将内部文档/恢复/设置错误码映射为当前语言的安全用户文案。
+    Q_INVOKABLE QString documentOperationMessage(const QString& error) const;
     /// 提交当前窗口文档的 AutoSave 运行开关。
     Q_INVOKABLE void setAutoSaveEnabled(bool enabled);
     /// 用户确认后备份外部版本并覆盖冲突文件。

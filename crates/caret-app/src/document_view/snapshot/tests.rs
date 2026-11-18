@@ -16,7 +16,7 @@ fn insertion_slot_stays_visible_at_page_edges_and_centers_on_the_caret() {
 }
 
 #[test]
-fn command_candidate_snapshot_omits_search_only_labels() -> Result<(), String> {
+fn command_candidate_snapshot_includes_rust_owned_display_labels() -> Result<(), String> {
     let mut runtime = DocumentViewRuntime::new_blank()?;
     runtime.command_line_command_json("begin", String::new())?;
     let snapshot = runtime.command_line_command_json("type", "sec".to_owned())?;
@@ -28,8 +28,8 @@ fn command_candidate_snapshot_omits_search_only_labels() -> Result<(), String> {
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0]["alias"], "\\section");
     assert_eq!(candidates[0]["commandId"], "struct.section.create");
+    assert_eq!(candidates[0]["label"], "Section");
     assert_eq!(candidates[0]["available"], true);
-    assert!(candidates[0].get("label").is_none());
     Ok(())
 }
 
@@ -191,6 +191,7 @@ fn math_command_snapshot_enables_supported_inline_math_and_publishes_focus() -> 
         .and_then(|candidates| candidates.iter().find(|item| item["alias"] == "\\math"))
         .ok_or_else(|| "matching math candidate should be present".to_owned())?;
     assert_eq!(candidate["available"], true);
+    assert_eq!(candidate["label"], "Inline math");
     let accepted: Value =
         serde_json::from_str(&runtime.command_line_command_json("accept", String::new())?)
             .map_err(|error| error.to_string())?;

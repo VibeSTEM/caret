@@ -25,6 +25,10 @@ Rectangle {
     signal shareRequested
     signal autoSaveRequested(bool enabled)
     property string documentName: qsTr("Untitled")
+    // 保存只在窗口未处理关闭事务时可由用户触发。
+    property bool saveEnabled: true
+    // 关闭事务期间不允许切换 AutoSave 并启动另存。
+    property bool autoSaveControlEnabled: true
 
     readonly property int toolSide: Math.min(Theme.toolbarButtonHeight, Theme.titlebarHeight - Theme.spacingSmall)
     // 系统窗口控件占用的区域由 WindowChromeMetrics 提供，QML 只增加主题间距。
@@ -57,6 +61,7 @@ Rectangle {
         ThemedSwitch {
             id: autoSave
             objectName: "autoSaveSwitch"
+            enabled: titleBar.autoSaveControlEnabled
             Layout.alignment: Qt.AlignVCenter
             Layout.fillHeight: false
             Layout.preferredHeight: autoSave.trackHeight
@@ -83,6 +88,7 @@ Rectangle {
             objectName: "saveButton"
             iconName: "save"
             accessibleName: qsTr("Save")
+            enabled: titleBar.saveEnabled
             onClicked: titleBar.saveRequested()
         }
 

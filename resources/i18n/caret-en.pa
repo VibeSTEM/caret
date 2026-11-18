@@ -70,6 +70,26 @@ message_121:
   tr: Finish or cancel the incomplete formula edit before replacing this document.
   st: finished
 
+message_122:
+  src: The document operation could not be completed.
+  tr: The document operation could not be completed.
+  st: finished
+
+message_123:
+  src: The recovery operation could not be completed.
+  tr: The recovery operation could not be completed.
+  st: finished
+
+message_124:
+  src: Automatic saving could not be completed.
+  tr: Automatic saving could not be completed.
+  st: finished
+
+message_125:
+  src: The settings could not be saved.
+  tr: The settings could not be saved.
+  st: finished
+
 [DialogAction]
 message_012:
   src: OK
@@ -855,4 +875,9 @@ message_157:
 message_158:
   src: Text
   tr: Text
+  st: finished
+
+message_159:
+  src: Default font
+  tr: Default font
   st: finished

@@ -15,6 +15,20 @@ import Caret.ViewModels
 Window {
     id: rootWindow
 
+    enum CloseFlowState {
+        Ready,
+        WaitingForFileOperation,
+        ConfirmingClose,
+        SavingForClose,
+        SaveSucceededWaitingForActivity,
+        CloseSaveFailed,
+        AutoSaveFlushFailed,
+        FlushingAutoSave,
+        ChoosingSavePath,
+        ResolvingConflict,
+        Closing
+    }
+
     objectName: "caretWindow"
     visible: true
     width: PreferencesViewModel.windowWidth
@@ -33,41 +47,41 @@ Window {
     property url suggestedSaveFileUrl: ""
     property url suggestedRecoveryExportUrl: ""
     property string pendingRecoveryExportId: ""
-    property bool allowClose: false
-    property bool waitForCloseAfterFileOperation: false
-    property bool closeAfterSaveRequested: false
-    property bool closeAfterSaveSucceeded: false
-    property bool closeAfterAutoSaveFlush: false
+    property int closeFlowState: App.Ready
     property bool pendingAutoSaveEnable: false
     property bool pendingRecoveryRestore: false
     property bool pendingRecoveryScan: false
 
     onClosing: close => {
-        if (allowClose)
+        if (closeFlowState === App.Closing)
             return;
+        if (closeFlowState !== App.Ready) {
+            close.accepted = false;
+            return;
+        }
         if (LayoutViewModel.documentFileBusy) {
             close.accepted = false;
-            waitForCloseAfterFileOperation = true;
+            closeFlowState = App.WaitingForFileOperation;
             return;
         }
         if (LayoutViewModel.documentMathSourceDraftPending) {
             close.accepted = false;
+            closeFlowState = App.ConfirmingClose;
             closeConfirmation.open();
             return;
         }
         if (PreferencesViewModel.autoSaveEnabled && LayoutViewModel.documentPath.length > 0 && LayoutViewModel.documentEdited) {
             close.accepted = false;
-            closeAfterSaveRequested = true;
-            closeAfterSaveSucceeded = false;
-            closeAfterAutoSaveFlush = true;
+            closeFlowState = App.FlushingAutoSave;
             Qt.callLater(rootWindow.saveDocument);
             return;
         }
         if (LayoutViewModel.documentEdited) {
             close.accepted = false;
+            closeFlowState = App.ConfirmingClose;
             closeConfirmation.open();
         } else {
-            allowClose = true;
+            closeFlowState = App.Closing;
         }
     }
 
@@ -96,12 +110,17 @@ Window {
                 Layout.preferredHeight: Theme.titlebarHeight
                 Layout.maximumHeight: Theme.titlebarHeight
                 window: rootWindow
+                saveEnabled: rootWindow.closeFlowState === App.Ready
+                autoSaveControlEnabled: rootWindow.closeFlowState === App.Ready
                 leftInset: WindowChromeMetrics.leadingSystemControlsInset
                 rightInset: WindowChromeMetrics.trailingSystemControlsInset
                 onSettingsRequested: settingsController.open()
                 onOpenRequested: openDialog.open()
                 documentName: rootWindow.documentName
-                onSaveRequested: rootWindow.saveDocument()
+                onSaveRequested: {
+                    if (rootWindow.closeFlowState === App.Ready)
+                        rootWindow.saveDocument();
+                }
                 onAutoSaveRequested: enabled => rootWindow.requestAutoSave(enabled)
                 onUndoRequested: LayoutViewModel.undo()
                 onRedoRequested: LayoutViewModel.redo()
@@ -173,7 +192,7 @@ Window {
         PreferencesSettingsPage {
             caretBlinkEnabled: settingsController.draftCaretBlinkEnabled
             commandSuggestionsEnabled: settingsController.draftCommandSuggestionsEnabled
-            errorText: settingsController.error
+            errorText: settingsController.error.length > 0 ? LayoutViewModel.documentOperationMessage(settingsController.error) : ""
             enabled: !settingsController.busy
             onCaretBlinkEnabledEdited: enabled => settingsController.editCaretBlinkEnabled(enabled)
             onCommandSuggestionsEnabledEdited: enabled => settingsController.editCommandSuggestionsEnabled(enabled)
@@ -186,7 +205,7 @@ Window {
         ThemeSettingsPage {
             availableThemes: SettingsViewModel.availableThemes
             selectedTheme: settingsController.draftThemeId
-            errorText: settingsController.error
+            errorText: settingsController.error.length > 0 ? LayoutViewModel.documentOperationMessage(settingsController.error) : ""
             enabled: !settingsController.busy
             onThemeSelected: themeId => settingsController.editThemeId(themeId)
         }
@@ -198,7 +217,7 @@ Window {
         LanguageSettingsPage {
             availableLanguages: SettingsViewModel.availableLanguages
             selectedLanguage: settingsController.draftLanguage
-            errorText: settingsController.error
+            errorText: settingsController.error.length > 0 ? LayoutViewModel.documentOperationMessage(settingsController.error) : ""
             enabled: !settingsController.busy
             onLanguageSelected: locale => settingsController.editLanguage(locale)
         }
@@ -246,14 +265,14 @@ Window {
         onAccepted: {
             const result = LayoutViewModel.saveDocument(DocumentPathAdapter.localFilePath(selectedFile));
             if (!result.valid && !result.needsSaveAs) {
-                rootWindow.closeAfterSaveRequested = false;
-                rootWindow.closeAfterSaveSucceeded = false;
+                if (rootWindow.closeFlowState === App.ChoosingSavePath || rootWindow.closeFlowState === App.CloseSaveFailed)
+                    rootWindow.closeFlowState = App.Ready;
                 documentOperationError.showError(result.error);
             }
         }
         onRejected: {
-            rootWindow.closeAfterSaveRequested = false;
-            rootWindow.closeAfterSaveSucceeded = false;
+            if (rootWindow.closeFlowState === App.ChoosingSavePath)
+                rootWindow.closeFlowState = App.Ready;
             if (rootWindow.pendingAutoSaveEnable)
                 rootWindow.cancelAutoSaveEnable();
         }
@@ -264,8 +283,7 @@ Window {
         ownerWindow: rootWindow
         mathSourceDraftPending: LayoutViewModel.documentMathSourceDraftPending
         onSaveRequested: {
-            rootWindow.closeAfterSaveRequested = true;
-            rootWindow.closeAfterSaveSucceeded = false;
+            rootWindow.closeFlowState = App.SavingForClose;
             Qt.callLater(rootWindow.saveDocument);
         }
         onDiscardRequested: {
@@ -274,7 +292,17 @@ Window {
                 documentOperationError.showError(result.error);
                 return;
             }
+            rootWindow.closeFlowState = App.Closing;
             Qt.callLater(rootWindow.closeWindow);
+        }
+    }
+
+    Connections {
+        target: closeConfirmation
+
+        function onVisibleChanged() {
+            if (!closeConfirmation.visible && rootWindow.closeFlowState === App.ConfirmingClose)
+                rootWindow.closeFlowState = App.Ready;
         }
     }
 
@@ -285,15 +313,18 @@ Window {
         replaceAllowed: LayoutViewModel.saveConflictCanReplace
         onSaveCopyRequested: rootWindow.requestSaveCopy()
         onReplaceRequested: {
+            if (rootWindow.closeFlowState === App.ResolvingConflict)
+                rootWindow.closeFlowState = App.SavingForClose;
             const result = LayoutViewModel.replaceExternalVersion();
-            if (!result.valid)
+            if (!result.valid) {
+                if (rootWindow.closeFlowState === App.CloseSaveFailed || rootWindow.closeFlowState === App.SavingForClose)
+                    rootWindow.closeFlowState = App.Ready;
                 documentOperationError.showError(result.error);
+            }
         }
         onCancelRequested: {
-            if (rootWindow.closeAfterSaveRequested) {
-                rootWindow.closeAfterSaveRequested = false;
-                rootWindow.closeAfterSaveSucceeded = false;
-                rootWindow.closeAfterAutoSaveFlush = false;
+            if (rootWindow.closeFlowState === App.ResolvingConflict) {
+                rootWindow.closeFlowState = App.ConfirmingClose;
                 closeConfirmation.open();
             }
         }
@@ -335,17 +366,7 @@ Window {
         text: operationError
 
         function showError(error) {
-            if (error === "document.save_incomplete_math_source_draft") {
-                operationError = qsTr("Finish or cancel the incomplete formula edit before saving this document.");
-                open();
-                return;
-            }
-            if (error === "document.math_incomplete_source_draft") {
-                operationError = qsTr("Finish or cancel the incomplete formula edit before replacing this document.");
-                open();
-                return;
-            }
-            operationError = error || qsTr("An unknown error occurred.");
+            operationError = LayoutViewModel.documentOperationMessage(error || "");
             open();
         }
     }
@@ -358,8 +379,13 @@ Window {
         }
 
         function onDocumentSaveFinished(succeeded) {
-            if (rootWindow.closeAfterSaveRequested)
-                rootWindow.closeAfterSaveSucceeded = succeeded;
+            if (succeeded && (rootWindow.closeFlowState === App.SavingForClose || rootWindow.closeFlowState === App.FlushingAutoSave || rootWindow.closeFlowState === App.ChoosingSavePath)) {
+                rootWindow.closeFlowState = App.SaveSucceededWaitingForActivity;
+            } else if (!succeeded && rootWindow.closeFlowState === App.FlushingAutoSave) {
+                rootWindow.closeFlowState = App.AutoSaveFlushFailed;
+            } else if (!succeeded && (rootWindow.closeFlowState === App.SavingForClose || rootWindow.closeFlowState === App.ChoosingSavePath)) {
+                rootWindow.closeFlowState = App.CloseSaveFailed;
+            }
         }
 
         function onDocumentFileOperationFinished(succeeded, error, conflict, recoveryWriteFailed, recoveryError) {
@@ -367,14 +393,14 @@ Window {
                 rootWindow.pendingRecoveryScan = false;
                 if (!succeeded) {
                     console.warn("Recovery scan failed:", error);
-                    if (rootWindow.waitForCloseAfterFileOperation) {
+                    if (rootWindow.closeFlowState === App.WaitingForFileOperation) {
                         rootWindow.resumeCloseAfterFileOperation();
                         return;
                     }
                     rootWindow.requestStartupAutoSavePath();
                     return;
                 }
-                if (rootWindow.waitForCloseAfterFileOperation) {
+                if (rootWindow.closeFlowState === App.WaitingForFileOperation) {
                     rootWindow.resumeCloseAfterFileOperation();
                     return;
                 }
@@ -400,7 +426,7 @@ Window {
                 }
                 rootWindow.pendingRecoveryRestore = false;
                 recoveryDialog.close();
-                if (rootWindow.waitForCloseAfterFileOperation) {
+                if (rootWindow.closeFlowState === App.WaitingForFileOperation) {
                     rootWindow.resumeCloseAfterFileOperation();
                     return;
                 }
@@ -408,25 +434,30 @@ Window {
                 return;
             }
             if (!succeeded) {
-                rootWindow.waitForCloseAfterFileOperation = false;
+                const wasWaitingForFileOperation = rootWindow.closeFlowState === App.WaitingForFileOperation;
+                const closeSaveFailed = rootWindow.closeFlowState === App.CloseSaveFailed;
+                const autoSaveFlushFailed = rootWindow.closeFlowState === App.AutoSaveFlushFailed;
+                const closeSaveAlreadySucceeded = rootWindow.closeFlowState === App.SaveSucceededWaitingForActivity;
+                if (wasWaitingForFileOperation)
+                    rootWindow.closeFlowState = App.Ready;
                 if (rootWindow.pendingAutoSaveEnable)
                     rootWindow.cancelAutoSaveEnable();
-                if (rootWindow.closeAfterAutoSaveFlush) {
-                    rootWindow.closeAfterSaveRequested = false;
-                    rootWindow.closeAfterSaveSucceeded = false;
-                    rootWindow.closeAfterAutoSaveFlush = false;
+                if (autoSaveFlushFailed) {
+                    rootWindow.closeFlowState = App.ConfirmingClose;
                     closeConfirmation.open();
                     return;
                 }
-                if (conflict) {
+                if (conflict && (closeSaveFailed || rootWindow.closeFlowState === App.Ready)) {
+                    if (closeSaveFailed)
+                        rootWindow.closeFlowState = App.ResolvingConflict;
                     saveConflictDialog.recoveryWriteFailed = recoveryWriteFailed;
-                    saveConflictDialog.recoveryErrorDetail = recoveryError;
+                    saveConflictDialog.recoveryErrorDetail = recoveryError.length > 0 ? LayoutViewModel.documentOperationMessage(recoveryError) : "";
                     saveConflictDialog.open();
                     return;
                 }
-                rootWindow.closeAfterSaveRequested = false;
-                rootWindow.closeAfterSaveSucceeded = false;
-                documentOperationError.showError(error);
+                if (closeSaveFailed || closeSaveAlreadySucceeded)
+                    rootWindow.closeFlowState = App.Ready;
+                documentOperationError.showError(error.length > 0 ? error : recoveryError);
                 return;
             }
             if (rootWindow.pendingAutoSaveEnable && !LayoutViewModel.documentFileBusy)
@@ -445,11 +476,13 @@ Window {
 
     Shortcut {
         sequences: [StandardKey.Save]
+        enabled: rootWindow.closeFlowState === App.Ready
         onActivated: rootWindow.saveDocument()
     }
 
     Shortcut {
         sequences: [StandardKey.SaveAs]
+        enabled: rootWindow.closeFlowState === App.Ready
         onActivated: rootWindow.requestSaveAs()
     }
 
@@ -482,13 +515,19 @@ Window {
             return;
         }
         if (!result.valid) {
-            closeAfterSaveRequested = false;
-            closeAfterSaveSucceeded = false;
+            if (closeFlowState === App.CloseSaveFailed)
+                closeFlowState = App.Ready;
+            else if (closeFlowState === App.AutoSaveFlushFailed) {
+                closeFlowState = App.ConfirmingClose;
+                closeConfirmation.open();
+            }
             documentOperationError.showError(result.error);
         }
     }
 
     function requestAutoSave(enabled) {
+        if (closeFlowState !== App.Ready)
+            return;
         if (!enabled) {
             pendingAutoSaveEnable = false;
             if (!PreferencesViewModel.setAutoSaveEnabled(false)) {
@@ -536,22 +575,28 @@ Window {
     }
 
     function requestSaveAs() {
+        if (closeFlowState === App.SavingForClose || closeFlowState === App.FlushingAutoSave || closeFlowState === App.ResolvingConflict || closeFlowState === App.CloseSaveFailed)
+            closeFlowState = App.ChoosingSavePath;
         suggestedSaveFileUrl = LayoutViewModel.documentPath.length > 0 ? DocumentPathAdapter.localFileUrl(LayoutViewModel.documentPath) : DocumentPathAdapter.defaultSaveFileUrl();
         if (suggestedSaveFileUrl.toString().length === 0) {
-            closeAfterSaveRequested = false;
-            closeAfterSaveSucceeded = false;
+            if (closeFlowState === App.ChoosingSavePath)
+                closeFlowState = App.Ready;
             if (pendingAutoSaveEnable)
                 cancelAutoSaveEnable();
-            documentOperationError.showError(qsTr("The document folder is unavailable."));
+            documentOperationError.showError("document.folder_unavailable");
             return;
         }
         saveDialog.open();
     }
 
     function requestSaveCopy() {
+        if (closeFlowState === App.ResolvingConflict)
+            closeFlowState = App.ChoosingSavePath;
         suggestedSaveFileUrl = DocumentPathAdapter.defaultSaveFileUrl();
         if (suggestedSaveFileUrl.toString().length === 0) {
-            documentOperationError.showError(qsTr("The document folder is unavailable."));
+            if (closeFlowState === App.ChoosingSavePath)
+                closeFlowState = App.Ready;
+            documentOperationError.showError("document.folder_unavailable");
             return;
         }
         saveDialog.open();
@@ -564,7 +609,7 @@ Window {
         const defaultPath = DocumentPathAdapter.localFilePath(DocumentPathAdapter.defaultSaveFileUrl());
         const separator = Math.max(defaultPath.lastIndexOf("/"), defaultPath.lastIndexOf("\\"));
         if (separator < 0) {
-            documentOperationError.showError(qsTr("The document folder is unavailable."));
+            documentOperationError.showError("document.folder_unavailable");
             return;
         }
         const originalName = String(entry.originalPath).split(/[\\/]/).pop();
@@ -575,32 +620,35 @@ Window {
     }
 
     function closeWindow() {
-        allowClose = true;
+        closeFlowState = App.Closing;
         close();
     }
 
     function resumeCloseAfterFileOperation() {
         if (LayoutViewModel.documentFileBusy)
             return;
-        if (closeAfterSaveRequested) {
-            if (!closeAfterSaveSucceeded)
-                return;
-            closeAfterSaveRequested = false;
-            closeAfterSaveSucceeded = false;
-            closeAfterAutoSaveFlush = false;
-            waitForCloseAfterFileOperation = false;
-            if (!LayoutViewModel.documentEdited && !LayoutViewModel.documentMathSourceDraftPending)
-                closeWindow();
-            else
-                closeConfirmation.open();
+        if (closeFlowState === App.CloseSaveFailed || closeFlowState === App.AutoSaveFlushFailed) {
+            closeFlowState = App.Ready;
             return;
         }
-        if (!waitForCloseAfterFileOperation)
+        if (closeFlowState === App.SaveSucceededWaitingForActivity) {
+            closeFlowState = App.Ready;
+            if (!LayoutViewModel.documentEdited && !LayoutViewModel.documentMathSourceDraftPending)
+                closeWindow();
+            else {
+                closeFlowState = App.ConfirmingClose;
+                closeConfirmation.open();
+            }
             return;
-        waitForCloseAfterFileOperation = false;
-        if (LayoutViewModel.documentEdited || LayoutViewModel.documentMathSourceDraftPending)
+        }
+        if (closeFlowState !== App.WaitingForFileOperation)
+            return;
+        closeFlowState = App.Ready;
+        if (LayoutViewModel.documentEdited || LayoutViewModel.documentMathSourceDraftPending) {
+            closeFlowState = App.ConfirmingClose;
             closeConfirmation.open();
-        else
+        } else {
             closeWindow();
+        }
     }
 }

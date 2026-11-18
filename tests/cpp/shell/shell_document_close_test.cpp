@@ -27,6 +27,7 @@
 #include <QStringList>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QUrl>
 #include <QVariant>
 #include <QtCore/Qt>
 #include <QtCore/qdebug.h>
@@ -189,6 +190,10 @@ void ShellLoadTest::cancellingEditedDocumentCloseKeepsChanges() {
         qobject_cast<QQuickWindow*>(fixture.child(QStringLiteral("closeDocumentConfirmation")));
     QVERIFY(confirmation != nullptr);
     QTRY_VERIFY(confirmation->isVisible());
+    const int confirming_state = fixture.window->property("closeFlowState").toInt();
+    fixture.window->close();
+    QCOMPARE(fixture.window->property("closeFlowState").toInt(), confirming_state);
+    QVERIFY(confirmation->isVisible());
     QObject* save = fixture.child(QStringLiteral("closeSaveButton"));
     QObject* discard = fixture.child(QStringLiteral("closeDiscardButton"));
     QObject* cancel = fixture.child(QStringLiteral("closeCancelButton"));
@@ -202,6 +207,7 @@ void ShellLoadTest::cancellingEditedDocumentCloseKeepsChanges() {
     QVERIFY(discard->property("x").toReal() < cancel->property("x").toReal());
     QVERIFY(fixture.click(QStringLiteral("closeCancelButton")));
     QTRY_VERIFY(!confirmation->isVisible());
+    QCOMPARE(fixture.window->property("closeFlowState").toInt(), 0);
     QVERIFY(fixture.window->isVisible());
     QVERIFY(fixture.view_model->documentEdited());
     QCOMPARE(fixture.view_model->documentSaveStatus(), QStringLiteral("edited"));
@@ -251,6 +257,8 @@ void ShellLoadTest::savingEditedDocumentBeforeClosePersistsChanges() {
     QSignalSpy operations(fixture.view_model,
                           &caret::LayoutViewModel::documentFileOperationFinished);
     QVERIFY(operations.isValid());
+    QSignalSpy save_results(fixture.view_model, &caret::LayoutViewModel::documentSaveFinished);
+    QVERIFY(save_results.isValid());
     bool hidden_after_save = false;
     bool save_hide_observed = false;
     QObject save_close_observation;
@@ -266,6 +274,11 @@ void ShellLoadTest::savingEditedDocumentBeforeClosePersistsChanges() {
             });
     fixture.window->close();
     QVERIFY(fixture.click(QStringLiteral("closeSaveButton")));
+    QObject* titlebar_save = fixture.child(QStringLiteral("saveButton"));
+    QVERIFY(titlebar_save != nullptr);
+    QTRY_VERIFY(!titlebar_save->property("enabled").toBool());
+    QVERIFY(QMetaObject::invokeMethod(titlebar_save, "clicked", Qt::DirectConnection));
+    QTRY_COMPARE_WITH_TIMEOUT(save_results.size(), 1, 10000);
     QTRY_COMPARE_WITH_TIMEOUT(operations.size(), 1, 10000);
     const auto saved = operations.takeFirst();
     QVERIFY2(saved.at(0).toBool(), qPrintable(saved.at(1).toString()));
@@ -275,6 +288,73 @@ void ShellLoadTest::savingEditedDocumentBeforeClosePersistsChanges() {
     QCOMPARE(fixture.view_model->documentPath(), path);
     QVERIFY(documentContains(path, "saved by close"));
     QVERIFY(hidden_after_save);
+}
+
+void ShellLoadTest::unnamedDocumentSaveAsContinuesCloseAndCancelCanRetry() {
+    QString error;
+    {
+        AppFixture save_fixture;
+        if (!save_fixture.directory.isValid() ||
+            !save_fixture.initialize(save_fixture.directory.path(), &error)) {
+            QFAIL(qPrintable(error.isEmpty() ? QStringLiteral("temporary directory is unavailable")
+                                             : error));
+            return;
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(!save_fixture.view_model->documentFileBusy(), 10000);
+        QVERIFY(save_fixture.insert(QStringLiteral("save this unnamed document")));
+        save_fixture.window->close();
+        QVERIFY(save_fixture.click(QStringLiteral("closeSaveButton")));
+        QObject* save_dialog = save_fixture.child(QStringLiteral("saveDocumentDialog"));
+        QVERIFY(save_dialog != nullptr);
+        QTRY_VERIFY(save_dialog->property("visible").toBool());
+        const QString path = save_fixture.directory.filePath(QStringLiteral("saved-as.cdoc"));
+        QVERIFY(save_dialog->setProperty("selectedFile", QUrl::fromLocalFile(path)));
+        QVERIFY(QMetaObject::invokeMethod(save_dialog, "accepted", Qt::DirectConnection));
+        QTRY_VERIFY_WITH_TIMEOUT(!save_fixture.window->isVisible(), 10000);
+        QCOMPARE(save_fixture.view_model->documentPath(), path);
+        QVERIFY(documentContains(path, "save this unnamed document"));
+    }
+
+    AppFixture cancel_fixture;
+    if (!cancel_fixture.directory.isValid() ||
+        !cancel_fixture.initialize(cancel_fixture.directory.path(), &error)) {
+        QFAIL(qPrintable(error.isEmpty() ? QStringLiteral("temporary directory is unavailable")
+                                         : error));
+        return;
+    }
+    QTRY_VERIFY_WITH_TIMEOUT(!cancel_fixture.view_model->documentFileBusy(), 10000);
+    QVERIFY(cancel_fixture.insert(QStringLiteral("keep after save-as cancel")));
+    cancel_fixture.window->close();
+    QVERIFY(cancel_fixture.click(QStringLiteral("closeSaveButton")));
+    QObject* cancel_dialog = cancel_fixture.child(QStringLiteral("saveDocumentDialog"));
+    QVERIFY(cancel_dialog != nullptr);
+    QTRY_VERIFY(cancel_dialog->property("visible").toBool());
+    const int choosing_path_state = cancel_fixture.window->property("closeFlowState").toInt();
+    QSignalSpy recovery_operations(cancel_fixture.view_model,
+                                   &caret::LayoutViewModel::documentFileOperationFinished);
+    const auto recovery_request = cancel_fixture.view_model->refreshRecoveryEntries();
+    QVERIFY(recovery_request.value(QStringLiteral("valid")).toBool());
+    QTRY_COMPARE_WITH_TIMEOUT(recovery_operations.size(), 1, 10000);
+    QVERIFY(recovery_operations.takeFirst().at(0).toBool());
+    QVERIFY(cancel_dialog->property("visible").toBool());
+    QCOMPARE(cancel_fixture.window->property("closeFlowState").toInt(), choosing_path_state);
+    QObject* auto_save_switch = cancel_fixture.child(QStringLiteral("autoSaveSwitch"));
+    QVERIFY(auto_save_switch != nullptr);
+    QVERIFY(!auto_save_switch->property("enabled").toBool());
+    QVERIFY(auto_save_switch->setProperty("checked", true));
+    QVERIFY(QMetaObject::invokeMethod(auto_save_switch, "toggled", Qt::DirectConnection));
+    QVERIFY(cancel_dialog->property("visible").toBool());
+    QCOMPARE(cancel_fixture.window->property("closeFlowState").toInt(), choosing_path_state);
+    QVERIFY(QMetaObject::invokeMethod(cancel_dialog, "rejected", Qt::DirectConnection));
+    QVERIFY(QMetaObject::invokeMethod(cancel_dialog, "close", Qt::DirectConnection));
+    QTRY_VERIFY(!cancel_dialog->property("visible").toBool());
+    QCOMPARE(cancel_fixture.window->property("closeFlowState").toInt(), 0);
+    cancel_fixture.window->close();
+    QObject* confirmation = cancel_fixture.child(QStringLiteral("closeDocumentConfirmation"));
+    QVERIFY(confirmation != nullptr);
+    QTRY_VERIFY(confirmation->property("visible").toBool());
+    QVERIFY(cancel_fixture.click(QStringLiteral("closeCancelButton")));
+    QVERIFY(cancel_fixture.window->isVisible());
 }
 
 void ShellLoadTest::autoSaveFlushCompletesBeforeClosing() {
@@ -331,6 +411,7 @@ void ShellLoadTest::autoSaveFailureReopensCloseConfirmation() {
         return;
     }
     QTRY_VERIFY_WITH_TIMEOUT(!fixture.view_model->documentFileBusy(), 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(!fixture.window->property("pendingRecoveryScan").toBool(), 10000);
     const QString path = fixture.directory.filePath(QStringLiteral("autosave-conflict.cdoc"));
     QVERIFY(fixture.saveTo(path));
     auto* preferences = fixture.engine->singletonInstance<caret::PreferencesViewModel*>(
@@ -356,6 +437,8 @@ void ShellLoadTest::autoSaveFailureReopensCloseConfirmation() {
     QObject* confirmation = fixture.child(QStringLiteral("closeDocumentConfirmation"));
     QVERIFY(confirmation != nullptr);
     QTRY_VERIFY(confirmation->property("visible").toBool());
+    QObject* conflict = fixture.child(QStringLiteral("saveConflictDialog"));
+    QVERIFY(conflict == nullptr || !conflict->property("visible").toBool());
     QVERIFY(fixture.window->isVisible());
     QVERIFY(fixture.view_model->documentEdited());
     QCOMPARE(fixture.view_model->documentGeneration(), generation);
@@ -452,6 +535,12 @@ void ShellLoadTest::recoveryWriteFailureReopensCloseConfirmation() {
     QVERIFY(conflict != nullptr);
     QTRY_VERIFY(conflict->property("visible").toBool());
     QVERIFY(conflict->property("recoveryWriteFailed").toBool());
+    QObject* conflict_message = fixture.child(QStringLiteral("saveConflictMessage"));
+    QVERIFY(conflict_message != nullptr);
+    const QString conflict_text = conflict_message->property("text").toString();
+    QVERIFY(
+        conflict_text.contains(QStringLiteral("The recovery operation could not be completed.")));
+    QVERIFY(!conflict_text.contains(QStringLiteral("recovery.")));
     QTRY_COMPARE_WITH_TIMEOUT(operations.size(), 1, 10000);
     const auto failure = operations.takeFirst();
     QVERIFY(!failure.at(0).toBool());
@@ -505,6 +594,9 @@ void ShellLoadTest::closeRequestDuringFailedSaveDoesNotReopenConfirmation() {
     QObject* operation_error = fixture.child(QStringLiteral("documentOperationError"));
     QVERIFY(operation_error != nullptr);
     QTRY_VERIFY(operation_error->property("visible").toBool());
+    const QString error_text = operation_error->property("text").toString();
+    QVERIFY(!error_text.contains(QStringLiteral("document.")));
+    QCOMPARE(error_text, QStringLiteral("The document operation could not be completed."));
     QVERIFY(fixture.window->isVisible());
     QObject* confirmation = fixture.child(QStringLiteral("closeDocumentConfirmation"));
     QVERIFY(confirmation == nullptr || !confirmation->property("visible").toBool());
@@ -517,6 +609,71 @@ void ShellLoadTest::closeRequestDuringFailedSaveDoesNotReopenConfirmation() {
                  .value(QStringLiteral("text"))
                  .toString(),
              QStringLiteral("preserve on failed save"));
+}
+
+// 直接投递文件活动信号，隔离验证 QML 对关闭流程与后台操作的关联规则。
+void ShellLoadTest::unrelatedFileFailuresDoNotCorruptCloseSaveState() {
+    {
+        AppFixture fixture;
+        QString error;
+        if (!fixture.directory.isValid() || !fixture.initialize(fixture.directory.path(), &error)) {
+            QFAIL(qPrintable(error.isEmpty() ? QStringLiteral("temporary directory is unavailable")
+                                             : error));
+            return;
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(!fixture.window->property("pendingRecoveryScan").toBool(), 10000);
+        QVERIFY(fixture.window->setProperty("closeFlowState", 7)); // 自动保存刷新中
+        QVERIFY(QMetaObject::invokeMethod(
+            fixture.view_model, "documentFileOperationFinished", Qt::DirectConnection,
+            Q_ARG(bool, false), Q_ARG(QString, QStringLiteral("recovery.io_error: background")),
+            Q_ARG(bool, false), Q_ARG(bool, false), Q_ARG(QString, QString{})));
+        QCOMPARE(fixture.window->property("closeFlowState").toInt(), 7); // 自动保存刷新中
+        QObject* confirmation = fixture.child(QStringLiteral("closeDocumentConfirmation"));
+        QVERIFY(confirmation == nullptr || !confirmation->property("visible").toBool());
+    }
+
+    {
+        AppFixture fixture;
+        QString error;
+        if (!fixture.directory.isValid() || !fixture.initialize(fixture.directory.path(), &error)) {
+            QFAIL(qPrintable(error.isEmpty() ? QStringLiteral("temporary directory is unavailable")
+                                             : error));
+            return;
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(!fixture.window->property("pendingRecoveryScan").toBool(), 10000);
+        QVERIFY(fixture.window->setProperty("closeFlowState", 3)); // 关闭流程保存中
+        QVERIFY(QMetaObject::invokeMethod(fixture.view_model, "documentSaveFinished",
+                                          Qt::DirectConnection, Q_ARG(bool, true)));
+        QCOMPARE(fixture.window->property("closeFlowState").toInt(),
+                 4); // 保存成功，等待文件活动结束
+        QVERIFY(QMetaObject::invokeMethod(
+            fixture.view_model, "documentFileOperationFinished", Qt::DirectConnection,
+            Q_ARG(bool, false), Q_ARG(QString, QStringLiteral("recovery.io_error: background")),
+            Q_ARG(bool, false), Q_ARG(bool, false), Q_ARG(QString, QString{})));
+        QCOMPARE(fixture.window->property("closeFlowState").toInt(), 0); // 就绪
+        QVERIFY(fixture.window->isVisible());
+    }
+
+    {
+        AppFixture fixture;
+        QString error;
+        if (!fixture.directory.isValid() || !fixture.initialize(fixture.directory.path(), &error)) {
+            QFAIL(qPrintable(error.isEmpty() ? QStringLiteral("temporary directory is unavailable")
+                                             : error));
+            return;
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(!fixture.window->property("pendingRecoveryScan").toBool(), 10000);
+        QVERIFY(fixture.window->setProperty("closeFlowState", 1)); // 等待正在进行的文件操作
+        QVERIFY(QMetaObject::invokeMethod(
+            fixture.view_model, "documentFileOperationFinished", Qt::DirectConnection,
+            Q_ARG(bool, false), Q_ARG(QString, QStringLiteral("document.conflict: changed")),
+            Q_ARG(bool, true), Q_ARG(bool, false), Q_ARG(QString, QString{})));
+        QCOMPARE(fixture.window->property("closeFlowState").toInt(), 0); // 不保留关闭承诺
+        QObject* conflict = fixture.child(QStringLiteral("saveConflictDialog"));
+        QVERIFY(conflict != nullptr);
+        QVERIFY(conflict->property("visible").toBool());
+        QVERIFY(fixture.window->isVisible());
+    }
 }
 
 #endif

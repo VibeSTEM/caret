@@ -31,6 +31,7 @@ fn command_line_state(session: &caret_engine::Session) -> Value {
                     json!({
                         "alias": candidate.alias,
                         "commandId": candidate.command_id,
+                        "label": candidate.label,
                         "available": candidate.available,
                         "value": candidate.value,
                         "hasChildren": candidate.has_children,

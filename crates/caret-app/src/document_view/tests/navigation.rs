@@ -4159,13 +4159,17 @@ fn drag_hit_map_is_page_local_and_release_commits_one_selection()
 }
 
 fn math_text_drag_runtime() -> Result<DocumentViewRuntime, String> {
+    math_text_drag_runtime_with_text("ab")
+}
+
+fn math_text_drag_runtime_with_text(text: &str) -> Result<DocumentViewRuntime, String> {
     let math_tree = caret_doc::MathTree {
         schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
         root: caret_doc::MathFlow {
             id: NodeId::generate(),
             content: vec![caret_doc::MathContent::Text(caret_doc::TextFlow {
                 runs: vec![Run {
-                    text: "ab".to_owned(),
+                    text: text.to_owned(),
                     language: None,
                     props: BTreeMap::new(),
                     extra: BTreeMap::new(),
@@ -4183,6 +4187,57 @@ fn math_text_drag_runtime() -> Result<DocumentViewRuntime, String> {
         extra: BTreeMap::new(),
     }));
     DocumentViewRuntime::new(document)
+}
+
+#[test]
+fn math_text_drag_order_ordinal_tracks_multibyte_utf8_offsets() -> Result<(), String> {
+    let mut runtime = math_text_drag_runtime_with_text("你1234567890好")?;
+    let hit_map: Value =
+        serde_json::from_str(&runtime.drag_hit_map_json(0)?).map_err(|error| error.to_string())?;
+    let stops = hit_map["stops"]
+        .as_array()
+        .ok_or_else(|| "drag map omitted stops".to_owned())?;
+    let math_stops = stops
+        .iter()
+        .filter(|stop| stop["position"]["kind"] == "math")
+        .collect::<Vec<_>>();
+    assert!(math_stops.len() > 10);
+    for stop in math_stops {
+        let offset = stop["position"]["orderUtf8"]
+            .as_str()
+            .ok_or_else(|| "math offset was not serialized as a string".to_owned())?
+            .parse::<u64>()
+            .map_err(|error| error.to_string())?;
+        assert_eq!(stop["position"]["orderOrdinal"], offset);
+    }
+    assert!(stops.iter().any(|stop| {
+        stop["position"]["kind"] == "math" && stop["position"]["orderOrdinal"] == 3
+    }));
+    assert!(stops.iter().any(|stop| {
+        stop["position"]["kind"] == "math"
+            && stop["position"]["orderOrdinal"]
+                .as_u64()
+                .is_some_and(|ordinal| ordinal > 9)
+    }));
+    let segments = hit_map["segments"]
+        .as_array()
+        .ok_or_else(|| "drag map omitted segments".to_owned())?;
+    let math_segments = segments
+        .iter()
+        .filter(|segment| segment["startPosition"]["kind"] == "math")
+        .collect::<Vec<_>>();
+    assert!(!math_segments.is_empty());
+    for segment in math_segments {
+        for position in [&segment["startPosition"], &segment["endPosition"]] {
+            let offset = position["orderUtf8"]
+                .as_str()
+                .ok_or_else(|| "math segment offset was not a string".to_owned())?
+                .parse::<u64>()
+                .map_err(|error| error.to_string())?;
+            assert_eq!(position["orderOrdinal"], offset);
+        }
+    }
+    Ok(())
 }
 
 #[test]
@@ -4225,6 +4280,10 @@ fn math_text_drag_reuses_the_shared_hit_map_and_replaces_the_selected_grapheme()
         .ok_or_else(|| std::io::Error::other("math drag segment is missing"))?;
     assert_eq!(math_segment["startPosition"]["kind"], "math");
     assert!(math_segment["endPosition"]["orderUtf8"].is_string());
+    assert_eq!(anchor["position"]["orderOrdinal"], 0);
+    assert_eq!(focus["position"]["orderOrdinal"], 1);
+    assert_eq!(math_segment["startPosition"]["orderOrdinal"], 0);
+    assert_eq!(math_segment["endPosition"]["orderOrdinal"], 1);
     let selection = serde_json::json!({
         "anchor": anchor["position"],
         "focus": focus["position"],

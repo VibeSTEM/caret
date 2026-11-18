@@ -39,6 +39,8 @@ void QmLoadTest::zhHansDictionaryTranslates() {
     QCOMPARE(translator.translate("WindowTitleBar", "Saved"), QStringLiteral("已保存"));
     QCOMPARE(translator.translate("CommandCompletion", "Numbered list"),
              QStringLiteral("编号列表"));
+    QCOMPARE(translator.translate("App", "The document operation could not be completed."),
+             QStringLiteral("文档操作未能完成。"));
 }
 
 void QmLoadTest::zhHantDictionaryTranslates() {
@@ -52,6 +54,8 @@ void QmLoadTest::zhHantDictionaryTranslates() {
     QCOMPARE(translator.translate("WindowTitleBar", "Saved"), QStringLiteral("已儲存"));
     QCOMPARE(translator.translate("CommandCompletion", "Numbered list"),
              QStringLiteral("編號清單"));
+    QCOMPARE(translator.translate("App", "The document operation could not be completed."),
+             QStringLiteral("文件操作無法完成。"));
 }
 
 void QmLoadTest::japaneseDictionaryTranslates() {
@@ -65,6 +69,8 @@ void QmLoadTest::japaneseDictionaryTranslates() {
     QCOMPARE(translator.translate("WindowTitleBar", "Saved"), QStringLiteral("保存済み"));
     QCOMPARE(translator.translate("CommandCompletion", "Numbered list"),
              QStringLiteral("番号付きリスト"));
+    QCOMPARE(translator.translate("App", "The document operation could not be completed."),
+             QStringLiteral("文書の操作を完了できませんでした。"));
 }
 
 void QmLoadTest::enBaselineDictionaryLoads() {
@@ -75,6 +81,8 @@ void QmLoadTest::enBaselineDictionaryLoads() {
     QCOMPARE(translator.translate("DialogAction", "OK"), QStringLiteral("OK"));
     QCOMPARE(translator.translate("CommandCompletion", "Numbered list"),
              QStringLiteral("Numbered list"));
+    QCOMPARE(translator.translate("App", "The document operation could not be completed."),
+             QStringLiteral("The document operation could not be completed."));
 }
 
 QTEST_GUILESS_MAIN(QmLoadTest)
