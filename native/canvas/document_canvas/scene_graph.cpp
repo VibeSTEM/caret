@@ -82,6 +82,7 @@ class PageGlyphNode final : public QSGNode {
     }
 
     QMap<QString, QVariant> frame;
+    std::optional<glyph_frame_wire::GlyphFrame> parsed_frame;
     QVariantList images;
     QVector<QSGTexture*> textures;
     QSGNode* glyph_nodes = nullptr;
@@ -106,20 +107,17 @@ class GlyphGroupNode final : public QSGNode {
 };
 
 bool has_retryable_missing_texture(const PageGlyphNode* page_node) {
-    const QVariantList& images = page_node->images;
+    if (!page_node->parsed_frame) {
+        return false;
+    }
+    const auto& images = page_node->parsed_frame->images;
     for (qsizetype index = 0; index < images.size(); ++index) {
         if (index < static_cast<qsizetype>(page_node->textures.size()) &&
             page_node->textures.at(static_cast<int>(index)) != nullptr) {
             continue;
         }
-        const QVariantMap image = images.at(index).toMap();
-        const int width = image.value(QStringLiteral("width")).toInt();
-        const int height = image.value(QStringLiteral("height")).toInt();
-        const QByteArray pixels = image.value(QStringLiteral("pixels")).toByteArray();
-        const quint64 expected_size = static_cast<quint64>(std::max(width, 0)) *
-                                      static_cast<quint64>(std::max(height, 0)) * 4U;
-        if (width > 0 && height > 0 && width <= std::numeric_limits<int>::max() / 4 &&
-            expected_size == static_cast<quint64>(pixels.size())) {
+        const glyph_frame_wire::GlyphImage& image = images.at(index);
+        if (image.width > 0 && image.height > 0) {
             return true;
         }
     }
@@ -323,14 +321,12 @@ void build_glyph_frame(PageGlyphNode* group, QQuickWindow* window, const QVarian
         group->clearGlyphNodes();
         return;
     }
-    // 线格式校验只有 glyph_frame_wire::parse 一份：setGlyphFrames 整列拒绝非法帧，
-    // 这里直接消费已校验字段；解析失败只可能来自绕过该入口的内部调用，按空帧降级。
-    const std::optional<glyph_frame_wire::GlyphFrame> parsed = glyph_frame_wire::parse(frame);
-    if (!parsed) {
+    // 线格式只解析一次；缓存随帧身份变化更新。
+    if (!group->parsed_frame) {
         group->clearGlyphNodes();
         return;
     }
-    const glyph_frame_wire::GlyphFrame& glyph_frame = *parsed;
+    const glyph_frame_wire::GlyphFrame& glyph_frame = *group->parsed_frame;
     const int page_index = glyph_frame.page_index;
     const QVariantList image_values = frame.value(QStringLiteral("images")).toList();
     const qreal dpr = window->effectiveDevicePixelRatio();
@@ -604,6 +600,7 @@ void build_glyph_frames(GlyphGroupNode* group, QQuickWindow* window, const QVari
         if (page_node == nullptr) {
             page_node = new PageGlyphNode();
             page_node->frame = frame_identity;
+            page_node->parsed_frame = glyph_frame_wire::parse(frame);
             group->pages.insert(page_index, page_node);
             group->appendChildNode(page_node);
             build_glyph_frame(page_node, window, frame, page_rect, document_to_content,
@@ -619,6 +616,7 @@ void build_glyph_frames(GlyphGroupNode* group, QQuickWindow* window, const QVari
                 page_node->clearGlyphResources();
             }
             page_node->frame = frame_identity;
+            page_node->parsed_frame = glyph_frame_wire::parse(frame);
         } else if (frames_changed && !geometry_changed && !missing_texture) {
             continue;
         }

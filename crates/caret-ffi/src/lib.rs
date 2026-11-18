@@ -12,6 +12,20 @@ fn version() -> String {
     env!("CARGO_PKG_VERSION").to_owned()
 }
 
+fn command_line_wire_default_mode() -> String {
+    caret_app::document_view::command_line_wire_default()
+        .0
+        .to_owned()
+}
+
+fn command_line_wire_default_prefix(mode: &str) -> String {
+    caret_app::document_view::command_line_wire_default_prefix(mode).to_owned()
+}
+
+fn command_line_wire_valid(mode: &str, prefix: &str) -> bool {
+    caret_app::document_view::command_line_wire_valid(mode, prefix)
+}
+
 /// 安装进程级崩溃处理器；CXX 将错误转换成 `rust::Error` 交给 native 入口显示。
 fn install_crash_handler(log_dir: &str) -> Result<String, String> {
     caret_foundation::crash::install_crash_handler(log_dir)
@@ -45,7 +59,10 @@ mod generated {
         set_caret_blink_enabled, set_ui_selection, settings_constraints, settings_language_catalog,
         settings_load_warning, settings_snapshot, settings_theme_catalog,
     };
-    use crate::{install_crash_handler, version};
+    use crate::{
+        command_line_wire_default_mode, command_line_wire_default_prefix, command_line_wire_valid,
+        install_crash_handler, version,
+    };
 
     #[cxx::bridge(namespace = "caret::ffi")]
     pub(crate) mod bridge {
@@ -190,6 +207,10 @@ mod generated {
             type SettingsRuntime;
 
             fn version() -> String;
+            /// 获取 Rust 命令行快照协议默认值及模式/前缀校验结果。
+            fn command_line_wire_default_mode() -> String;
+            fn command_line_wire_default_prefix(mode: &str) -> String;
+            fn command_line_wire_valid(mode: &str, prefix: &str) -> bool;
             /// 安装进程级崩溃处理器；空目录使用系统临时目录。
             fn install_crash_handler(log_dir: &str) -> Result<String>;
             fn builtin_theme_catalog() -> String;

@@ -9,6 +9,7 @@
 #include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QJsonObject>
 #include <QJsonValue>
 #include <QString>
 #include <QVariantList>
@@ -48,6 +49,12 @@ bool parse(const QJsonDocument& snapshot_document, ParsedLayoutSnapshot& parsed_
            QString& error, const ParsedLayoutSnapshot* previous_snapshot = nullptr);
 /// 校验命令查询的轻量 JSON，并转换为 Qt 属性映射。
 bool parse_command_line_state(const QJsonValue& value, QVariantMap& command_line, QString& error);
+/// 按共享协议中的语义名读取字段名。
+QString protocol_field_name(const QString& symbol);
+/// 从布局或互动快照读取共享协议定义的命令行状态字段。
+QJsonValue command_line_snapshot_value(const QJsonObject& object);
+/// 检查响应对象是否包含共享协议定义的命令行状态字段。
+bool has_command_line_snapshot(const QJsonObject& object);
 bool parse_current_structure(const QJsonValue& value, QVariantList& current_structure,
                              QString& error);
 bool parse_block_environment_highlight_rects(const QJsonValue& value,

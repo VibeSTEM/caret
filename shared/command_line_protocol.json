@@ -1,0 +1,33 @@
+{
+  "defaultMode": "command",
+  "modes": [
+    { "variant": "Command", "wireName": "command", "defaultPrefix": "\\", "requiredSuffix": null },
+    { "variant": "Math", "wireName": "math", "defaultPrefix": "\\", "requiredSuffix": null },
+    { "variant": "FontFamily", "wireName": "fontFamily", "defaultPrefix": "\\font ", "requiredSuffix": null },
+    { "variant": "DefaultFontTarget", "wireName": "defaultFontTarget", "defaultPrefix": "\\defaultfont ", "requiredSuffix": null },
+    { "variant": "DefaultFontScope", "wireName": "defaultFontScope", "defaultPrefix": "\\defaultfont ", "requiredSuffix": " " },
+    { "variant": "DefaultFontLanguage", "wireName": "defaultFontLanguage", "defaultPrefix": "\\defaultfont ", "requiredSuffix": ": " },
+    { "variant": "DefaultFontFamily", "wireName": "defaultFontFamily", "defaultPrefix": "\\defaultfont ", "requiredSuffix": " " }
+  ],
+  "fields": {
+    "Active": "active",
+    "Mode": "mode",
+    "Prefix": "prefix",
+    "Query": "query",
+    "Cursor": "cursor",
+    "CursorUtf16": "cursorUtf16",
+    "Preedit": "preedit",
+    "PreeditCursorUtf16": "preeditCursorUtf16",
+    "CodeFontFamily": "codeFontFamily",
+    "Selected": "selected",
+    "Candidates": "candidates",
+    "Alias": "alias",
+    "CommandId": "commandId",
+    "Label": "label",
+    "Available": "available",
+    "Value": "value",
+    "HasChildren": "hasChildren",
+    "CommandLine": "commandLine",
+    "CompositionPreview": "compositionPreview"
+  }
+}

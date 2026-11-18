@@ -5,6 +5,8 @@
 
 #include "layout_snapshot_codec.hpp"
 
+#include "command_line_protocol_json.hpp"
+#include "shared/page_rect_validation.hpp"
 #include <QByteArray>
 #include <QChar>
 #include <QHash>
@@ -15,9 +17,12 @@
 #include <QSizeF>
 #include <QString>
 #include <QVariant>
-#include <algorithm>
 #include <atomic>
+#ifdef CARET_ENABLE_APP
+#include <caret_ffi.h>
+#endif
 #include <cmath>
+#include <cstddef>
 #include <limits>
 #include <qcontainerfwd.h>
 #include <utility>
@@ -25,6 +30,73 @@
 namespace caret::layout_snapshot {
 namespace {
 bool is_utf8_boundary(const QByteArray& text, qsizetype offset);
+
+const QJsonObject& command_line_protocol() {
+    static const QJsonObject protocol =
+        QJsonDocument::fromJson(QByteArray(kCommandLineProtocolJson)).object();
+    return protocol;
+}
+
+QString protocol_field(const QString& symbol) {
+    return command_line_protocol()
+        .value(QStringLiteral("fields"))
+        .toObject()
+        .value(symbol)
+        .toString();
+}
+
+QString command_line_wire_default_mode() {
+#ifdef CARET_ENABLE_APP
+    const rust::String mode = caret::ffi::command_line_wire_default_mode();
+    return QString::fromUtf8(mode.data(), static_cast<qsizetype>(mode.size()));
+#else
+    return command_line_protocol().value(QStringLiteral("defaultMode")).toString();
+#endif
+}
+
+QString command_line_wire_default_prefix(const QString& mode) {
+#ifdef CARET_ENABLE_APP
+    const QByteArray mode_utf8 = mode.toUtf8();
+    const rust::String prefix = caret::ffi::command_line_wire_default_prefix(
+        rust::Str(mode_utf8.constData(), static_cast<std::size_t>(mode_utf8.size())));
+    return QString::fromUtf8(prefix.data(), static_cast<qsizetype>(prefix.size()));
+#else
+    const QJsonArray modes = command_line_protocol().value(QStringLiteral("modes")).toArray();
+    for (const QJsonValue value : modes) {
+        const QJsonObject entry = value.toObject();
+        if (entry.value(QStringLiteral("wireName")).toString() == mode) {
+            return entry.value(QStringLiteral("defaultPrefix")).toString();
+        }
+    }
+    return {};
+#endif
+}
+
+bool command_line_wire_valid(const QString& mode, const QString& prefix) {
+#ifdef CARET_ENABLE_APP
+    const QByteArray mode_utf8 = mode.toUtf8();
+    const QByteArray prefix_utf8 = prefix.toUtf8();
+    return caret::ffi::command_line_wire_valid(
+        rust::Str(mode_utf8.constData(), static_cast<std::size_t>(mode_utf8.size())),
+        rust::Str(prefix_utf8.constData(), static_cast<std::size_t>(prefix_utf8.size())));
+#else
+    const QJsonArray modes = command_line_protocol().value(QStringLiteral("modes")).toArray();
+    for (const QJsonValue value : modes) {
+        const QJsonObject entry = value.toObject();
+        if (entry.value(QStringLiteral("wireName")).toString() != mode) {
+            continue;
+        }
+        const QString base_prefix = entry.value(QStringLiteral("defaultPrefix")).toString();
+        const QJsonValue required_suffix = entry.value(QStringLiteral("requiredSuffix"));
+        if (required_suffix.isNull() || required_suffix.isUndefined()) {
+            return prefix == base_prefix;
+        }
+        return required_suffix.isString() && prefix.startsWith(base_prefix) &&
+               prefix.endsWith(required_suffix.toString());
+    }
+    return false;
+#endif
+}
 
 qulonglong next_page_glyph_revision() {
     static std::atomic<qulonglong> revision{1};
@@ -90,9 +162,10 @@ bool parse_geometry_rectangles(const QJsonValue& value, const QVariantList& page
             !finite_number(rectangle.value(QStringLiteral("x0Pt")), x0) ||
             !finite_number(rectangle.value(QStringLiteral("y0Pt")), y0) ||
             !finite_number(rectangle.value(QStringLiteral("x1Pt")), x1) ||
-            !finite_number(rectangle.value(QStringLiteral("y1Pt")), y1) || x0 < 0.0 || y0 < 0.0 ||
-            x1 <= x0 || y1 <= y0 || x1 > page_sizes.at(page_index).toSizeF().width() ||
-            y1 > page_sizes.at(page_index).toSizeF().height()) {
+            !finite_number(rectangle.value(QStringLiteral("y1Pt")), y1) ||
+            !page_rect_validation::valid_coordinates(x0, y0, x1, y1) ||
+            !page_rect_validation::within_page(x1, y1, page_sizes.at(page_index).toSizeF().width(),
+                                               page_sizes.at(page_index).toSizeF().height())) {
             error = item_error;
             return false;
         }
@@ -102,16 +175,18 @@ bool parse_geometry_rectangles(const QJsonValue& value, const QVariantList& page
 }
 
 bool parse_command_line(const QJsonValue& value, QVariantMap& result, QString& error) {
-    result = {{QStringLiteral("active"), false},
-              {QStringLiteral("mode"), QStringLiteral("command")},
-              {QStringLiteral("prefix"), QStringLiteral("\\")},
-              {QStringLiteral("query"), QString{}},
-              {QStringLiteral("cursor"), 0},
-              {QStringLiteral("cursorUtf16"), 1},
-              {QStringLiteral("preedit"), QString{}},
-              {QStringLiteral("preeditCursorUtf16"), 0},
-              {QStringLiteral("selected"), 0},
-              {QStringLiteral("candidates"), QVariantList{}}};
+    const QString default_mode_text = command_line_wire_default_mode();
+    const QString default_prefix_text = command_line_wire_default_prefix(default_mode_text);
+    result = {{protocol_field(QStringLiteral("Active")), false},
+              {protocol_field(QStringLiteral("Mode")), default_mode_text},
+              {protocol_field(QStringLiteral("Prefix")), default_prefix_text},
+              {protocol_field(QStringLiteral("Query")), QString{}},
+              {protocol_field(QStringLiteral("Cursor")), 0},
+              {protocol_field(QStringLiteral("CursorUtf16")), default_prefix_text.size()},
+              {protocol_field(QStringLiteral("Preedit")), QString{}},
+              {protocol_field(QStringLiteral("PreeditCursorUtf16")), 0},
+              {protocol_field(QStringLiteral("Selected")), 0},
+              {protocol_field(QStringLiteral("Candidates")), QVariantList{}}};
     if (value.isUndefined()) {
         return true;
     }
@@ -120,18 +195,20 @@ bool parse_command_line(const QJsonValue& value, QVariantMap& result, QString& e
         return false;
     }
     const QJsonObject command_line = value.toObject();
-    const QJsonValue active = command_line.value(QStringLiteral("active"));
-    const QJsonValue query = command_line.value(QStringLiteral("query"));
-    const QJsonValue cursor = command_line.value(QStringLiteral("cursor"));
-    const QJsonValue selected = command_line.value(QStringLiteral("selected"));
-    const QJsonValue candidates = command_line.value(QStringLiteral("candidates"));
-    const QJsonValue mode = command_line.value(QStringLiteral("mode"));
-    const QJsonValue prefix = command_line.value(QStringLiteral("prefix"));
-    const QJsonValue cursor_utf16 = command_line.value(QStringLiteral("cursorUtf16"));
-    const QJsonValue preedit = command_line.value(QStringLiteral("preedit"));
+    const QJsonValue active = command_line.value(protocol_field(QStringLiteral("Active")));
+    const QJsonValue query = command_line.value(protocol_field(QStringLiteral("Query")));
+    const QJsonValue cursor = command_line.value(protocol_field(QStringLiteral("Cursor")));
+    const QJsonValue selected = command_line.value(protocol_field(QStringLiteral("Selected")));
+    const QJsonValue candidates = command_line.value(protocol_field(QStringLiteral("Candidates")));
+    const QJsonValue mode = command_line.value(protocol_field(QStringLiteral("Mode")));
+    const QJsonValue prefix = command_line.value(protocol_field(QStringLiteral("Prefix")));
+    const QJsonValue cursor_utf16 =
+        command_line.value(protocol_field(QStringLiteral("CursorUtf16")));
+    const QJsonValue preedit = command_line.value(protocol_field(QStringLiteral("Preedit")));
     const QJsonValue preedit_cursor_utf16 =
-        command_line.value(QStringLiteral("preeditCursorUtf16"));
-    const QJsonValue code_font_family = command_line.value(QStringLiteral("codeFontFamily"));
+        command_line.value(protocol_field(QStringLiteral("PreeditCursorUtf16")));
+    const QJsonValue code_font_family =
+        command_line.value(protocol_field(QStringLiteral("CodeFontFamily")));
     qsizetype cursor_position = 0;
     qsizetype selected_index = 0;
     qsizetype cursor_position_utf16 = 0;
@@ -154,40 +231,10 @@ bool parse_command_line(const QJsonValue& value, QVariantMap& result, QString& e
         error = QStringLiteral("layout.invalid_command_line");
         return false;
     }
-    const QString normalized_mode = mode.toString(QStringLiteral("command"));
-    if (normalized_mode != QStringLiteral("command") && normalized_mode != QStringLiteral("math") &&
-        normalized_mode != QStringLiteral("fontFamily") &&
-        normalized_mode != QStringLiteral("defaultFontTarget") &&
-        normalized_mode != QStringLiteral("defaultFontScope") &&
-        normalized_mode != QStringLiteral("defaultFontLanguage") &&
-        normalized_mode != QStringLiteral("defaultFontFamily")) {
-        error = QStringLiteral("layout.invalid_command_line");
-        return false;
-    }
-    const QString normalized_prefix =
-        prefix.toString(normalized_mode == QStringLiteral("fontFamily")
-                            ? QStringLiteral("\\font ")
-                            : ((normalized_mode == QStringLiteral("command") ||
-                                normalized_mode == QStringLiteral("math"))
-                                   ? QStringLiteral("\\")
-                                   : QStringLiteral("\\defaultfont ")));
-    const bool valid_prefix =
-        normalized_mode == QStringLiteral("defaultFontTarget")
-            ? normalized_prefix == QStringLiteral("\\defaultfont ")
-        : normalized_mode == QStringLiteral("defaultFontLanguage")
-            ? normalized_prefix.startsWith(QStringLiteral("\\defaultfont ")) &&
-                  normalized_prefix.endsWith(QStringLiteral(": "))
-        : normalized_mode == QStringLiteral("defaultFontScope") ||
-                normalized_mode == QStringLiteral("defaultFontFamily")
-            ? normalized_prefix.startsWith(QStringLiteral("\\defaultfont ")) &&
-                  normalized_prefix.endsWith(QLatin1Char(' '))
-            : normalized_prefix == (normalized_mode == QStringLiteral("fontFamily")
-                                        ? QStringLiteral("\\font ")
-                                        : ((normalized_mode == QStringLiteral("command") ||
-                                            normalized_mode == QStringLiteral("math"))
-                                               ? QStringLiteral("\\")
-                                               : QStringLiteral("\\defaultfont ")));
-    if (!valid_prefix) {
+    const QString normalized_mode = mode.toString(default_mode_text);
+    const QString mode_default_prefix_text = command_line_wire_default_prefix(normalized_mode);
+    const QString normalized_prefix = prefix.toString(mode_default_prefix_text);
+    if (!command_line_wire_valid(normalized_mode, normalized_prefix)) {
         error = QStringLiteral("layout.invalid_command_line");
         return false;
     }
@@ -216,10 +263,10 @@ bool parse_command_line(const QJsonValue& value, QVariantMap& result, QString& e
                 return false;
             }
             const QJsonObject candidate = candidate_value.toObject();
-            if (!candidate.value(QStringLiteral("alias")).isString() ||
-                !candidate.value(QStringLiteral("commandId")).isString() ||
-                !candidate.value(QStringLiteral("label")).isString() ||
-                !candidate.value(QStringLiteral("available")).isBool()) {
+            if (!candidate.value(protocol_field(QStringLiteral("Alias"))).isString() ||
+                !candidate.value(protocol_field(QStringLiteral("CommandId"))).isString() ||
+                !candidate.value(protocol_field(QStringLiteral("Label"))).isString() ||
+                !candidate.value(protocol_field(QStringLiteral("Available"))).isBool()) {
                 error = QStringLiteral("layout.invalid_command_candidate");
                 return false;
             }
@@ -236,17 +283,17 @@ bool parse_command_line(const QJsonValue& value, QVariantMap& result, QString& e
         error = QStringLiteral("layout.invalid_command_selection");
         return false;
     }
-    result = {{QStringLiteral("active"), active.toBool()},
-              {QStringLiteral("mode"), normalized_mode},
-              {QStringLiteral("prefix"), normalized_prefix},
-              {QStringLiteral("query"), query.toString()},
-              {QStringLiteral("cursor"), cursor_position},
-              {QStringLiteral("cursorUtf16"), cursor_position_utf16},
-              {QStringLiteral("preedit"), normalized_preedit},
-              {QStringLiteral("preeditCursorUtf16"), preedit_cursor_position_utf16},
-              {QStringLiteral("codeFontFamily"), code_font_family.toString()},
-              {QStringLiteral("selected"), selected_index},
-              {QStringLiteral("candidates"), parsed_candidates}};
+    result = {{protocol_field(QStringLiteral("Active")), active.toBool()},
+              {protocol_field(QStringLiteral("Mode")), normalized_mode},
+              {protocol_field(QStringLiteral("Prefix")), normalized_prefix},
+              {protocol_field(QStringLiteral("Query")), query.toString()},
+              {protocol_field(QStringLiteral("Cursor")), cursor_position},
+              {protocol_field(QStringLiteral("CursorUtf16")), cursor_position_utf16},
+              {protocol_field(QStringLiteral("Preedit")), normalized_preedit},
+              {protocol_field(QStringLiteral("PreeditCursorUtf16")), preedit_cursor_position_utf16},
+              {protocol_field(QStringLiteral("CodeFontFamily")), code_font_family.toString()},
+              {protocol_field(QStringLiteral("Selected")), selected_index},
+              {protocol_field(QStringLiteral("Candidates")), parsed_candidates}};
     return true;
 }
 
@@ -301,6 +348,16 @@ bool is_utf8_boundary(const QByteArray& text, qsizetype offset) {
 }
 
 } // namespace
+
+QString protocol_field_name(const QString& symbol) { return protocol_field(symbol); }
+
+QJsonValue command_line_snapshot_value(const QJsonObject& object) {
+    return object.value(protocol_field(QStringLiteral("CommandLine")));
+}
+
+bool has_command_line_snapshot(const QJsonObject& object) {
+    return object.contains(protocol_field(QStringLiteral("CommandLine")));
+}
 
 bool parse_command_line_state(const QJsonValue& value, QVariantMap& command_line, QString& error) {
     return parse_command_line(value, command_line, error);
@@ -412,7 +469,8 @@ bool parse(const QJsonDocument& document, ParsedLayoutSnapshot& parsed_snapshot,
         error = QStringLiteral("layout.invalid_partial_snapshot");
         return false;
     }
-    const QJsonValue composition_preview_value = root.value(QStringLiteral("compositionPreview"));
+    const QJsonValue composition_preview_value =
+        root.value(protocol_field(QStringLiteral("CompositionPreview")));
     const bool is_composition_preview = composition_preview_value.toBool(false);
     if ((!composition_preview_value.isUndefined() && !composition_preview_value.isBool()) ||
         (is_composition_preview && !is_partial)) {
@@ -499,8 +557,6 @@ bool parse(const QJsonDocument& document, ParsedLayoutSnapshot& parsed_snapshot,
             error = QStringLiteral("layout.invalid_paragraph");
             return false;
         }
-        qsizetype consumed_cursor = 0;
-        double expected_top_pt = 0.0;
         for (const auto& line_value : lines) {
             if (!line_value.isObject()) {
                 error = QStringLiteral("layout.invalid_line");
@@ -521,9 +577,9 @@ bool parse(const QJsonDocument& document, ParsedLayoutSnapshot& parsed_snapshot,
                 !nonnegative_index(line.value(QStringLiteral("consumedEnd")), consumed_end) ||
                 source_start > source_end || source_end > utf8_size ||
                 consumed_start > consumed_end || consumed_end > utf8_size ||
-                source_start != consumed_cursor || source_start != consumed_start ||
-                source_end > consumed_end || !is_utf8_boundary(utf8_text, source_start) ||
+                !is_utf8_boundary(utf8_text, source_start) ||
                 !is_utf8_boundary(utf8_text, source_end) ||
+                !is_utf8_boundary(utf8_text, consumed_start) ||
                 !is_utf8_boundary(utf8_text, consumed_end) ||
                 !finite_number(line.value(QStringLiteral("topPt")), top_pt) || top_pt < 0.0 ||
                 !finite_number(line.value(QStringLiteral("baselinePt")), baseline_pt) ||
@@ -535,19 +591,6 @@ bool parse(const QJsonDocument& document, ParsedLayoutSnapshot& parsed_snapshot,
                 error = QStringLiteral("layout.invalid_line");
                 return false;
             }
-            const double geometry_tolerance =
-                std::max(0.0001, static_cast<double>(std::numeric_limits<float>::epsilon()) *
-                                     std::max(1.0, std::abs(expected_top_pt)) * 2.0);
-            if (std::abs(top_pt - expected_top_pt) > geometry_tolerance) {
-                error = QStringLiteral("layout.invalid_line_geometry");
-                return false;
-            }
-            consumed_cursor = consumed_end;
-            expected_top_pt = top_pt + height_pt;
-        }
-        if (consumed_cursor != utf8_size) {
-            error = QStringLiteral("layout.invalid_line_ranges");
-            return false;
         }
         paragraph_line_counts.insert(paragraph_id, lines.size());
     }
@@ -675,8 +718,7 @@ bool parse(const QJsonDocument& document, ParsedLayoutSnapshot& parsed_snapshot,
         return false;
     }
     QVariantMap parsed_command_line;
-    if (!parse_command_line(root.value(QStringLiteral("commandLine")), parsed_command_line,
-                            error)) {
+    if (!parse_command_line(command_line_snapshot_value(root), parsed_command_line, error)) {
         return false;
     }
     QVariantList parsed_current_structure;

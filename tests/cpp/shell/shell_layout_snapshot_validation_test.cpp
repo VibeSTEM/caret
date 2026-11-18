@@ -1,11 +1,12 @@
 // 验证无效布局快照被拒绝且不会替换当前页面。
 #include "shell_layout_snapshot_validation_test.hpp"
 
+#include "layout_snapshot_codec.hpp"
 #ifdef CARET_ENABLE_APP
 #include "caret_ffi.h"
 #include "document_runtime_bridge.hpp"
-#include "layout_snapshot_codec.hpp"
 #include "layout_view_model.hpp"
+#include "shared/page_rect_validation.hpp"
 #endif
 
 #include <QJsonArray>
@@ -19,6 +20,49 @@
 #include <QtTest/qtestcase.h>
 #include <string_view>
 #include <utility>
+
+void ShellLayoutSnapshotValidationTest::commandLineProtocolDescriptionMatchesCodecBehavior() {
+    QVariantMap parsed;
+    QString error;
+    QVERIFY(caret::layout_snapshot::parse_command_line_state(QJsonValue(QJsonValue::Undefined),
+                                                             parsed, error));
+    QCOMPARE(parsed.value(QStringLiteral("mode")).toString(), QStringLiteral("command"));
+    QCOMPARE(parsed.value(QStringLiteral("prefix")).toString(), QStringLiteral("\\"));
+    QCOMPARE(parsed.value(QStringLiteral("cursorUtf16")).toInt(), 1);
+
+    const auto accepts = [&parsed, &error](const QString& mode, const QString& prefix) {
+        return caret::layout_snapshot::parse_command_line_state(
+            QJsonObject{{QStringLiteral("active"), true},
+                        {QStringLiteral("mode"), mode},
+                        {QStringLiteral("prefix"), prefix},
+                        {QStringLiteral("query"), QString{}},
+                        {QStringLiteral("cursor"), 0},
+                        {QStringLiteral("selected"), 0},
+                        {QStringLiteral("candidates"), QJsonArray{}}},
+            parsed, error);
+    };
+    const QList<QPair<QString, QString>> valid_modes{
+        {QStringLiteral("command"), QStringLiteral("\\")},
+        {QStringLiteral("math"), QStringLiteral("\\")},
+        {QStringLiteral("fontFamily"), QStringLiteral("\\font ")},
+        {QStringLiteral("defaultFontTarget"), QStringLiteral("\\defaultfont ")},
+        {QStringLiteral("defaultFontScope"), QStringLiteral("\\defaultfont Latin ")},
+        {QStringLiteral("defaultFontLanguage"), QStringLiteral("\\defaultfont Latin: ")},
+        {QStringLiteral("defaultFontFamily"), QStringLiteral("\\defaultfont Latin:zh-Hans ")}};
+    for (const auto& [mode, prefix] : valid_modes) {
+        QVERIFY2(accepts(mode, prefix), qPrintable(error));
+    }
+    QVERIFY(!accepts(QStringLiteral("unknown"), QStringLiteral("\\")));
+    QVERIFY(accepts(QStringLiteral("defaultFontScope"), QStringLiteral("\\defaultfont ")));
+    QVERIFY(!caret::layout_snapshot::parse_command_line_state(
+        QJsonObject{{QStringLiteral("active"), true},
+                    {QStringLiteral("mode"), QStringLiteral("defaultFontLanguage")},
+                    {QStringLiteral("query"), QString{}},
+                    {QStringLiteral("cursor"), 0},
+                    {QStringLiteral("selected"), 0},
+                    {QStringLiteral("candidates"), QJsonArray{}}},
+        parsed, error));
+}
 
 #ifdef CARET_ENABLE_APP
 void ShellLayoutSnapshotValidationTest::
@@ -101,6 +145,23 @@ void ShellLayoutSnapshotValidationTest::
     QVERIFY(caret::layout_snapshot::parse_command_line_state(math_command_line, parsed_command_line,
                                                              command_line_error));
     QCOMPARE(parsed_command_line.value(QStringLiteral("mode")).toString(), QStringLiteral("math"));
+    for (const auto& [mode, prefix] :
+         {std::pair{std::string_view("command"), std::string_view("\\")},
+          std::pair{std::string_view("math"), std::string_view("\\")},
+          std::pair{std::string_view("fontFamily"), std::string_view("\\font ")},
+          std::pair{std::string_view("defaultFontTarget"), std::string_view("\\defaultfont ")},
+          std::pair{std::string_view("defaultFontScope"), std::string_view("\\defaultfont Latin ")},
+          std::pair{std::string_view("defaultFontLanguage"),
+                    std::string_view("\\defaultfont Latin: ")},
+          std::pair{std::string_view("defaultFontFamily"),
+                    std::string_view("\\defaultfont Latin:zh-Hans ")}}) {
+        QVERIFY(caret::ffi::command_line_wire_valid(rust::Str(mode.data(), mode.size()),
+                                                    rust::Str(prefix.data(), prefix.size())));
+    }
+    QVERIFY(!caret::ffi::command_line_wire_valid(rust::Str("unknown", 7), rust::Str("\\", 1)));
+    QVERIFY(caret::page_rect_validation::valid_coordinates(90.0, 10.0, 120.0, 30.0));
+    QVERIFY(!caret::page_rect_validation::within_page(120.0, 30.0, 100.0, 100.0));
+    QVERIFY(caret::page_rect_validation::within_page(90.0, 30.0, 100.0, 100.0));
     QJsonObject invalid_command_prefix = unicode_command_line;
     invalid_command_prefix.insert(QStringLiteral("prefix"), QStringLiteral("\\"));
     QVERIFY(!caret::layout_snapshot::parse_command_line_state(
@@ -109,6 +170,26 @@ void ShellLayoutSnapshotValidationTest::
     invalid_command_cursor.insert(QStringLiteral("cursorUtf16"), 6);
     QVERIFY(!caret::layout_snapshot::parse_command_line_state(
         invalid_command_cursor, parsed_command_line, command_line_error));
+    const QJsonObject omitted_scope_prefix{
+        {QStringLiteral("active"), true},
+        {QStringLiteral("mode"), QStringLiteral("defaultFontScope")},
+        {QStringLiteral("query"), QString{}},
+        {QStringLiteral("cursor"), 0},
+        {QStringLiteral("selected"), 0},
+        {QStringLiteral("candidates"), QJsonArray{}}};
+    QVERIFY(caret::layout_snapshot::parse_command_line_state(
+        omitted_scope_prefix, parsed_command_line, command_line_error));
+    QCOMPARE(parsed_command_line.value(QStringLiteral("prefix")).toString(),
+             QStringLiteral("\\defaultfont "));
+    const QJsonObject omitted_language_prefix{
+        {QStringLiteral("active"), true},
+        {QStringLiteral("mode"), QStringLiteral("defaultFontLanguage")},
+        {QStringLiteral("query"), QString{}},
+        {QStringLiteral("cursor"), 0},
+        {QStringLiteral("selected"), 0},
+        {QStringLiteral("candidates"), QJsonArray{}}};
+    QVERIFY(!caret::layout_snapshot::parse_command_line_state(
+        omitted_language_prefix, parsed_command_line, command_line_error));
 
     QJsonObject invalid_partial = root;
     invalid_partial.insert(QStringLiteral("partial"), QStringLiteral("yes"));
@@ -175,17 +256,21 @@ void ShellLayoutSnapshotValidationTest::
     invalid_line.insert(QStringLiteral("paragraphs"), paragraphs);
     QVERIFY(reject(invalid_line));
 
-    QJsonObject invalid_line_ranges = root;
+    QJsonObject producer_line_ranges = root;
     paragraphs = root.value(QStringLiteral("paragraphs")).toArray();
     paragraph = paragraphs.first().toObject();
     QJsonArray lines = paragraph.value(QStringLiteral("lines")).toArray();
     QJsonObject line = lines.first().toObject();
-    line.insert(QStringLiteral("consumedEnd"), 1);
+    line.insert(QStringLiteral("sourceStart"), 1);
+    line.insert(QStringLiteral("consumedStart"), 1);
     lines.replace(0, line);
     paragraph.insert(QStringLiteral("lines"), lines);
     paragraphs.replace(0, paragraph);
-    invalid_line_ranges.insert(QStringLiteral("paragraphs"), paragraphs);
-    QVERIFY(reject(invalid_line_ranges));
+    producer_line_ranges.insert(QStringLiteral("paragraphs"), paragraphs);
+    caret::layout_snapshot::ParsedLayoutSnapshot parsed_layout;
+    QString layout_error;
+    QVERIFY(caret::layout_snapshot::parse(QJsonDocument(producer_line_ranges), parsed_layout,
+                                          layout_error));
 
     QJsonObject invalid_utf8_boundary = root;
     paragraphs = root.value(QStringLiteral("paragraphs")).toArray();
@@ -200,7 +285,7 @@ void ShellLayoutSnapshotValidationTest::
     invalid_utf8_boundary.insert(QStringLiteral("paragraphs"), paragraphs);
     QVERIFY(reject(invalid_utf8_boundary));
 
-    QJsonObject invalid_line_geometry = root;
+    QJsonObject producer_line_geometry = root;
     paragraphs = root.value(QStringLiteral("paragraphs")).toArray();
     paragraph = paragraphs.first().toObject();
     lines = paragraph.value(QStringLiteral("lines")).toArray();
@@ -209,8 +294,9 @@ void ShellLayoutSnapshotValidationTest::
     lines.replace(0, line);
     paragraph.insert(QStringLiteral("lines"), lines);
     paragraphs.replace(0, paragraph);
-    invalid_line_geometry.insert(QStringLiteral("paragraphs"), paragraphs);
-    QVERIFY(reject(invalid_line_geometry));
+    producer_line_geometry.insert(QStringLiteral("paragraphs"), paragraphs);
+    QVERIFY(caret::layout_snapshot::parse(QJsonDocument(producer_line_geometry), parsed_layout,
+                                          layout_error));
 
     QJsonObject invalid_page = root;
     QJsonArray pages = root.value(QStringLiteral("pages")).toArray();
