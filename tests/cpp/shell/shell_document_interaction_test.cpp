@@ -74,6 +74,8 @@
 
 #ifdef CARET_ENABLE_APP
 namespace caret {
+// 测试通过私有入口注入异常协议载荷，并检查计时器是否激活；随后停止计时器，避免测试期间实际触发自动保存。
+// 这些操作没有对应的公开 API。
 struct LayoutViewModelTestProbe final {
     static bool installInteraction(LayoutViewModel& view_model, const QJsonObject& interaction) {
         return view_model.installInteraction(interaction);

@@ -1,4 +1,7 @@
 //! 验证文档布局、分页和命中测试。
+//! 调用 `test_system_font_catalog` 的测试经文档布局服务计算正文行框；空白、ASCII 和纯数学文档也依赖正文字体度量。
+//! FontCatalog 当前只提供系统目录构造入口；仓库内嵌字体仅承担代码和数学角色，不能代表正文默认字体。
+//! 仅使用内嵌字体的试跑中，空白页命中和空白/中文正文行框用例返回 layout.inconsistent_parley_output；多语言回退还需要中日韩字形。
 
 use crate::{
     Affinity, Command, EditError, MathEditTarget, MathPositionAffinity, MathPositionHost,
@@ -15,6 +18,10 @@ use caret_layout::{FontCatalog, FontCatalogError, HitAffinity, ShapingStyle, Vis
 use std::collections::BTreeMap;
 
 use super::{DocumentLayoutError, DocumentLayoutService};
+
+fn test_system_font_catalog() -> FontCatalog {
+    FontCatalog::system().unwrap_or_else(|error| panic!("system font catalog failed: {error}"))
+}
 
 #[test]
 fn math_tree_sequence_caret_uses_affinity_order_at_sibling_boundaries() {
@@ -83,8 +90,7 @@ fn empty_math_tree() -> caret_doc::MathTree {
 
 fn layout_document(document: &Document) -> super::DocumentLayoutSnapshot {
     let mut service = DocumentLayoutService::new();
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let mut catalog = test_system_font_catalog();
     service
         .layout(document, 1, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("document layout failed: {error}"))
@@ -201,8 +207,7 @@ fn body_and_equation_textflow_share_run_language_fallback_and_glyphs() {
     ];
 
     let mut service = DocumentLayoutService::new();
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = service
         .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("body and equation should lay out: {error}"));
@@ -406,8 +411,7 @@ fn math_softbreak_and_opaque_nodes_require_text_shaping_even_with_empty_text_flo
             extra: BTreeMap::new(),
         }),
     ]);
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = DocumentLayoutService::new()
         .layout(&document, 8, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("boundary-only math flows should layout: {error}"));
@@ -448,8 +452,7 @@ fn equation_soft_break_uses_two_lines_and_preserves_text_caret_paths() {
         },
         extra: Default::default(),
     }));
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = DocumentLayoutService::new()
         .layout(&document, 8, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("equation should layout: {error}"));
@@ -518,8 +521,7 @@ fn equation_soft_break_uses_two_lines_and_preserves_text_caret_paths() {
 
 #[test]
 fn display_math_uses_the_body_line_grid_as_its_stable_base() {
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let mut catalog = test_system_font_catalog();
     let mut service = DocumentLayoutService::new();
     let mut measure = |source: &str| {
         let caret_math::ParsedMath::Tree(math_tree) =
@@ -631,8 +633,7 @@ fn align_layout_accepts_exact_spacing_shorter_than_the_body_font_metrics() {
             extra: Default::default(),
         };
     document.body.push(Block::Align(align));
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = DocumentLayoutService::new()
         .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("short Exactly Align should layout: {error}"));
@@ -663,8 +664,7 @@ fn align_outer_boundary_uses_first_and_last_row_under_natural_spacing() {
         Block::Paragraph(Paragraph::empty(NodeId::generate())),
         Block::Align(align),
     ];
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = DocumentLayoutService::new()
         .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("multiline Align should layout: {error}"));
@@ -765,8 +765,7 @@ fn display_math_uses_the_same_collapsed_paragraph_spacing_as_sections() {
         }),
         Block::Paragraph(paragraph("after")),
     ];
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = DocumentLayoutService::new()
         .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("display math should layout: {error}"));
@@ -847,8 +846,7 @@ fn align_cell_soft_break_keeps_both_text_caret_paths() {
     };
     let mut document = Document::blank();
     document.body.push(Block::Align(align));
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = DocumentLayoutService::new()
         .layout(&document, 8, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("align should layout: {error}"));
@@ -913,8 +911,7 @@ fn inline_math_uses_one_box_and_preserves_logical_source_positions() {
     let mut document = Document::blank();
     document.body.push(Block::Paragraph(paragraph));
     let mut service = DocumentLayoutService::new();
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = service
         .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| {
@@ -985,8 +982,7 @@ fn inline_math_text_hit_uses_its_published_parley_geometry_and_source_path() {
     let paragraph_id = paragraph.id.clone();
     let mut document = Document::blank();
     document.body.push(Block::Paragraph(paragraph));
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = DocumentLayoutService::new()
         .layout(&document, 7, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("inline math text should layout: {error}"));
@@ -1092,8 +1088,7 @@ fn equation_text_hit_keeps_block_host_and_text_flow_path() {
         math_tree,
         extra: BTreeMap::new(),
     }));
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = DocumentLayoutService::new()
         .layout(&document, 8, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("equation text should layout: {error}"));
@@ -1140,8 +1135,7 @@ fn equation_empty_math_operand_uses_its_published_structure_slot_geometry() {
         math_tree,
         extra: BTreeMap::new(),
     }));
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = DocumentLayoutService::new()
         .layout(&document, 11, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("equation should layout: {error}"));
@@ -1215,8 +1209,7 @@ fn optional_placeholder_identity_markers_are_not_structural_hit_targets() {
         math_tree,
         extra: BTreeMap::new(),
     }));
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = DocumentLayoutService::new()
         .layout(&document, 12, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("radical should layout: {error}"));
@@ -1271,8 +1264,7 @@ fn replacing_placeholder_with_unknown_metadata_is_rejected_atomically() -> Resul
         extra: BTreeMap::new(),
     }));
     let mut session = Session::new(document)?;
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = DocumentLayoutService::new()
         .layout_session(&session, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("fraction should layout: {error}"));
@@ -1335,8 +1327,7 @@ fn session_focuses_and_edits_only_a_current_empty_math_structure_hit() -> Result
     }));
     let mut session = Session::new(document)?;
     let original_selection = session.selection().clone();
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let mut catalog = test_system_font_catalog();
     let mut service = DocumentLayoutService::new();
     let snapshot = service
         .layout_session(&session, &mut catalog, &ShapingStyle::new(1200))
@@ -1464,8 +1455,7 @@ fn math_tree_caret_uses_inline_environment_children_geometry() {
         },
         extra: BTreeMap::new(),
     }));
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = DocumentLayoutService::new()
         .layout(&document, 17, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("equation should layout: {error}"));
@@ -1885,8 +1875,7 @@ fn math_structure_hit_enters_bold_environment_child_sequence() {
         },
         extra: BTreeMap::new(),
     }));
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = DocumentLayoutService::new()
         .layout(&document, 19, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("bold equation should layout: {error}"));
@@ -1932,8 +1921,7 @@ fn math_structure_hit_falls_back_to_parent_sequence_in_operator_gaps() {
         math_tree,
         extra: BTreeMap::new(),
     }));
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = DocumentLayoutService::new()
         .layout(&document, 20, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("fraction should layout: {error}"));
@@ -1972,8 +1960,7 @@ fn session_accepts_only_current_structurally_valid_math_text_hits() -> Result<()
         extra: BTreeMap::new(),
     }));
     let mut session = Session::new(document)?;
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let mut catalog = test_system_font_catalog();
     let mut service = DocumentLayoutService::new();
     let snapshot = service
         .layout_session(&session, &mut catalog, &ShapingStyle::new(1200))
@@ -2128,8 +2115,7 @@ fn align_cell_text_hit_keeps_stable_row_and_cell_identity() {
     let cell_id = align.rows[0].cells[1].root.id.clone();
     let mut document = Document::blank();
     document.body.push(Block::Align(align));
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = DocumentLayoutService::new()
         .layout(&document, 9, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("Align text should layout: {error}"));
@@ -2175,8 +2161,7 @@ fn vertical_math_text_navigation_enters_the_adjacent_align_row() {
     let expected_next_row_id = align.rows[1].id.clone();
     let mut document = Document::blank();
     document.body.push(Block::Align(align.clone()));
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = DocumentLayoutService::new()
         .layout(&document, 17, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("multirow Align should layout: {error}"));
@@ -2227,8 +2212,7 @@ fn vertical_math_text_navigation_enters_an_empty_align_text_island() {
     let expected_next_row_id = align.rows[1].id.clone();
     let mut document = Document::blank();
     document.body.push(Block::Align(align.clone()));
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = DocumentLayoutService::new()
         .layout(&document, 18, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("empty-text Align should layout: {error}"));
@@ -2279,8 +2263,7 @@ fn minimum_document_font_size_keeps_scaled_math_text_layout_valid() {
         math_tree,
         extra: BTreeMap::new(),
     }));
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = DocumentLayoutService::new()
         .layout(&document, 0, &mut catalog, &ShapingStyle::new(1))
         .unwrap_or_else(|error| panic!("positive sub-centipoint script must layout: {error}"));
@@ -2309,8 +2292,7 @@ fn stale_snapshot_after_multiple_edits_is_not_reused_for_a_single_changed_paragr
     let mut session = Session::new(document)
         .unwrap_or_else(|error| panic!("valid multi-paragraph session should build: {error}"));
     let mut service = DocumentLayoutService::new();
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let mut catalog = test_system_font_catalog();
     let base_style = ShapingStyle::new(1200);
     let previous = service
         .layout_session(&session, &mut catalog, &base_style)
@@ -2373,8 +2355,7 @@ fn unchanged_paragraph_can_be_reused_across_multiple_document_generations() {
     let mut session = Session::new(document)
         .unwrap_or_else(|error| panic!("valid multi-paragraph session should build: {error}"));
     let mut service = DocumentLayoutService::new();
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let mut catalog = test_system_font_catalog();
     let base_style = ShapingStyle::new(1200);
     let previous = service
         .layout_session(&session, &mut catalog, &base_style)
@@ -2450,8 +2431,7 @@ fn unchanged_display_math_reuses_layout_and_text_sidecars() {
     let mut session = Session::new(document)
         .unwrap_or_else(|error| panic!("valid session should build: {error}"));
     let mut service = DocumentLayoutService::new();
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let mut catalog = test_system_font_catalog();
     let base_style = ShapingStyle::new(1200);
     let previous = service
         .layout_session(&session, &mut catalog, &base_style)
@@ -2564,8 +2544,7 @@ fn unchanged_inline_math_reuses_layout_and_text_sidecars_after_body_reflow() {
     let mut session = Session::new(document)
         .unwrap_or_else(|error| panic!("valid session should build: {error}"));
     let mut service = DocumentLayoutService::new();
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let mut catalog = test_system_font_catalog();
     let base_style = ShapingStyle::new(1200);
     let previous = service
         .layout_session(&session, &mut catalog, &base_style)
@@ -2640,8 +2619,7 @@ fn page_content_width_change_rejects_paragraph_layout_reuse() {
     let mut session = Session::new(document)
         .unwrap_or_else(|error| panic!("valid session should build: {error}"));
     let mut service = DocumentLayoutService::new();
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let mut catalog = test_system_font_catalog();
     let base_style = ShapingStyle::new(1200);
     let previous = service
         .layout_session(&session, &mut catalog, &base_style)
@@ -2691,8 +2669,7 @@ fn negative_inline_math_whitespace_does_not_fail_document_layout() {
     let mut document = Document::blank();
     document.body.push(Block::Paragraph(paragraph));
     let mut service = DocumentLayoutService::new();
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = service
         .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| {
@@ -2744,8 +2721,7 @@ fn cjk_text_keeps_paragraph_spacing_fixed_and_environment_tracks_line_boxes() {
             Block::Paragraph(after),
         ];
         let mut service = DocumentLayoutService::new();
-        let mut catalog =
-            FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+        let mut catalog = test_system_font_catalog();
         let snapshot = service
             .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
             .unwrap_or_else(|error| panic!("document layout failed: {error}"));
@@ -2837,8 +2813,7 @@ fn same_size_latin_cjk_and_mixed_text_use_equal_selection_line_boxes() {
     document.body = paragraphs.into_iter().map(Block::Paragraph).collect();
 
     let mut service = DocumentLayoutService::new();
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = service
         .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("document layout failed: {error}"));
@@ -2896,8 +2871,7 @@ fn same_size_latin_cjk_and_mixed_text_use_equal_selection_line_boxes() {
 fn blank_page_click_uses_nearest_line_for_caret_placement() {
     let document = Document::blank();
     let mut service = DocumentLayoutService::new();
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = service
         .layout(&document, 0, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("document layout failed: {error}"));
@@ -2917,8 +2891,7 @@ fn blank_page_click_uses_nearest_line_for_caret_placement() {
 fn cloning_laid_out_paragraph_shares_immutable_shaping_data() {
     let document = Document::blank();
     let mut service = DocumentLayoutService::new();
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = service
         .layout(&document, 0, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("document layout failed: {error}"));
@@ -2951,8 +2924,7 @@ fn document_layout_snapshot_uses_parley_lines_and_pagination() {
     })];
 
     let mut service = DocumentLayoutService::new();
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = service
         .layout(&document, 7, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("document layout failed: {error}"));
@@ -3163,8 +3135,7 @@ fn long_paragraph_selection_uses_page_local_line_positions() {
     })];
 
     let mut service = DocumentLayoutService::new();
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = service
         .layout(&document, 0, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("document layout failed: {error}"));
@@ -3215,8 +3186,7 @@ fn stale_document_or_font_layout_snapshot_is_rejected() {
     let session = Session::new(Document::blank())
         .unwrap_or_else(|error| panic!("session creation failed: {error}"));
     let mut service = DocumentLayoutService::new();
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = service
         .layout_session(&session, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("document layout failed: {error}"));
@@ -3252,8 +3222,7 @@ fn layout_errors_reject_the_entire_document_and_leave_the_service_reusable() {
         .mark_style
         .insert("futureMetric".to_owned(), serde_json::json!(true));
     let mut service = DocumentLayoutService::new();
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let mut catalog = test_system_font_catalog();
 
     for (document, expected_prefix) in [
         (invalid_model, "layout.invalid_document:"),
@@ -3301,8 +3270,7 @@ fn block_environment_titles_and_children_share_document_layout_and_hit_testing()
         extra: BTreeMap::new(),
     })];
     let mut service = DocumentLayoutService::new();
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = service
         .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("environment layout failed: {error}"));
@@ -3363,8 +3331,7 @@ fn body_selection_geometry_skips_environment_title_stories() {
         Block::Paragraph(after),
     ];
     let mut service = DocumentLayoutService::new();
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = service
         .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("environment layout failed: {error}"));
@@ -3700,8 +3667,7 @@ fn empty_and_nonempty_paragraphs_share_the_same_line_grid() {
     ];
 
     let mut service = DocumentLayoutService::new();
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = service
         .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("document layout failed: {error}"));
@@ -3744,8 +3710,7 @@ fn line_grid_stays_stable_across_language_and_soft_wrapped_lines() {
     document.body = vec![Block::Paragraph(wrapped.clone())];
 
     let mut service = DocumentLayoutService::new();
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = service
         .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("document layout failed: {error}"));
@@ -3766,8 +3731,7 @@ fn page_hit_testing_rejects_nonfinite_and_outside_coordinates() {
     let mut document = Document::blank();
     document.body = vec![Block::Paragraph(paragraph("a"))];
     let mut service = DocumentLayoutService::new();
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = service
         .layout(&document, 0, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("document layout failed: {error}"));
@@ -3805,8 +3769,7 @@ fn reversed_cross_paragraph_selection_and_invalid_utf8_positions_are_handled() {
         .map(|text| Block::Paragraph(paragraph(text)))
         .collect();
     let mut service = DocumentLayoutService::new();
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = service
         .layout(&document, 0, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("document layout failed: {error}"));
@@ -3914,8 +3877,7 @@ fn soft_break_is_selected_logically_without_a_trailing_highlight_block() {
     ];
     let paragraph_id = paragraph.id.clone();
     let mut service = DocumentLayoutService::new();
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = service
         .layout(&document, 0, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("document layout failed: {error}"));
@@ -3966,8 +3928,7 @@ fn explicit_breaks_keep_empty_pages_without_inventing_text_hit_targets() {
         page_break(),
     ];
     let mut service = DocumentLayoutService::new();
-    let mut catalog =
-        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = service
         .layout(&document, 0, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("document layout failed: {error}"));
@@ -4051,7 +4012,7 @@ fn empty_formula_projections_keep_host_geometry_without_placeholder_rectangles()
         }),
         Block::Align(align.clone()),
     ];
-    let mut catalog = FontCatalog::system().unwrap_or_else(|error| panic!("catalog: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = DocumentLayoutService::new()
         .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("layout: {error}"));
@@ -4197,7 +4158,7 @@ fn clipped_multiline_inline_math_publishes_only_visible_geometry() {
             extra: BTreeMap::new(),
         };
     document.body = vec![Block::Paragraph(paragraph)];
-    let mut catalog = FontCatalog::system().unwrap_or_else(|error| panic!("catalog: {error}"));
+    let mut catalog = test_system_font_catalog();
     let snapshot = DocumentLayoutService::new()
         .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("layout: {error}"));
@@ -4582,8 +4543,7 @@ fn empty_inline_math_zero_advance_across_font_sizes() {
         let mut document = inline_math_document(empty_inline_math_host());
         document.global_settings.default_font_size_centipoints = font_size_centipoints;
         let mut service = DocumentLayoutService::new();
-        let mut catalog =
-            FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+        let mut catalog = test_system_font_catalog();
         let snapshot = service
             .layout(
                 &document,
