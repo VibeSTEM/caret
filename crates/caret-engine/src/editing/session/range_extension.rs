@@ -76,7 +76,7 @@ impl Session {
             anchor: caret.clone(),
             focus: caret,
         };
-        self.host_caret_position = host_caret_position;
+        self.set_host_caret_position(host_caret_position);
         self.selection_visual_affinity = focus_visual_affinity;
         self.pending_inline_style.clear();
         if changed {
@@ -109,7 +109,7 @@ impl Session {
                     anchor,
                     focus: focus.clone(),
                 };
-                self.host_caret_position = None;
+                self.clear_host_caret_position();
                 self.selection_visual_affinity = visual_affinity_for(focus.affinity);
             }
             DocumentRangeEndpoint::BlockEdge { block_id, side } => {
@@ -118,7 +118,7 @@ impl Session {
                     anchor: caret.clone(),
                     focus: caret,
                 };
-                self.host_caret_position = Some(host);
+                self.set_host_caret_position(Some(host));
                 self.selection_visual_affinity = visual_affinity_for_block_edge(*side);
             }
         }

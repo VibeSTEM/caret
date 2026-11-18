@@ -1,6 +1,6 @@
 # Task 索引
 
-更新日期：2026-11-17。非平凡改动先从[模板](task/_template.md)建 task，在本索引登记，然后再动代码。行为规格在[架构](architecture/README.md)和[规范](standards/README.md)。2026-10-25 删去未执行的旧队列，现行任务从 001 重新编号。
+更新日期：2026-11-18。非平凡改动先从[模板](task/_template.md)建 task，在本索引登记，然后再动代码。行为规格在[架构](architecture/README.md)和[规范](standards/README.md)。2026-10-25 删去未执行的旧队列，现行任务从 001 重新编号。
 
 ## 使用方式
 
@@ -126,7 +126,7 @@
 | 092 | 数学排版 | [共享数学片段转换接口](task/092-checked-math-fragment-converter.md) | P1 | 043 | M | ready |
 | 093 | 质量清理 | [全仓 Brooks Sweep 质量清理记录](task/093-brooks-sweep-quality-cleanup.md) | P2 | — | L | done |
 | 094 | 测试 | [关闭已编辑文档事务的行为测试](task/094-close-with-unsaved-changes-tests.md) | P0 | 093 | M | done |
-| 095 | 架构 | [caret-engine 会话与数学编辑模块拆分](task/095-engine-session-math-edit-split.md) | P1 | 093 | L | planned |
+| 095 | 架构 | [caret-engine 会话与数学编辑模块拆分](task/095-engine-session-math-edit-split.md) | P1 | 093 | L | done |
 | 096 | 架构 | [caret-engine 布局模块生产/查询拆分](task/096-engine-layout-produce-query-split.md) | P1 | 093 | L | planned |
 | 097 | 数学 | [跨 crate 数学符号与属性单一来源](task/097-math-symbol-single-source.md) | P1 | 093、084 | M | planned |
 | 098 | QML 架构 | [QML 状态机与跨语言契约收敛](task/098-qml-state-and-cross-language-contracts.md) | P2 | 093、083 | L | planned |

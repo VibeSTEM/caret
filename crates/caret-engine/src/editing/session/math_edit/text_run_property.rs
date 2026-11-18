@@ -7,7 +7,7 @@ use super::super::super::environment::inline_adapter::{
     RunPropertyEnvironment, run_property_for_key, run_property_for_kind,
 };
 use super::super::super::flow_format::{format_flow_run_property, run_property_range_state};
-use super::super::history::{DocumentPatch, MathEditPosition, SessionHistoryEdit};
+use super::super::history::{DocumentPatch, MathEditPosition};
 use super::super::{EditError, Effect};
 use super::{
     MathEdit, MathEditBranch, MathTextPosition, Session, history_position,
@@ -156,11 +156,7 @@ impl Session {
             state_id,
         )
         .with_math_edit(Some(after_math));
-        self.record_history_edit(SessionHistoryEdit::new(
-            DocumentPatch::PendingStyle,
-            before,
-            after,
-        ));
+        self.commit_document_edit_with_states(DocumentPatch::PendingStyle, before, after, false);
         Ok(Effect::default())
     }
 }

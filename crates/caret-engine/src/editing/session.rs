@@ -408,9 +408,52 @@ impl Session {
         self.composition.as_ref()
     }
 
+    pub(super) fn set_composition(&mut self, composition: Option<InputComposition>) {
+        self.composition = composition;
+    }
+
+    pub(super) fn clear_composition(&mut self) {
+        self.set_composition(None);
+    }
+
+    pub(super) fn take_composition(&mut self) -> Option<InputComposition> {
+        self.composition.take()
+    }
+
     /// 当前临时命令查询；此状态不属于文档修订或布局缓存。
     pub fn command_line(&self) -> Option<&CommandLine> {
         self.command_line.as_ref()
+    }
+
+    pub(super) fn set_command_line(&mut self, command_line: Option<CommandLine>) {
+        self.command_line = command_line;
+    }
+
+    pub(super) fn clear_command_line(&mut self) {
+        self.set_command_line(None);
+    }
+
+    pub(super) fn set_math_edit(&mut self, math_edit: Option<MathEdit>) {
+        self.math_edit = math_edit;
+    }
+
+    pub(super) fn clear_math_edit(&mut self) {
+        self.set_math_edit(None);
+    }
+
+    pub(super) fn take_math_edit(&mut self) -> Option<MathEdit> {
+        self.math_edit.take()
+    }
+
+    pub(super) fn set_host_caret_position(
+        &mut self,
+        host_caret_position: Option<HostCaretPosition<Pos>>,
+    ) {
+        self.host_caret_position = host_caret_position;
+    }
+
+    pub(super) fn clear_host_caret_position(&mut self) {
+        self.set_host_caret_position(None);
     }
 
     /// 当前光标是否停在可编辑块的外侧，而不为导航插入可见空段落。
@@ -757,8 +800,8 @@ impl Session {
         let changed = self.structure_selection != previous_selection
             || self.selected_block_environments != previous_environments
             || self.selected_math_blocks != previous_math_blocks;
-        self.math_edit = None;
-        self.host_caret_position = None;
+        self.clear_math_edit();
+        self.clear_host_caret_position();
         Ok(Effect {
             selection_changed: changed,
             ..Effect::default()
@@ -847,7 +890,7 @@ impl Session {
                     .command_line
                     .as_ref()
                     .is_some_and(|line| !line.preedit.is_empty());
-                self.command_line = None;
+                self.clear_command_line();
                 return Ok(Effect {
                     composition_changed: had_preedit,
                     ..Effect::default()
@@ -857,7 +900,7 @@ impl Session {
                 && matches!(&command, Command::EditorKey(super::EditorKey::Escape))
             {
                 // 仅显式放弃过期的交互投影；已提交数学树和当前宿主选区保持权威。
-                self.math_edit = None;
+                self.clear_math_edit();
                 self.pending_inline_style.clear();
                 self.advance_history_merge_epoch();
                 return Ok(Effect {
@@ -875,7 +918,7 @@ impl Session {
             .cloned();
         let result = operation(self, command);
         if result.is_err() && self.math_edit.is_none() {
-            self.math_edit = previous_math_edit;
+            self.set_math_edit(previous_math_edit);
         }
         if result.is_ok() {
             self.clear_stale_empty_inline_focus(preserve_inline_outer_stop);
@@ -904,7 +947,7 @@ impl Session {
                         map.is_empty_inline_environment(focus.offset, position.host_id())
                     });
                 if !is_current_inline_boundary {
-                    self.host_caret_position = None;
+                    self.clear_host_caret_position();
                 }
             }
             return;
@@ -915,7 +958,7 @@ impl Session {
                 .ok()
                 .is_some_and(|map| map.is_empty_inline_environment(local.offset, &host_id));
         if !is_still_active {
-            self.host_caret_position = None;
+            self.clear_host_caret_position();
         }
     }
 
@@ -1124,6 +1167,14 @@ impl Session {
         ) {
             return self.run_command_line(command);
         }
+        self.run_document_command(command, focus_inserted_inline_math)
+    }
+
+    fn run_document_command(
+        &mut self,
+        command: Command,
+        focus_inserted_inline_math: bool,
+    ) -> Result<Effect, EditError> {
         let before_selection = self.selection.clone();
         let cancels_command_line_preedit = self
             .command_line
@@ -1195,70 +1246,13 @@ impl Session {
             }
             _ => None,
         };
-        let effect = match command {
-            Command::TextInput(_) => unreachable!("text input is resolved before command dispatch"),
-            Command::InsertText(text) => self.insert_text(&text),
-            Command::InsertOneCharacterWidthSpace => self.insert_text("\u{2003}"),
-            Command::InsertTwoCharacterWidthSpace => self.insert_text("\u{2003}\u{2003}"),
-            Command::PasteText(text) => self.paste_text(&text),
-            Command::InsertSoftBreak => self.insert_soft_break(),
-            Command::InsertInlineMath(source) => {
-                self.insert_inline_math_with_edit_target(&source, focus_inserted_inline_math)
-            }
-            Command::EnterMath(direction) => self.enter_math(direction),
-            Command::SetMathTextSelection { .. } => Err(EditError::InvalidPosition),
-            Command::InsertParagraphBreak => self.split_paragraph(),
-            Command::Delete(direction) => self.delete(direction),
-            Command::MoveCaret(direction) => self.move_caret(direction),
-            Command::MoveStructure(_)
-            | Command::ExitBlockEnvironment(_)
-            | Command::RemoveBlockEnvironmentPreservingContent
-            | Command::ExpandStructureSelection
-            | Command::ExitStructure => {
-                unreachable!("structure commands returned above")
-            }
-            Command::CreateBlockEnvironment(_) => {
-                unreachable!("structure edit commands returned above")
-            }
-            Command::ToggleInlineFormat(kind) => self.toggle_inline_format(kind),
-            Command::ToggleRunUnderline => self.toggle_run_underline(),
-            Command::RemoveInlineEnvironmentPreservingContent(environment_id) => {
-                self.remove_inline_environment_preserving_content(&environment_id)
-            }
-            Command::RemoveRunPropertyPreservingContent(kind) => {
-                self.remove_run_property_from_current_range(kind)
-            }
-            Command::SetInlineFontFamily(family) => self.set_inline_font_family(&family),
-            Command::SetParagraphFirstLineIndentChars(chars) => {
-                self.set_paragraph_first_line_indent_chars(chars)
-            }
-            Command::SetDefaultFontFamily(family) => self.set_default_font_family(family),
-            Command::SetDocumentFontFamily { target, family } => {
-                self.set_document_font_family(&target, family)
-            }
-            Command::EditorKey(_) => unreachable!("editor keys returned before editing dispatch"),
-            Command::SetSelection(selection) => self.set_selection(selection),
-            Command::UpdateComposition { id, preedit } => self.update_composition(id, preedit),
-            Command::CommitComposition { id, text } => self.commit_composition(id, &text),
-            Command::CancelComposition { id } => self.cancel_composition(id),
-            Command::SetPageGeometry(geometry) => self.set_page_geometry(geometry),
-            Command::BeginCommandLine
-            | Command::TypeCommandLine(_)
-            | Command::BackspaceCommandLine
-            | Command::MoveCommandLineCursor(_)
-            | Command::MoveCommandLineSelection(_)
-            | Command::SelectCommandLineCandidate(_)
-            | Command::TabCommandLine
-            | Command::AcceptCommandLine
-            | Command::CancelCommandLine => unreachable!("command-line commands returned above"),
-            Command::Undo | Command::Redo => unreachable!("history commands returned above"),
-        };
+        let effect = self.dispatch_edit_command(command, focus_inserted_inline_math);
         if effect.is_ok() {
             self.clear_stale_empty_inline_focus(is_move_caret);
         }
         let mut effect = effect?;
         effect.composition_changed |= cancels_command_line_preedit;
-        self.command_line = None;
+        self.clear_command_line();
         if effect.selection_changed && resets_pending_style {
             self.pending_inline_style.clear();
         }
@@ -1341,6 +1335,71 @@ impl Session {
             self.commit_document_edit(patch, before_state, DocumentEditSnapshot::Body);
         }
         Ok(effect)
+    }
+
+    fn dispatch_edit_command(
+        &mut self,
+        command: Command,
+        focus_inserted_inline_math: bool,
+    ) -> Result<Effect, EditError> {
+        match command {
+            Command::TextInput(_) => unreachable!("text input is resolved before command dispatch"),
+            Command::InsertText(text) => self.insert_text(&text),
+            Command::InsertOneCharacterWidthSpace => self.insert_text("\u{2003}"),
+            Command::InsertTwoCharacterWidthSpace => self.insert_text("\u{2003}\u{2003}"),
+            Command::PasteText(text) => self.paste_text(&text),
+            Command::InsertSoftBreak => self.insert_soft_break(),
+            Command::InsertInlineMath(source) => {
+                self.insert_inline_math_with_edit_target(&source, focus_inserted_inline_math)
+            }
+            Command::EnterMath(direction) => self.enter_math(direction),
+            Command::SetMathTextSelection { .. } => Err(EditError::InvalidPosition),
+            Command::InsertParagraphBreak => self.split_paragraph(),
+            Command::Delete(direction) => self.delete(direction),
+            Command::MoveCaret(direction) => self.move_caret(direction),
+            Command::MoveStructure(_)
+            | Command::ExitBlockEnvironment(_)
+            | Command::RemoveBlockEnvironmentPreservingContent
+            | Command::ExpandStructureSelection
+            | Command::ExitStructure => {
+                unreachable!("structure commands returned above")
+            }
+            Command::CreateBlockEnvironment(_) => {
+                unreachable!("structure edit commands returned above")
+            }
+            Command::ToggleInlineFormat(kind) => self.toggle_inline_format(kind),
+            Command::ToggleRunUnderline => self.toggle_run_underline(),
+            Command::RemoveInlineEnvironmentPreservingContent(environment_id) => {
+                self.remove_inline_environment_preserving_content(&environment_id)
+            }
+            Command::RemoveRunPropertyPreservingContent(kind) => {
+                self.remove_run_property_from_current_range(kind)
+            }
+            Command::SetInlineFontFamily(family) => self.set_inline_font_family(&family),
+            Command::SetParagraphFirstLineIndentChars(chars) => {
+                self.set_paragraph_first_line_indent_chars(chars)
+            }
+            Command::SetDefaultFontFamily(family) => self.set_default_font_family(family),
+            Command::SetDocumentFontFamily { target, family } => {
+                self.set_document_font_family(&target, family)
+            }
+            Command::EditorKey(_) => unreachable!("editor keys returned before editing dispatch"),
+            Command::SetSelection(selection) => self.set_selection(selection),
+            Command::UpdateComposition { id, preedit } => self.update_composition(id, preedit),
+            Command::CommitComposition { id, text } => self.commit_composition(id, &text),
+            Command::CancelComposition { id } => self.cancel_composition(id),
+            Command::SetPageGeometry(geometry) => self.set_page_geometry(geometry),
+            Command::BeginCommandLine
+            | Command::TypeCommandLine(_)
+            | Command::BackspaceCommandLine
+            | Command::MoveCommandLineCursor(_)
+            | Command::MoveCommandLineSelection(_)
+            | Command::SelectCommandLineCandidate(_)
+            | Command::TabCommandLine
+            | Command::AcceptCommandLine
+            | Command::CancelCommandLine => unreachable!("command-line commands returned above"),
+            Command::Undo | Command::Redo => unreachable!("history commands returned above"),
+        }
     }
 
     fn record_history_edit(&mut self, edit: SessionHistoryEdit) {
@@ -1554,7 +1613,7 @@ impl Session {
         self.selection_anchor_visual_affinity = anchor_visual_affinity;
         self.selection_visual_affinity = visual_affinity;
         self.pending_inline_style = pending_style;
-        self.math_edit = restored_math_edit;
+        self.set_math_edit(restored_math_edit);
         self.clear_structure_selection_state();
         self.history_state_id = state_id;
         self.advance_history_merge_epoch();
@@ -1569,7 +1628,7 @@ impl Session {
                 self.document_generation = 0;
             }
         }
-        self.host_caret_position = host_caret_position;
+        self.set_host_caret_position(host_caret_position);
         self.sync_math_edit_revision();
         Ok(Effect {
             document_changed,

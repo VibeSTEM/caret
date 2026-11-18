@@ -170,7 +170,7 @@ impl Session {
                 .as_ref()
                 .is_none_or(|current| current == &position)
         {
-            self.host_caret_position = Some(position);
+            self.set_host_caret_position(Some(position));
         }
         result
     }

@@ -184,11 +184,11 @@ impl Session {
                         }
                         _ => return Ok(None),
                     };
-                    self.host_caret_position = Some(HostCaretPosition::outside_with_kind(
+                    self.set_host_caret_position(Some(HostCaretPosition::outside_with_kind(
                         host_id,
                         outside,
                         HostCaretKind::Inline,
-                    ));
+                    )));
                     self.selection.focus.affinity = affinity;
                     self.selection.anchor = self.selection.focus.clone();
                     self.selection_visual_affinity = match affinity {
@@ -217,11 +217,11 @@ impl Session {
                     };
                     let target_id = if toward_host { Some(host_id) } else { adjacent };
                     if let Some(host_id) = target_id {
-                        self.host_caret_position = Some(HostCaretPosition::Inside {
+                        self.set_host_caret_position(Some(HostCaretPosition::Inside {
                             host_id,
                             kind: HostCaretKind::Inline,
                             local: focus,
-                        });
+                        }));
                         return Ok(Some(Effect {
                             selection_changed: true,
                             ..Effect::default()
@@ -246,11 +246,11 @@ impl Session {
                     };
                     let target_id = if toward_host { Some(host_id) } else { adjacent };
                     if let Some(host_id) = target_id {
-                        self.host_caret_position = Some(HostCaretPosition::Inside {
+                        self.set_host_caret_position(Some(HostCaretPosition::Inside {
                             host_id,
                             kind: HostCaretKind::Inline,
                             local: focus,
-                        });
+                        }));
                         return Ok(Some(Effect {
                             selection_changed: true,
                             ..Effect::default()
@@ -287,11 +287,11 @@ impl Session {
         if !entering {
             return Ok(None);
         }
-        self.host_caret_position = Some(HostCaretPosition::Inside {
+        self.set_host_caret_position(Some(HostCaretPosition::Inside {
             host_id,
             kind: HostCaretKind::Inline,
             local: focus,
-        });
+        }));
         Ok(Some(Effect {
             selection_changed: true,
             ..Effect::default()

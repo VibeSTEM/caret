@@ -94,7 +94,7 @@ impl Session {
                 } else {
                     command_line.font_family_picker(font_families.clone())
                 };
-                self.command_line = Some(picker);
+                self.set_command_line(Some(picker));
             }
             return Ok(Effect::default());
         }
@@ -238,7 +238,7 @@ impl Session {
                 .command_line
                 .as_ref()
                 .is_some_and(|line| !line.preedit.is_empty());
-            self.command_line = None;
+            self.clear_command_line();
             return Ok(Effect {
                 composition_changed: had_preedit,
                 ..Effect::default()
@@ -257,11 +257,11 @@ impl Session {
                     return Ok(Effect::default());
                 }
                 let at = self.selection.focus.clone();
-                self.command_line = Some(if self.math_edit.is_some() {
+                self.set_command_line(Some(if self.math_edit.is_some() {
                     CommandLine::math(at)
                 } else {
                     CommandLine::new(at)
-                });
+                }));
             }
             Command::TypeCommandLine(text) => {
                 let repeats_prefix = self.command_line.as_ref().is_none_or(|line| {
@@ -280,7 +280,7 @@ impl Session {
                     && !command_line.backspace()
                     && command_line.query.is_empty()
                 {
-                    self.command_line = None;
+                    self.clear_command_line();
                 }
             }
             Command::MoveCommandLineCursor(direction) => {
@@ -353,7 +353,7 @@ impl Session {
                         .move_selection_with(direction == Direction::Forward, |candidate| {
                             self.command_candidate_available(candidate)
                         });
-                    self.command_line = Some(command_line);
+                    self.set_command_line(Some(command_line));
                 }
             }
             Command::SelectCommandLineCandidate(index) => {
@@ -372,11 +372,11 @@ impl Session {
                     return self.accept_command_line(false);
                 }
                 if command_line.query.is_empty() {
-                    self.command_line = None;
+                    self.clear_command_line();
                     return match self.run(Command::InsertText("\\".to_owned())) {
                         Ok(effect) => Ok(effect),
                         Err(error) => {
-                            self.command_line = Some(command_line);
+                            self.set_command_line(Some(command_line));
                             Err(error)
                         }
                     };
@@ -403,11 +403,11 @@ impl Session {
             return Ok(Effect::default());
         };
         if command_line.query.is_empty() {
-            self.command_line = None;
+            self.clear_command_line();
             return match self.run(Command::InsertText("\\".to_owned())) {
                 Ok(effect) => Ok(effect),
                 Err(error) => {
-                    self.command_line = Some(command_line);
+                    self.set_command_line(Some(command_line));
                     Err(error)
                 }
             };
@@ -433,7 +433,7 @@ impl Session {
         }
         if command_line.mode == CommandLineMode::DefaultFontTarget {
             if candidate.command_id == "command_line.close_font_picker" {
-                self.command_line = None;
+                self.clear_command_line();
                 return Ok(Effect::default());
             }
             if candidate.command_id == "document.default_font.target"
@@ -442,13 +442,13 @@ impl Session {
             {
                 let mut next = command_line;
                 next = next.default_font_scope_picker(script);
-                self.command_line = Some(next);
+                self.set_command_line(Some(next));
             }
             return Ok(Effect::default());
         }
         if command_line.mode == CommandLineMode::DefaultFontScope {
             if candidate.command_id == "command_line.close_font_picker" {
-                self.command_line = None;
+                self.clear_command_line();
                 return Ok(Effect::default());
             }
             let mut next = command_line;
@@ -463,12 +463,12 @@ impl Session {
                 }
                 _ => {}
             }
-            self.command_line = Some(next);
+            self.set_command_line(Some(next));
             return Ok(Effect::default());
         }
         if command_line.mode == CommandLineMode::DefaultFontLanguage {
             if candidate.command_id == "command_line.close_font_picker" {
-                self.command_line = None;
+                self.clear_command_line();
                 return Ok(Effect::default());
             }
             if candidate.command_id == "document.default_font.language"
@@ -476,13 +476,13 @@ impl Session {
             {
                 let mut next = command_line;
                 next.enter_font_target(target);
-                self.command_line = Some(next);
+                self.set_command_line(Some(next));
             }
             return Ok(Effect::default());
         }
         if command_line.mode == CommandLineMode::DefaultFontFamily {
             if candidate.command_id == "command_line.close_font_picker" {
-                self.command_line = None;
+                self.clear_command_line();
                 return Ok(Effect::default());
             }
             if candidate.command_id == "document.default_font.family"
@@ -497,12 +497,12 @@ impl Session {
                     family: Some(family),
                 })?;
                 next.return_to_default_font_targets();
-                self.command_line = Some(next);
+                self.set_command_line(Some(next));
                 return Ok(effect);
             }
             return Ok(Effect::default());
         }
-        self.command_line = None;
+        self.clear_command_line();
         let effect = match candidate.command_id {
             command_ids::TEXT_SOFT_BREAK => self.run(Command::InsertSoftBreak),
             command_ids::TEXT_SPLIT_PARAGRAPH => self.run(Command::InsertParagraphBreak),
@@ -542,17 +542,17 @@ impl Session {
         let effect = match effect {
             Ok(effect) => effect,
             Err(error) => {
-                self.command_line = Some(command_line);
+                self.set_command_line(Some(command_line));
                 return Err(error);
             }
         };
         if continue_after {
             let at = self.selection.focus.clone();
-            self.command_line = Some(if self.math_edit.is_some() {
+            self.set_command_line(Some(if self.math_edit.is_some() {
                 CommandLine::math(at)
             } else {
                 CommandLine::new(at)
-            });
+            }));
         }
         Ok(effect)
     }

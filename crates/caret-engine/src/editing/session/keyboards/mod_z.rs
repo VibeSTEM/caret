@@ -45,7 +45,7 @@ impl Session {
             edit.source_draft = None;
         }
         let effect = self.restore_history(redo)?;
-        self.command_line = None;
+        self.clear_command_line();
         Ok(effect)
     }
 }

@@ -4,7 +4,7 @@
 // 署名：Yuki Lu
 
 use super::super::super::flow_format::{InheritedInlineStyle, text_flow_inline_format_state};
-use super::super::history::{DocumentPatch, MathEditPosition, SessionHistoryEdit};
+use super::super::history::{DocumentPatch, MathEditPosition};
 use super::super::{EditError, Effect};
 use super::{
     MathContent, MathEdit, MathEditBranch, MathTextFlowPath, MathTextFlowPathStep,
@@ -219,11 +219,7 @@ impl Session {
             state_id,
         )
         .with_math_edit(Some(after_math));
-        self.record_history_edit(SessionHistoryEdit::new(
-            DocumentPatch::PendingStyle,
-            before,
-            after,
-        ));
+        self.commit_document_edit_with_states(DocumentPatch::PendingStyle, before, after, false);
         Ok(Effect::default())
     }
 
@@ -258,11 +254,7 @@ impl Session {
             before_state_id,
         )
         .with_math_edit(Some(after_math));
-        self.record_history_edit(SessionHistoryEdit::new(
-            DocumentPatch::PendingStyle,
-            before,
-            after,
-        ));
+        self.commit_document_edit_with_states(DocumentPatch::PendingStyle, before, after, false);
         Ok(Effect::default())
     }
 }
