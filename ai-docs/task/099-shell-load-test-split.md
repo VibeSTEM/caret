@@ -1,6 +1,6 @@
 # 099 — ShellLoadTest 单类按域拆分
 
-- 状态：in-progress
+- 状态：done
 - 依赖：093
 - 优先级：P2
 - 创建 / 更新：2026-11-17 / 2026-11-18
@@ -54,8 +54,8 @@
 | 2026-11-18 | `caret_shell_load_test -functions` 与静态 Qt 断言宏调用点统计（迁移前基线） | 用例及断言清单可对照 | 77 个用例；1734 个断言宏调用点 |
 | 2026-11-18 | `./target/native/debug/qml/caret_shell_load_test <slot>` | 抽查通过 | 单函数 `mathTextDragUsesSharedPreviewAndCommitProtocol` 由 CTest 单独运行通过 |
 | 2026-11-18 | 聚合入口输出与筛选回归 | 保留 QtTest 参数兼容 | `-functions` 输出 77 项；多类筛选按固定类顺序运行；双 `-o` logger、legacy 格式优先级、XML/lightxml、CSV、TAP 失败行、`/dev/null` 输出目标及跨类 `-datatags` 均通过定向检查 |
-| 2026-11-18 | `cargo format`、`cargo lint`、`cargo test --locked -p caret-tests --test native` | 格式、静态检查与 CTest 20/20 通过 | format 完成；lint 九阶段通过；native 20/20 通过；总耗时 21.94s → 22.20s，`Qml.ShellLoad` 12.95s → 13.02s，均在 60s TIMEOUT 内 |
-| 2026-11-18 | PR #147 Ubuntu clang-tidy/include-cleaner CI 日志 | Linux 头文件检查通过 | 初次 CI 报告 5 处跨平台未使用 include；已移除并由独立 reviewer 核对；本地格式、构建、lint 和 native 20/20 重跑通过，PR CI 复跑待确认 |
+| 2026-11-18 | `cargo format`、`cargo lint`、`cargo test --locked -p caret-tests --test native` | 格式、静态检查与 CTest 20/20 通过 | format 完成；PR lint 检查通过；native 20/20 通过；总耗时 21.94s → 22.81s，`Qml.ShellLoad` 12.95s → 13.80s，均在 60s TIMEOUT 内 |
+| 2026-11-18 | PR #147 Ubuntu clang-tidy/include-cleaner CI 日志 | Linux 头文件检查通过 | 初次 CI 报告 5 处跨平台未使用 include；已移除并由独立 reviewer 核对；修复后 PR 的 clang-tidy/include-cleaner/cppcheck 及所有其他适用检查均通过 |
 
 ## 风险与回退
 
@@ -68,8 +68,8 @@
 - 2026-11-18：按当前基线拆为 12 个 domain test 类，保留原有 slot 与断言；自定义入口固定类顺序，逐类分派单函数筛选并合并多个 QtTest 输出 logger。
 - 2026-11-18：Terra/medium 分领域 reviewer 检出筛选顺序、旧式输出优先级、报告语法和 `-datatags` 边界；已修复并按定向命令复验。共享 fixture 与类拆分 review 未发现确定性代码问题。
 - 2026-11-18：Sol/medium 对最终完整 diff 独立只读评审通过；确认 77 个用例、1734 处断言、15 处 `QFAIL`、1 处 `QSKIP` 保持，CTest 注册未变。最终格式、lint 和 native CTest 20/20 均通过。
-- 2026-11-18：PR #147 初次 Ubuntu CI 的 include-cleaner 报告 5 个跨平台多余头文件；已删除，并由 Sol/medium reviewer 复核所需声明仍由锁定 Qt 头文件提供。等待推送修复后的 CI 复跑。
+- 2026-11-18：PR #147 初次 Ubuntu CI 的 include-cleaner 报告 5 个跨平台多余头文件；已删除，并由 Sol/medium reviewer 复核所需声明仍由锁定 Qt 头文件提供。修复后 PR run 44285545641 的所有适用检查通过。
 
 ## 完成摘要
 
-完成 12 类拆分、共享 fixture 抽取与入口参数兼容修复。格式、lint、native CTest 20/20 和独立最终评审均通过；PR CI 的 Linux include-cleaner 修复已本地完成并复核，待新 CI 确认后标 done。剩余限制：`-repeat` 在多个 qExec 类间按类处理，套件级重复顺序与单类运行不同；现有 CTest 不使用该选项。
+完成 12 类拆分、共享 fixture 抽取与入口参数兼容修复。格式、lint、native CTest 20/20、独立最终评审及修复后的 PR CI 均通过。剩余限制：`-repeat` 在多个 qExec 类间按类处理，套件级重复顺序与单类运行不同；现有 CTest 不使用该选项。
