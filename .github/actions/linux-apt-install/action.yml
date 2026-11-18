@@ -20,24 +20,28 @@ runs:
           -o Acquire::http::Timeout=20
           -o Acquire::https::Timeout=20
         )
-
         apt_with_retry() {
+          local attempt_timeout_seconds="$1"
+          shift
           local attempt
-          for attempt in 1 2; do
-            if timeout --signal=TERM --kill-after=10s 300s \
+          for attempt in 1 2 3; do
+            if timeout --signal=TERM --kill-after=10s "${attempt_timeout_seconds}s" \
               sudo apt-get "${apt_options[@]}" "$@"; then
               return 0
             fi
 
-            if [[ "$attempt" -eq 2 ]]; then
+            if [[ "$attempt" -eq 3 ]]; then
               return 1
             fi
 
-            echo "apt-get 操作失败，5 秒后重试（${attempt}/2）：$*" >&2
-            sleep 5
+            local backoff_seconds=$((30 * (2 ** (attempt - 1))))
+            local jitter_seconds=$((RANDOM % 16))
+            local delay_seconds=$((backoff_seconds + jitter_seconds))
+            echo "apt-get 操作失败，${delay_seconds} 秒后重试（${attempt}/3）：$*" >&2
+            sleep "$delay_seconds"
           done
         }
 
-        apt_with_retry -o APT::Update::Error-Mode=any update
-        apt_with_retry install --download-only -y --no-install-recommends "${packages[@]}"
+        apt_with_retry 90 -o APT::Update::Error-Mode=any update
+        apt_with_retry 180 install --download-only -y --no-install-recommends "${packages[@]}"
         sudo apt-get "${apt_options[@]}" install -y --no-download --no-install-recommends "${packages[@]}"

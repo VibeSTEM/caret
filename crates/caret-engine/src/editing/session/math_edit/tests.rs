@@ -14,6 +14,18 @@ fn test_error(error: impl std::fmt::Display) -> EditError {
     EditError::InvalidMath(format!("test prerequisite failed: {error}"))
 }
 
+fn math_edit_for_test(
+    target: MathEditTarget,
+    cursor: usize,
+    branch: MathEditBranch,
+    revision: MathEditRevision,
+    source_projection: Option<Arc<caret_math::MathSourceMap<'static>>>,
+) -> MathEdit {
+    let mut edit = MathEdit::entering(target, cursor, branch, revision);
+    edit.source_projection = source_projection;
+    edit
+}
+
 fn source_text(edit: &MathEdit) -> &str {
     edit.source()
         .unwrap_or_else(|| panic!("source text is available only in source-edit mode"))
@@ -534,17 +546,16 @@ fn align_math_text_session_with_selection(
     let mut align_document = Document::blank();
     align_document.body.push(Block::Align(align_block));
     let mut session = Session::new(align_document)?;
-    session.math_edit = Some(MathEdit {
-        target: MathEditTarget::Block {
+    session.math_edit = Some(math_edit_for_test(
+        MathEditTarget::Block {
             block_id,
             align: true,
         },
-        source_projection: Some(Arc::new(projection)),
-        source_draft: None,
-        revision: session.current_math_edit_revision(),
         cursor,
         branch,
-    });
+        session.current_math_edit_revision(),
+        Some(Arc::new(projection)),
+    ));
     session.run(Command::SetMathTextSelection { anchor, focus })?;
     Ok(session)
 }

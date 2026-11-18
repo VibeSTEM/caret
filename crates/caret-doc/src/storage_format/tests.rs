@@ -572,22 +572,13 @@ fn retired_math_source_fields_and_schema_are_rejected() -> Result<(), Box<dyn st
 #[test]
 fn retired_math_fields_inside_opaque_subtrees_remain_vendor_data()
 -> Result<(), Box<dyn std::error::Error>> {
-    let opaque_nodes = [
-        json!({
-            "type":"math", "id":"vendor", "kind":"future_kind",
-            "sourceRange":{"vendor":"keep"},
-            "children":[{"id":"operand","sourceRange":{"vendor":"keep"},"content":[
-                {"type":"text","runs":[],"sourceMap":{"vendor":"keep"}}
-            ]}]
-        }),
-        json!({
-            "type":"math", "id":"unsupported-symbol", "kind":"symbol", "text":"x",
-            "sourceRange":{"vendor":"keep"},
-            "children":[{"id":"operand","sourceRange":{"vendor":"keep"},"content":[
-                {"type":"text","runs":[],"sourceMap":{"vendor":"keep"}}
-            ]}]
-        }),
-    ];
+    let opaque_nodes = [json!({
+        "type":"math", "id":"vendor", "kind":"future_kind",
+        "sourceRange":{"vendor":"keep"},
+        "children":[{"id":"operand","sourceRange":{"vendor":"keep"},"content":[
+            {"type":"text","runs":[],"sourceMap":{"vendor":"keep"}}
+        ]}]
+    })];
     for opaque_node in opaque_nodes {
         let mut envelope = blank_envelope()?;
         envelope["document"]["body"] = json!([{
@@ -632,6 +623,165 @@ fn retired_math_fields_inside_opaque_subtrees_remain_vendor_data()
     assert!(matches!(
         open(envelope.to_string().as_bytes()),
         Err(DocumentError::InvalidDocument(reason)) if reason.contains("MathNode.sourceRange")
+    ));
+
+    for content in [
+        json!([
+            {"type":"math", "id":"future", "kind":"future_kind"},
+            {"type":"math", "id":"bad", "kind":"symbol", "text":"x", "attributes":{"atomClass":"future_atom"}}
+        ]),
+        json!([
+            {"type":"math", "id":"bad", "kind":"symbol", "text":"x", "attributes":{"atomClass":"future_atom"}},
+            {"type":"math", "id":"future", "kind":"future_kind"}
+        ]),
+    ] {
+        let mut envelope = blank_envelope()?;
+        envelope["document"]["body"] = json!([{
+            "type":"equation", "id":"eq", "mathTree":{
+                "schemaVersion":3, "root":{"id":"root","content":content}
+            }
+        }]);
+        envelope["requiredFeatures"] = json!(["caret.math.content-flow.v2", "caret.math.equation"]);
+        assert!(matches!(
+            open(envelope.to_string().as_bytes()),
+            Err(DocumentError::InvalidDocument(reason)) if reason.contains("invalid known math node encoding")
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn known_math_carrier_and_node_ids_are_required_even_with_future_content()
+-> Result<(), Box<dyn std::error::Error>> {
+    let malformed = [
+        json!({"type":"math", "kind":"symbol", "text":"x"}),
+        json!({"type":"math", "id":7, "kind":"symbol", "text":"x"}),
+        json!({"type":"math", "id":"valid", "kind":"symbol", "text":"x"}),
+    ];
+    for node in malformed {
+        let mut envelope = blank_envelope()?;
+        envelope["document"]["body"] = json!([{
+            "type":"equation", "id":"equation", "mathTree":{
+                "schemaVersion":3, "root":{"id":"root","content":[
+                    node,
+                    {"type":"math", "id":"future", "kind":"future_kind"}
+                ]}
+            }
+        }]);
+        if envelope["document"]["body"][0]["mathTree"]["root"]["content"][0]["id"].is_string() {
+            envelope["document"]["body"][0]["mathTree"]["root"]["content"][0]["id"] = json!("");
+        }
+        envelope["requiredFeatures"] = json!(["caret.math.content-flow.v2", "caret.math.equation"]);
+        assert!(matches!(
+            open(envelope.to_string().as_bytes()),
+            Err(DocumentError::InvalidDocument(reason)) if reason.contains("invalid known math node encoding")
+        ));
+    }
+
+    let mut envelope = blank_envelope()?;
+    envelope["document"]["body"] = json!([{
+        "type":"equation", "id":"equation", "mathTree":{
+            "schemaVersion":3, "root":{"content":[
+                {"type":"math", "id":"future", "kind":"future_kind"}
+            ]}
+        }
+    }]);
+    envelope["requiredFeatures"] = json!([
+        "caret.math.content-flow.v2",
+        "caret.math.equation",
+        "caret.math.syntax.v1"
+    ]);
+    assert!(matches!(
+        open(envelope.to_string().as_bytes()),
+        Err(DocumentError::InvalidDocument(reason)) if reason.contains("invalid known math node encoding")
+    ));
+    Ok(())
+}
+
+#[test]
+fn future_math_operands_preserve_opaque_preview_and_scan_known_siblings()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut envelope = blank_envelope()?;
+    envelope["document"]["body"] = json!([{
+        "type":"equation", "id":"equation", "mathTree":{
+            "schemaVersion":3, "root":{"id":"root","content":[{
+                "type":"math", "id":"fraction", "kind":"fraction", "attributes":{"style":"frac"},
+                "children":[
+                    {"id":"numerator","content":[{"type":"math", "id":"future", "kind":"future_kind"}]},
+                    {"id":"denominator","content":[{"type":"math", "id":"known", "kind":"symbol", "text":"x"}]}
+                ]
+            }]}
+        }
+    }]);
+    envelope["requiredFeatures"] = json!([
+        "caret.math.content-flow.v2",
+        "caret.math.equation",
+        "caret.math.syntax.v1"
+    ]);
+    assert!(matches!(
+        open(envelope.to_string().as_bytes())?,
+        OpenedDocument::SafePreview(_)
+    ));
+
+    envelope["document"]["body"][0]["mathTree"]["root"]["content"][0]["children"][1]["content"]
+        [0]["sourceRange"] = json!({"start":0,"end":1});
+    assert!(matches!(
+        open(envelope.to_string().as_bytes()),
+        Err(DocumentError::InvalidDocument(reason)) if reason.contains("MathNode.sourceRange")
+    ));
+    Ok(())
+}
+
+#[test]
+fn malformed_known_math_content_cannot_be_hidden_by_future_siblings()
+-> Result<(), Box<dyn std::error::Error>> {
+    for known in [
+        json!({"type":"text"}),
+        json!({"type":"text", "runs":[{}]}),
+        json!({"type":"text", "runs":[{"text":42}]}),
+        json!({"type":"environment", "kind":"bold", "id":"env", "children":[]}),
+        json!({"type":"environment", "scope":"block", "kind":"bold", "id":"env", "children":[]}),
+        json!({"type":"environment", "scope":"inline", "kind":"bold", "children":[]}),
+        json!({"type":"environment", "scope":"inline", "kind":"bold", "id":"env", "props":42, "children":[]}),
+    ] {
+        let mut envelope = blank_envelope()?;
+        envelope["document"]["body"] = json!([{
+            "type":"equation", "id":"equation", "mathTree":{
+                "schemaVersion":3, "root":{"id":"root","content":[
+                    known,
+                    {"type":"math", "id":"future", "kind":"future_kind"}
+                ]}
+            }
+        }]);
+        envelope["requiredFeatures"] = json!([
+            "caret.math.content-flow.v2",
+            "caret.math.equation",
+            "caret.math.syntax.v1"
+        ]);
+        assert!(matches!(
+            open(envelope.to_string().as_bytes()),
+            Err(DocumentError::InvalidDocument(_))
+        ));
+    }
+
+    let mut envelope = blank_envelope()?;
+    envelope["document"]["body"] = json!([{
+        "type":"equation", "id":"equation", "mathTree":{
+            "schemaVersion":3, "root":{"id":"root","content":[
+                {"type":"math", "id":"duplicate", "kind":"symbol", "text":"x"},
+                {"type":"math", "id":"duplicate", "kind":"symbol", "text":"y"},
+                {"type":"math", "id":"future", "kind":"future_kind"}
+            ]}
+        }
+    }]);
+    envelope["requiredFeatures"] = json!([
+        "caret.math.content-flow.v2",
+        "caret.math.equation",
+        "caret.math.syntax.v1"
+    ]);
+    assert!(matches!(
+        open(envelope.to_string().as_bytes()),
+        Err(DocumentError::InvalidDocument(_))
     ));
     Ok(())
 }
@@ -925,8 +1075,8 @@ fn opaque_current_math_still_requires_its_carrier_capabilities()
                 "type": "inlineMath", "id": "inline", "mathTree": {
                     "schemaVersion": 3,
                     "root": {"id": "root", "content": [{
-                        "type": "math", "id": "symbol", "kind": "symbol", "text": "x",
-                        "attributes": {"atomClass": "future_atom"}
+                        "type": "math", "id": "symbol", "kind": "future_symbol", "text": "x",
+                        "attributes": {"vendor": "kept"}
                     }]}
                 }
             }]
@@ -1101,7 +1251,7 @@ fn opaque_math_still_requires_syntax_for_known_siblings() -> Result<(), Box<dyn 
 }
 
 #[test]
-fn raw_syntax_scan_does_not_enter_children_of_opaque_known_nodes()
+fn raw_syntax_scan_does_not_enter_children_of_unknown_nodes()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut envelope = blank_envelope()?;
     envelope["document"]["body"] = json!([{
@@ -1109,7 +1259,7 @@ fn raw_syntax_scan_does_not_enter_children_of_opaque_known_nodes()
             "type": "inlineMath", "id": "inline", "mathTree": {
                 "schemaVersion": 3,
                 "root": {"id": "root", "content": [{
-                    "type": "math", "id": "symbol", "kind": "symbol", "text": "x",
+                    "type": "math", "id": "symbol", "kind": "future_symbol", "text": "x",
                     "children": [{"id": "future-flow", "content": [{
                         "type": "math", "id": "fraction", "kind": "fraction",
                         "attributes": {"style": "frac"},
@@ -1129,15 +1279,10 @@ fn raw_syntax_scan_does_not_enter_children_of_opaque_known_nodes()
         "caret.paragraph.layout-settings",
         "caret.text.default-font-size"
     ]);
-    let result = open(envelope.to_string().as_bytes())?;
-    let OpenedDocument::SafePreview(preview) = result else {
-        panic!("unsupported Symbol shape should remain a safe preview: {result:?}");
-    };
-    assert!(!preview.reasons.iter().any(|reason| matches!(
-        reason,
-        PreviewReason::MissingRequiredFeature(feature)
-            if feature == "caret.math.syntax.v1"
-    )));
+    assert!(matches!(
+        open(envelope.to_string().as_bytes())?,
+        OpenedDocument::SafePreview(_)
+    ));
     Ok(())
 }
 
@@ -1289,7 +1434,7 @@ fn recursive_opaque_math_scan_covers_equation_and_align() -> Result<(), Box<dyn 
 }
 
 #[test]
-fn unknown_math_attribute_value_opens_as_read_only_preview()
+fn unknown_math_attribute_value_is_rejected_as_invalid_known_node()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut envelope = blank_envelope()?;
     envelope["document"]["body"] = json!([{
@@ -1311,28 +1456,15 @@ fn unknown_math_attribute_value_opens_as_read_only_preview()
         "caret.paragraph.layout-settings",
         "caret.text.default-font-size"
     ]);
-    let opened = open(envelope.to_string().as_bytes())?;
-    let OpenedDocument::SafePreview(preview) = opened else {
-        panic!("unknown math attribute values must not be editable");
-    };
-    assert!(!preview.can_save());
-    assert!(
-        preview
-            .reasons
-            .contains(&PreviewReason::UnsupportedNodeKind)
-    );
-    let preserved = preview.to_json_value()?;
-    assert_eq!(
-        preserved["document"]["body"][0]["inlines"][0]["mathTree"]["root"]["content"][0]["attributes"]
-            ["atomClass"],
-        "future_atom"
-    );
+    assert!(matches!(
+        open(envelope.to_string().as_bytes()),
+        Err(DocumentError::InvalidDocument(_))
+    ));
     Ok(())
 }
 
 #[test]
-fn incomplete_or_malformed_math_nodes_open_as_read_only_preview()
--> Result<(), Box<dyn std::error::Error>> {
+fn incomplete_or_malformed_math_nodes_are_rejected() -> Result<(), Box<dyn std::error::Error>> {
     for root in [
         json!({"id": "root", "kind": "sized_delimiter", "text": "char:(", "attributes": {"atomClass": "open"}, "children": []}),
         json!({"id": "root", "kind": "fraction", "attributes": {"style": "frac"}, "children": []}),
@@ -1355,11 +1487,10 @@ fn incomplete_or_malformed_math_nodes_open_as_read_only_preview()
             "caret.paragraph.layout-settings",
             "caret.text.default-font-size"
         ]);
-        let opened = open(envelope.to_string().as_bytes())?;
-        let OpenedDocument::SafePreview(preview) = opened else {
-            panic!("incomplete or malformed math nodes must not be editable");
-        };
-        assert!(!preview.can_save());
+        assert!(matches!(
+            open(envelope.to_string().as_bytes()),
+            Err(DocumentError::InvalidDocument(reason)) if reason.contains("invalid known math node encoding")
+        ));
     }
     Ok(())
 }
@@ -1780,11 +1911,9 @@ fn raw_and_typed_math_capability_derivation_agree() -> Result<(), Box<dyn std::e
 }
 
 #[test]
-fn math_node_text_boundaries_stay_split_between_decoder_and_raw_scan()
+fn known_math_nodes_reject_non_string_text_before_opaque_preview()
 -> Result<(), Box<dyn std::error::Error>> {
-    // 非字符串 `text` 的既有边界：类型解码器按缺失处理并进入解码尝试，raw 扫描视为
-    // 不可解释、不检查该节点的退役字段。最终两者都由 DTO 反序列化报错，但 raw 路径
-    // 不得抢先把 retired 字段当成错误。
+    // 已知 kind 的 `text` 类型非法时，即使旁边有未来节点也不能把整棵树转为 Opaque。
     let shape = json!({"type": "math", "id": "node", "kind": "row", "text": 42});
     let base_features = json!([
         "caret.math.content-flow.v2",
@@ -1814,22 +1943,18 @@ fn math_node_text_boundaries_stay_split_between_decoder_and_raw_scan()
             .into());
         };
         assert!(
-            reason.contains("invalid type: integer"),
+            reason.contains("invalid known math node encoding")
+                || reason.contains("invalid type: integer"),
             "unexpected error: {reason}"
-        );
-        assert!(
-            !reason.contains("retired math field"),
-            "raw scan must not treat non-string text as interpretable: {reason}"
         );
     }
     Ok(())
 }
 
 #[test]
-fn malformed_operand_flow_boundaries_stay_split_between_decoder_and_raw_scan()
+fn malformed_operand_flows_are_rejected_before_preview_or_raw_scan()
 -> Result<(), Box<dyn std::error::Error>> {
-    // 畸形单元素操作数流的既有边界：类型解码器判为不可解释（块级 Opaque 预览）；
-    // raw 退役字段扫描按 Row 继续检查父节点自身的字段。
+    // 当前 kind 已知时，操作数流无法解码属于格式错误，不能降级为 Opaque 预览。
     let shapes = [
         json!({
             "type": "math", "id": "node", "kind": "row",
@@ -1852,23 +1977,19 @@ fn malformed_operand_flow_boundaries_stay_split_between_decoder_and_raw_scan()
         "caret.text.default-font-size"
     ]);
     for shape in shapes {
-        // 类型解码器路径：没有退役字段时保持不透明预览。
+        // 即使没有退役字段，已知节点的损坏结构也必须拒绝。
         let mut envelope = blank_envelope()?;
         envelope["document"]["body"] = json!([{
             "type": "equation", "id": "equation",
             "mathTree": {"schemaVersion": 3, "root": {"id": "root", "content": [shape.clone()]}}
         }]);
         envelope["requiredFeatures"] = base_features.clone();
-        let OpenedDocument::SafePreview(preview) = open(envelope.to_string().as_bytes())? else {
-            return Err(format!("decoder must keep this shape opaque: {shape}").into());
-        };
-        assert!(
-            preview
-                .reasons
-                .contains(&PreviewReason::UnsupportedNodeKind)
-        );
+        assert!(matches!(
+            open(envelope.to_string().as_bytes()),
+            Err(DocumentError::InvalidDocument(reason)) if reason.contains("invalid known math node encoding")
+        ));
 
-        // raw 退役字段扫描路径：同一形状在旧 raw 检查中可解释，必须继续报退役字段错误。
+        // 有退役字段时，仍在加载阶段拒绝，错误不允许被只读预览掩盖。
         let mut node = shape.clone();
         node.as_object_mut()
             .ok_or("math node shape must be an object")?
@@ -1882,8 +2003,7 @@ fn malformed_operand_flow_boundaries_stay_split_between_decoder_and_raw_scan()
         assert!(
             matches!(
                 open(envelope.to_string().as_bytes()),
-                Err(DocumentError::InvalidDocument(reason))
-                    if reason.contains("retired math field is not supported: MathNode.sourceRange")
+                Err(DocumentError::InvalidDocument(_))
             ),
             "raw scan must keep rejecting retired fields on legacy-supported shapes: {shape}"
         );
@@ -1917,8 +2037,8 @@ fn raw_capability_scan_keeps_its_legacy_node_boundaries() -> Result<(), Box<dyn 
             .collect()
     }
 
-    // Matrix 子流首项为特殊 kind 时，旧能力扫描判 Matrix 不可解释、不产生语法要求；
-    // 未知兄弟节点让类型解码器整体保留为不透明预览。
+    // raw 能力扫描仍按旧规则不产生语法要求；类型验证器按首个数学项检查槽位，
+    // 因 Placeholder 不是 Matrix 合法槽位，即使有未知兄弟也必须拒绝。
     let envelope = equation(json!([
         {"type": "math", "id": "matrix", "kind": "matrix",
          "attributes": {"style": "matrix", "columns": "c"},
@@ -1933,8 +2053,8 @@ fn raw_capability_scan_keeps_its_legacy_node_boundaries() -> Result<(), Box<dyn 
         ["caret.math.content-flow.v2", "caret.math.equation"]
     );
     assert!(matches!(
-        open(envelope.to_string().as_bytes())?,
-        OpenedDocument::SafePreview(_)
+        open(envelope.to_string().as_bytes()),
+        Err(DocumentError::InvalidDocument(reason)) if reason.contains("invalid known math node encoding")
     ));
 
     // 畸形单元素操作数流在旧能力扫描中按 Row 处理：Matrix 仍可解释，因此要求语法能力。
@@ -1954,8 +2074,7 @@ fn raw_capability_scan_keeps_its_legacy_node_boundaries() -> Result<(), Box<dyn 
     );
     assert!(matches!(
         open(envelope.to_string().as_bytes()),
-        Err(DocumentError::InvalidDocument(reason))
-            if reason.contains("required math capability is missing: caret.math.syntax.v1")
+        Err(DocumentError::InvalidDocument(reason)) if reason.contains("invalid known math node encoding")
     ));
 
     // 非字符串 text 在旧能力扫描中视为不可解释，不产生语法要求。
@@ -1970,8 +2089,8 @@ fn raw_capability_scan_keeps_its_legacy_node_boundaries() -> Result<(), Box<dyn 
         ["caret.math.content-flow.v2", "caret.math.equation"]
     );
     assert!(matches!(
-        open(envelope.to_string().as_bytes())?,
-        OpenedDocument::SafePreview(_)
+        open(envelope.to_string().as_bytes()),
+        Err(DocumentError::InvalidDocument(_))
     ));
     Ok(())
 }

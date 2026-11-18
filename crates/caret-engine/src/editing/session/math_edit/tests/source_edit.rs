@@ -2196,21 +2196,20 @@ fn deleting_the_last_align_cell_content_preserves_the_trailing_row_through_histo
     let mut document = Document::blank();
     document.body.push(Block::Align(align));
     let mut session = Session::new(document)?;
-    session.math_edit = Some(MathEdit {
-        target: MathEditTarget::Block {
+    session.math_edit = Some(math_edit_for_test(
+        MathEditTarget::Block {
             block_id: block_id.clone(),
             align: true,
         },
-        source_projection: Some(Arc::new(projection)),
-        source_draft: None,
-        revision: MathEditRevision {
+        cursor,
+        MathEditBranch::Source,
+        MathEditRevision {
             session_id: session.session_id.clone(),
             document_generation: session.document_generation,
             projection_id: NodeId::generate(),
         },
-        cursor,
-        branch: MathEditBranch::Source,
-    });
+        Some(Arc::new(projection)),
+    ));
 
     let deletion = session.run(Command::Delete(Direction::Backward))?;
     assert!(deletion.document_changed);

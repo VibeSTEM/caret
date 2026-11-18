@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
+use super::super::history::DocumentEditSnapshot;
 use super::*;
 
 impl Session {
@@ -131,7 +132,6 @@ impl Session {
                 self.structure_index = Arc::new(StructureIndex::build(&self.document));
                 self.text_map_cache.clear();
                 self.advance_history_merge_epoch();
-                let after_state_id = self.allocate_history_state_id();
                 let before_state = SessionHistoryState::new(
                     before_selection,
                     before_visual_affinity,
@@ -143,9 +143,9 @@ impl Session {
                     self.selection.clone(),
                     self.selection_visual_affinity,
                     self.pending_inline_style.clone(),
-                    after_state_id,
+                    before_state_id,
                 );
-                self.commit_document_edit_with_states(
+                self.commit_document_edit(
                     DocumentPatch::BlockRange {
                         parent_environment_ids: parent_ids,
                         sibling_index: index,
@@ -153,8 +153,7 @@ impl Session {
                         after: Vec::new(),
                     },
                     before_state,
-                    after_state,
-                    true,
+                    DocumentEditSnapshot::Explicit(Box::new(after_state)),
                 );
                 Ok(Effect {
                     document_changed: true,
@@ -953,7 +952,6 @@ impl Session {
         after_math_edit: Option<MathEditPosition>,
         before_pending_style: super::super::formatting::PendingInlineStyle,
     ) {
-        let after_state_id = self.allocate_history_state_id();
         let before_state = SessionHistoryState::new(
             before_selection.0,
             before_selection.1,
@@ -965,9 +963,13 @@ impl Session {
             after_selection.0,
             after_selection.1,
             self.pending_inline_style.clone(),
-            after_state_id,
+            self.history_state_id,
         )
         .with_math_edit(after_math_edit);
-        self.commit_document_edit_with_states(patch, before_state, after_state, true);
+        self.commit_document_edit(
+            patch,
+            before_state,
+            DocumentEditSnapshot::Explicit(Box::new(after_state)),
+        );
     }
 }

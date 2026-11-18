@@ -455,25 +455,32 @@ impl Edit for SessionHistoryEdit {
 ///
 /// 正文命令、结构编辑与 IME/格式事务对“提交后状态”的记录既有差异，必须逐点保留：
 /// 前者折叠选区时同步锚点视觉亲和并记录宿主插入点，后者沿用当前锚点视觉亲和。
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(super) enum DocumentEditSnapshot {
     /// 正文命令与结构编辑：折叠选区同步锚点视觉亲和，记录数学编辑与宿主插入点。
     Body,
     /// IME 替换与仅格式事务：沿用当前锚点视觉亲和，只记录数学编辑位置。
     Inline,
+    /// 数学事务或待输入样式：调用方显式提供提交后的状态，其余提交记账仍由统一入口完成。
+    Explicit(Box<SessionHistoryState>),
 }
 
 impl DocumentEditSnapshot {
-    fn anchor_visual_affinity(self, session: &Session) -> VisualAffinity {
+    fn anchor_visual_affinity(&self, session: &Session) -> VisualAffinity {
         match self {
             Self::Body if session.selection.anchor == session.selection.focus => {
                 session.selection_visual_affinity
             }
             Self::Body | Self::Inline => session.selection_anchor_visual_affinity,
+            Self::Explicit(state) => state.anchor_visual_affinity,
         }
     }
 
     fn history_state(self, session: &Session, state_id: u64) -> SessionHistoryState {
+        if let Self::Explicit(mut state) = self {
+            state.state_id = state_id;
+            return *state;
+        }
         let state = SessionHistoryState::new(
             session.selection.clone(),
             session.selection_visual_affinity,
@@ -485,6 +492,7 @@ impl DocumentEditSnapshot {
         match self {
             Self::Body => state.with_host_caret_position(session.host_caret_position.clone()),
             Self::Inline => state,
+            Self::Explicit(_) => unreachable!("explicit state returns before session capture"),
         }
     }
 }
@@ -511,7 +519,7 @@ impl Session {
     }
 
     /// 提交调用方已采集好提交后状态的编辑；共享历史登记与代际推进入口。
-    pub(super) fn commit_document_edit_with_states(
+    fn commit_document_edit_with_states(
         &mut self,
         patch: DocumentPatch,
         before_state: SessionHistoryState,
