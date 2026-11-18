@@ -1,6 +1,6 @@
 # 102 — Brooks sweep 后续收敛项
 
-- 状态：in-progress
+- 状态：done
 - 依赖：093、095
 - 优先级：P2
 - 创建 / 更新：2026-11-17 / 2026-11-18
@@ -42,7 +42,7 @@ Brooks sweep 的独立复核在已修复项之外给出若干"同族未收敛"�
 - [x] 文档提交点全部走统一入口（或记录不可表达口径并加注释）。
 - [x] `MathEdit` 直接 struct 构造点清零，测试也使用构造入口。
 - [x] 未知/非法节点在 open 与预览路径上行为有测试且与 085 一致。
-- [ ] 本地全量门禁与独立评审通过，PR CI 待通过。
+- [x] 本地全量门禁、独立评审及 PR CI 通过。
 
 ## 验证计划与结果
 
@@ -54,6 +54,7 @@ Brooks sweep 的独立复核在已修复项之外给出若干"同族未收敛"�
 | 2026-11-18 | `cargo test --workspace --locked` | 全 workspace 通过 | 通过；Rust、native、QML 与应用测试通过（含最新 codec 回归用例） |
 | 2026-11-18 | `cargo clippy --locked --workspace --all-targets -- -D warnings` | 无警告 | 通过 |
 | 2026-11-18 | `git diff HEAD --check`、`actionlint .github/workflows/ci.yml`、apt 脚本 `bash -n` | diff、workflow 和 shell 语法通过 | 全部通过 |
+| 2026-11-18 | PR #150 / Actions run `44321646594` | 受影响 CI jobs 通过 | 全部通过；selector self-test 按路径规则跳过 |
 
 ## 风险与回退
 
@@ -71,4 +72,4 @@ Brooks sweep 的独立复核在已修复项之外给出若干"同族未收敛"�
 
 ## 完成摘要
 
-本地 workspace 门禁与独立评审已通过；等待 PR CI 验证 Linux apt 重试和代码改动。
+task-102 的本地 workspace 门禁、独立评审和 PR CI 均通过。PR #150 尚未合并。
