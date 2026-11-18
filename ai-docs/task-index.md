@@ -127,7 +127,7 @@
 | 093 | 质量清理 | [全仓 Brooks Sweep 质量清理记录](task/093-brooks-sweep-quality-cleanup.md) | P2 | — | L | done |
 | 094 | 测试 | [关闭已编辑文档事务的行为测试](task/094-close-with-unsaved-changes-tests.md) | P0 | 093 | M | done |
 | 095 | 架构 | [caret-engine 会话与数学编辑模块拆分](task/095-engine-session-math-edit-split.md) | P1 | 093 | L | done |
-| 096 | 架构 | [caret-engine 布局模块生产/查询拆分](task/096-engine-layout-produce-query-split.md) | P1 | 093 | L | planned |
+| 096 | 架构 | [caret-engine 布局模块生产/查询拆分](task/096-engine-layout-produce-query-split.md) | P1 | 093 | L | done |
 | 097 | 数学 | [跨 crate 数学符号与属性单一来源](task/097-math-symbol-single-source.md) | P1 | 093、084 | M | planned |
 | 098 | QML 架构 | [QML 状态机与跨语言契约收敛](task/098-qml-state-and-cross-language-contracts.md) | P2 | 093、083 | L | planned |
 | 099 | 测试 | [ShellLoadTest 单类按域拆分](task/099-shell-load-test-split.md) | P2 | 093 | M | planned |
