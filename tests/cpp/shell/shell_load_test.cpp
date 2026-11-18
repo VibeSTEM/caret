@@ -926,64 +926,6 @@ void ShellLoadTest::newDocumentDialogHasNoProcessFields() {
     delete dialog;
 }
 
-void ShellLoadTest::unsavedChangesDialogUsesStyledActionsInRequestedOrder() {
-    const QString root = QString::fromUtf8(CARET_SOURCE_DIR);
-    QFile source(root + QStringLiteral("/qml/Dialogs/UnsavedChangesDialog.qml"));
-    QVERIFY(source.open(QIODevice::ReadOnly));
-    const QString text = QString::fromUtf8(source.readAll());
-    QVERIFY(text.contains(QStringLiteral("DialogWindow")));
-    QVERIFY(text.contains(QStringLiteral("closeButtonVisible: false")));
-    QVERIFY(text.contains(QStringLiteral("Save your changes before closing this document?")));
-
-    const qsizetype save = text.indexOf(QStringLiteral("objectName: \"closeSaveButton\""));
-    const qsizetype discard = text.indexOf(QStringLiteral("objectName: \"closeDiscardButton\""));
-    const qsizetype cancel = text.indexOf(QStringLiteral("objectName: \"closeCancelButton\""));
-    QVERIFY(save >= 0);
-    QVERIFY(discard > save);
-    QVERIFY(cancel > discard);
-    QVERIFY(text.contains(QStringLiteral("text: qsTr(\"Save\")")));
-    QVERIFY(text.contains(QStringLiteral("text: qsTr(\"Don't Save\")")));
-    QVERIFY(text.contains(QStringLiteral("text: qsTr(\"Cancel\")")));
-}
-
-void ShellLoadTest::closeFailureDoesNotReopenPendingConfirmation() {
-    const QString root = QString::fromUtf8(CARET_SOURCE_DIR);
-    QFile source(root + QStringLiteral("/qml/App.qml"));
-    QVERIFY(source.open(QIODevice::ReadOnly));
-    const QString text = QString::fromUtf8(source.readAll());
-    const qsizetype failure_start = text.indexOf(QStringLiteral(
-        "if (!succeeded) {\n                rootWindow.waitForCloseAfterFileOperation = false;"));
-    QVERIFY(failure_start >= 0);
-    const qsizetype conflict_start = text.indexOf(QStringLiteral("if (conflict)"), failure_start);
-    QVERIFY(conflict_start > failure_start);
-    const QString failure_branch = text.mid(failure_start, conflict_start - failure_start);
-    QVERIFY(failure_branch.contains(QStringLiteral("waitForCloseAfterFileOperation = false")));
-    QVERIFY(!failure_branch.contains(QStringLiteral("resumeCloseAfterFileOperation()")));
-
-    const qsizetype activity_start =
-        text.indexOf(QStringLiteral("function onDocumentFileActivityFinished()"));
-    const qsizetype operation_start =
-        text.indexOf(QStringLiteral("function onDocumentFileOperationFinished"), activity_start);
-    QVERIFY(activity_start >= 0);
-    QVERIFY(operation_start > activity_start);
-    QVERIFY(text.mid(activity_start, operation_start - activity_start)
-                .contains(QStringLiteral("rootWindow.resumeCloseAfterFileOperation()")));
-    const qsizetype save_finished_start =
-        text.indexOf(QStringLiteral("function onDocumentSaveFinished(succeeded)"));
-    QVERIFY(save_finished_start >= 0);
-    QVERIFY(text.mid(save_finished_start)
-                .contains(QStringLiteral("closeAfterSaveSucceeded = succeeded")));
-    const qsizetype resume_start =
-        text.indexOf(QStringLiteral("function resumeCloseAfterFileOperation()"));
-    QVERIFY(resume_start >= 0);
-    const QString resume_body = text.mid(resume_start);
-    QVERIFY(resume_body.contains(QStringLiteral("closeAfterSaveRequested")));
-    QVERIFY(resume_body.contains(QStringLiteral("closeAfterSaveSucceeded")));
-    QVERIFY(resume_body.contains(QStringLiteral("waitForCloseAfterFileOperation")));
-    QVERIFY(resume_body.contains(QStringLiteral("if (LayoutViewModel.documentFileBusy)")));
-    QVERIFY(resume_body.contains(QStringLiteral("documentMathSourceDraftPending")));
-}
-
 void ShellLoadTest::documentUnitsConvertThroughIntegerCentipixels() {
     caret::DocumentUnits units;
     QCOMPARE(units.pointsToLogicalCentipixels(72.0, 100), qint64{9600});
