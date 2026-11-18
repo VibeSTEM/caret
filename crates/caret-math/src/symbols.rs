@@ -6,49 +6,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-/// TeX 原子类别，决定相邻原子之间的数学间距。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum AtomClass {
-    Ord,
-    Op,
-    Bin,
-    Rel,
-    Open,
-    Close,
-    Punct,
-    Inner,
-}
-
-impl AtomClass {
-    /// 文档属性 `atomClass` 使用的名称。
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Ord => "ord",
-            Self::Op => "op",
-            Self::Bin => "bin",
-            Self::Rel => "rel",
-            Self::Open => "open",
-            Self::Close => "close",
-            Self::Punct => "punct",
-            Self::Inner => "inner",
-        }
-    }
-
-    /// 解析文档属性 `atomClass`。
-    pub fn parse(value: &str) -> Option<Self> {
-        Some(match value {
-            "ord" => Self::Ord,
-            "op" => Self::Op,
-            "bin" => Self::Bin,
-            "rel" => Self::Rel,
-            "open" => Self::Open,
-            "close" => Self::Close,
-            "punct" => Self::Punct,
-            "inner" => Self::Inner,
-            _ => return None,
-        })
-    }
-}
+/// TeX 原子类别由 `caret-doc` 的 `.cdoc` 数学格式契约统一定义。
+pub use caret_doc::MathAtomClass as AtomClass;
 
 /// 一个具名数学符号。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -217,70 +176,54 @@ pub fn text_operator_limits(name: &str) -> Option<bool> {
         .map(|(_, limits)| *limits)
 }
 
-/// 重音和装饰命令名，与文档属性 `accent` 的取值一一对应。
-pub const ACCENTS: &[&str] = &[
-    "hat",
-    "check",
-    "breve",
-    "acute",
-    "grave",
-    "tilde",
-    "bar",
-    "vec",
-    "dot",
-    "ddot",
-    "dddot",
-    "ddddot",
-    "widehat",
-    "widetilde",
-    "overline",
-    "underline",
-    "overbrace",
-    "underbrace",
-    "overleftarrow",
-    "overrightarrow",
-    "overleftrightarrow",
-    "underleftarrow",
-    "underrightarrow",
-    "underleftrightarrow",
-    "cancel",
-    "bcancel",
-    "xcancel",
-    "boxed",
-    "not",
-];
+const fn is_ring_accent(accent: &caret_doc::MathAccent) -> bool {
+    matches!(accent.value.as_bytes(), [b'r', b'i', b'n', b'g'])
+}
+
+const fn legacy_accent_count(accents: &[caret_doc::MathAccent]) -> usize {
+    let mut count = 0;
+    let mut index = 0;
+    while index < accents.len() {
+        if !is_ring_accent(&accents[index]) {
+            count += 1;
+        }
+        index += 1;
+    }
+    count
+}
+
+const LEGACY_ACCENT_COUNT: usize = legacy_accent_count(caret_doc::MATH_ACCENTS);
+
+const fn legacy_accent_values<const N: usize>(
+    accents: &[caret_doc::MathAccent],
+) -> [&'static str; N] {
+    let mut values = [""; N];
+    let mut source = 0;
+    let mut target = 0;
+    while source < accents.len() {
+        if !is_ring_accent(&accents[source]) {
+            values[target] = accents[source].command;
+            target += 1;
+        }
+        source += 1;
+    }
+    values
+}
+
+const LEGACY_ACCENT_VALUES: [&str; LEGACY_ACCENT_COUNT] =
+    legacy_accent_values(caret_doc::MATH_ACCENTS);
+
+/// 兼容保留的原始 accent 命令清单，由文档契约派生并排除 `mathring` 特例。
+pub const ACCENTS: &[&str] = &LEGACY_ACCENT_VALUES;
 
 /// 重音命令名到文档属性值；`\mathring` 存为 `ring`。
 pub fn accent_attribute(command: &str) -> Option<&'static str> {
-    if command == "mathring" {
-        return Some("ring");
-    }
-    ACCENTS.iter().copied().find(|accent| *accent == command)
+    caret_doc::math_accent_by_command(command).map(|accent| accent.value)
 }
 
 /// 重音属性值对应的组合字符或装饰字符。`None` 表示由规则线或特殊绘制实现。
 pub fn accent_char(accent: &str) -> Option<char> {
-    Some(match accent {
-        "hat" | "widehat" => '\u{0302}',
-        "check" => '\u{030C}',
-        "breve" => '\u{0306}',
-        "acute" => '\u{0301}',
-        "grave" => '\u{0300}',
-        "tilde" | "widetilde" => '\u{0303}',
-        "bar" => '\u{0304}',
-        "vec" => '\u{20D7}',
-        "dot" => '\u{0307}',
-        "ddot" => '\u{0308}',
-        "dddot" => '\u{20DB}',
-        "ddddot" => '\u{20DC}',
-        "ring" => '\u{030A}',
-        "overbrace" => '⏞',
-        "underbrace" => '⏟',
-        "overleftarrow" | "underleftarrow" => '←',
-        "overrightarrow" | "underrightarrow" => '→',
-        "overleftrightarrow" | "underleftrightarrow" => '↔',
-        _ => return None,
-    })
+    caret_doc::math_accent_by_value(accent)?.legacy_character
 }
 
 /// 文档定界符编码对应的显示字符；`empty` 返回 `None`。
@@ -300,23 +243,15 @@ pub fn delimiter_char(encoded: &str) -> Option<char> {
 
 /// LaTeX 定界符记号转为文档编码。
 pub fn encode_delimiter(token: &str) -> Option<String> {
-    Some(match token {
+    let encoded = match token {
         "." => "empty".to_owned(),
-        "(" | ")" | "[" | "]" | "|" | "/" | "<" | ">" => format!("char:{token}"),
+        _ if token.chars().count() == 1 => format!("char:{token}"),
         "\\{" | "\\lbrace" => "named:{".to_owned(),
         "\\}" | "\\rbrace" => "named:}".to_owned(),
         "\\|" => "named:|".to_owned(),
-        _ => {
-            let name = token.strip_prefix('\\')?;
-            match name {
-                "langle" | "rangle" | "lfloor" | "rfloor" | "lceil" | "rceil" | "lvert"
-                | "rvert" | "lVert" | "rVert" | "vert" | "Vert" | "uparrow" | "downarrow"
-                | "Uparrow" | "Downarrow" | "updownarrow" | "Updownarrow" | "backslash"
-                | "lgroup" | "rgroup" | "lmoustache" | "rmoustache" => format!("named:{name}"),
-                _ => return None,
-            }
-        }
-    })
+        _ => format!("named:{}", token.strip_prefix('\\')?),
+    };
+    caret_doc::is_valid_math_delimiter(&encoded).then_some(encoded)
 }
 
 /// 文档定界符编码转回 LaTeX 记号。
@@ -362,6 +297,81 @@ pub const NAMED_COLORS: &[(&str, &str)] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accents_match_document_values_without_accepting_the_ring_shorthand() {
+        const LEGACY_API_TYPE_CHECK: &[&str] = ACCENTS;
+        let expected: Vec<_> = caret_doc::MATH_ACCENTS
+            .iter()
+            .filter(|accent| !is_ring_accent(accent))
+            .map(|accent| accent.command)
+            .collect();
+        assert_eq!(LEGACY_API_TYPE_CHECK, expected.as_slice());
+        assert!(!ACCENTS.contains(&"ring"));
+        for accent in ACCENTS.iter().copied() {
+            assert!(caret_doc::math_accent_by_command(accent).is_some());
+        }
+        assert_eq!(accent_attribute("mathring"), Some("ring"));
+        assert_eq!(accent_attribute("ring"), None);
+        assert_eq!(accent_char("overleftarrow"), Some('←'));
+        assert_eq!(accent_char("overrightarrow"), Some('→'));
+        assert_eq!(accent_char("overleftrightarrow"), Some('↔'));
+    }
+
+    #[test]
+    fn delimiter_encoder_only_emits_document_values() {
+        for encoded in caret_doc::MATH_DELIMITER_VALUES {
+            let source = delimiter_source(encoded);
+            assert_eq!(encode_delimiter(&source).as_deref(), Some(*encoded));
+        }
+        for source in [
+            ".",
+            "(",
+            ")",
+            "[",
+            "]",
+            "|",
+            "/",
+            "<",
+            ">",
+            "\\{",
+            "\\}",
+            "\\lbrace",
+            "\\rbrace",
+            "\\|",
+            "\\langle",
+            "\\rangle",
+            "\\lfloor",
+            "\\rfloor",
+            "\\lceil",
+            "\\rceil",
+            "\\lvert",
+            "\\rvert",
+            "\\lVert",
+            "\\rVert",
+            "\\vert",
+            "\\Vert",
+            "\\uparrow",
+            "\\downarrow",
+            "\\Uparrow",
+            "\\Downarrow",
+            "\\updownarrow",
+            "\\Updownarrow",
+            "\\backslash",
+            "\\lgroup",
+            "\\rgroup",
+            "\\lmoustache",
+            "\\rmoustache",
+        ] {
+            let encoded = encode_delimiter(source)
+                .unwrap_or_else(|| panic!("valid delimiter should encode: {source}"));
+            assert!(
+                caret_doc::is_valid_math_delimiter(&encoded),
+                "{source} → {encoded}"
+            );
+        }
+        assert_eq!(encode_delimiter("\\not_a_delimiter"), None);
+    }
 
     #[test]
     fn symbol_names_are_unique() {

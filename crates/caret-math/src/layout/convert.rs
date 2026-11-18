@@ -3,6 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
+use caret_doc::{
+    DEFAULT_MATH_MATRIX_STYLE, MathAccentPlacement, MathAccentRendering, MathDelimiterSize,
+    MathMatrixAlignment, MathMatrixCellSize, MathMatrixColumnGap, math_accent_by_value,
+    math_matrix_style,
+};
 use read_fonts::tables::math::MathConstant as C;
 
 use super::accent::{CancelKind, layout_accent, layout_cancel, layout_cancel_to, layout_line};
@@ -23,7 +28,7 @@ use super::text::{
 use crate::backend::BackendNodeKind as K;
 use crate::backend::{Node as MathNode, NodePosition};
 use crate::fonts::Axis;
-use crate::symbols::{AtomClass, accent_char, delimiter_char, literal_display_char, named_symbol};
+use crate::symbols::{AtomClass, delimiter_char, literal_display_char, named_symbol};
 
 /// 占位框颜色。
 const PLACEHOLDER_COLOR: MathColor = MathColor {
@@ -1131,12 +1136,8 @@ impl Converter<'_> {
             "rel" => AtomClass::Rel,
             _ => AtomClass::Ord,
         };
-        let scale = match Self::attribute(node, "size") {
-            "Big" => 1.8,
-            "bigg" => 2.4,
-            "Bigg" => 3.0,
-            _ => 1.2,
-        };
+        let scale =
+            MathDelimiterSize::parse(Self::attribute(node, "size")).map_or(1.2, |size| size.scale);
         let target = scale * self.ctx.font_size(style);
         let Some(character) = delimiter_char(node.text.as_deref().unwrap_or("empty")) else {
             return Fragment::new(Frame::new(0.0, 0.0, 0.0), class);
@@ -1147,19 +1148,13 @@ impl Converter<'_> {
 
     fn matrix(&mut self, node: &MathNode, style: Style) -> Fragment {
         let kind = match Self::attribute(node, "style") {
-            "" => "matrix",
+            "" => DEFAULT_MATH_MATRIX_STYLE.name,
             other => other,
         };
         let em = self.ctx.font_size(style);
-        let (left, right) = match kind {
-            "pmatrix" => (Some('('), Some(')')),
-            "bmatrix" => (Some('['), Some(']')),
-            "Bmatrix" => (Some('{'), Some('}')),
-            "vmatrix" => (Some('|'), Some('|')),
-            "Vmatrix" => (Some('‖'), Some('‖')),
-            "cases" => (Some('{'), None),
-            _ => (None, None),
-        };
+        let style_spec = math_matrix_style(kind).unwrap_or(&DEFAULT_MATH_MATRIX_STYLE);
+        let left = style_spec.left_delimiter;
+        let right = style_spec.right_delimiter;
         let columns = node
             .children
             .iter()
@@ -1167,11 +1162,16 @@ impl Converter<'_> {
             .map(|row| row.children.len())
             .max()
             .unwrap_or(0);
+        let column_gap = match style_spec.column_gap {
+            MathMatrixColumnGap::HalfEm => 0.5 * em,
+            MathMatrixColumnGap::Em => em,
+            MathMatrixColumnGap::Zero => 0.0,
+        };
         let mut spec = TableSpec {
             aligns: vec![Align::Center; columns],
             vlines: Vec::new(),
             hlines: Vec::new(),
-            column_gap: 0.5 * em,
+            column_gap,
             row_gap: 0.2 * em,
             row_spacing: None,
             base_row_ascent: 0.0,
@@ -1186,16 +1186,20 @@ impl Converter<'_> {
             spec.base_row_descent = self.ctx.host_row_descent;
             spec.base_row_leading = self.ctx.host_row_leading;
         }
-        let cell_style = match kind {
-            "aligned" | "gathered" | "split" => style,
-            _ => style.with_size(style.size.min(MathSize::Text)),
-        };
-        match kind {
-            "cases" => {
-                spec.aligns = vec![Align::Left; columns];
-                spec.column_gap = em;
+        // `gathered` 不是持久格式支持的样式，但公开布局入口仍可直接收到它；保留既有字号。
+        let cell_style = if kind == "gathered" {
+            style
+        } else {
+            match style_spec.cell_size {
+                MathMatrixCellSize::Inherit => style,
+                MathMatrixCellSize::Compact => style.with_size(style.size.min(MathSize::Text)),
             }
-            "aligned" | "split" => {
+        };
+        match style_spec.alignment {
+            MathMatrixAlignment::Left => {
+                spec.aligns = vec![Align::Left; columns];
+            }
+            MathMatrixAlignment::Alternating => {
                 spec.aligns = (0..columns)
                     .map(|index| {
                         if index % 2 == 0 {
@@ -1205,16 +1209,15 @@ impl Converter<'_> {
                         }
                     })
                     .collect();
-                spec.column_gap = 0.0;
             }
-            "array" => {
+            MathMatrixAlignment::Columns => {
                 let (aligns, vlines) = parse_columns(Self::attribute(node, "columns"));
                 spec.aligns = aligns;
                 spec.aligns
                     .resize(columns.max(spec.aligns.len()), Align::Center);
                 spec.vlines = vlines;
             }
-            _ => {}
+            MathMatrixAlignment::Center => {}
         }
         let mut rows = Vec::new();
         for child in &node.children {
@@ -1264,63 +1267,57 @@ impl Converter<'_> {
 
     fn accent(&mut self, node: &MathNode, style: Style) -> Fragment {
         let accent = Self::attribute(node, "accent");
-        match accent {
-            "overline" => {
+        let Some(accent_spec) = math_accent_by_value(accent) else {
+            self.ctx.diagnostic("math.accent.unknown", accent);
+            return self.child(node, 0, style);
+        };
+        match accent_spec.rendering {
+            MathAccentRendering::Overline => {
                 let body = self.child(node, 0, style.cramped());
-                return layout_line(&self.ctx, style, body, true);
+                layout_line(&self.ctx, style, body, true)
             }
-            "underline" => {
+            MathAccentRendering::Underline => {
                 let body = self.child(node, 0, style);
-                return layout_line(&self.ctx, style, body, false);
+                layout_line(&self.ctx, style, body, false)
             }
-            "cancel" | "bcancel" | "xcancel" => {
+            MathAccentRendering::CancelForward
+            | MathAccentRendering::CancelBackward
+            | MathAccentRendering::CancelCross => {
                 let body = self.child(node, 0, style);
-                let kind = match accent {
-                    "bcancel" => CancelKind::Back,
-                    "xcancel" => CancelKind::Cross,
+                let kind = match accent_spec.rendering {
+                    MathAccentRendering::CancelBackward => CancelKind::Back,
+                    MathAccentRendering::CancelCross => CancelKind::Cross,
                     _ => CancelKind::Forward,
                 };
-                return layout_cancel(style, body, kind);
+                layout_cancel(style, body, kind)
             }
-            "boxed" => {
+            MathAccentRendering::Boxed => {
                 let body = self.child(node, 0, style);
-                return boxed(body, None, Some(style.color), style);
+                boxed(body, None, Some(style.color), style)
             }
-            "not" => {
+            MathAccentRendering::Negate => {
                 let body = self.child(node, 0, style);
-                return self.negate(body, style);
+                self.negate(body, style)
             }
-            _ => {}
-        }
-        let (character, top) = match accent {
-            "overleftarrow" => ('\u{20D6}', true),
-            "overrightarrow" => ('\u{20D7}', true),
-            "overleftrightarrow" => ('\u{20E1}', true),
-            "underleftarrow" => ('\u{20EE}', false),
-            "underrightarrow" => ('\u{20EF}', false),
-            "underleftrightarrow" => ('\u{034D}', false),
-            "overbrace" => ('⏞', true),
-            "underbrace" => ('⏟', false),
-            other => match accent_char(other) {
-                Some(character) => (character, true),
-                None => {
-                    self.ctx.diagnostic("math.accent.unknown", other);
-                    return self.child(node, 0, style);
+            MathAccentRendering::Mark {
+                character,
+                placement,
+                brace,
+            } => {
+                let top = placement == MathAccentPlacement::Over;
+                let body_style = if top { style.cramped() } else { style };
+                let body = self.child(node, 0, body_style);
+                let Some(mark) = glyph_fragment(&self.ctx, style, character, AtomClass::Ord) else {
+                    self.ctx
+                        .diagnostic("math.glyph.missing", format!("U+{:04X}", character as u32));
+                    return body;
+                };
+                if brace {
+                    return self.brace(body, mark, top, style);
                 }
-            },
-        };
-        let brace = matches!(accent, "overbrace" | "underbrace");
-        let body_style = if top { style.cramped() } else { style };
-        let body = self.child(node, 0, body_style);
-        let Some(mark) = glyph_fragment(&self.ctx, style, character, AtomClass::Ord) else {
-            self.ctx
-                .diagnostic("math.glyph.missing", format!("U+{:04X}", character as u32));
-            return body;
-        };
-        if brace {
-            return self.brace(body, mark, top, style);
+                layout_accent(&self.ctx, style, body, mark, top)
+            }
         }
-        layout_accent(&self.ctx, style, body, mark, top)
     }
 
     /// 横向花括号：伸展到内容宽度，与内容隔开 0.25em；结果之后的脚标按上下限放置。

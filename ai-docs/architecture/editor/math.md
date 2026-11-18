@@ -41,6 +41,20 @@ Document.body: Vec<Block>
 
 Caret 数学树保留 TeX 原子与符号顺序，不解析成代数关系或运算语义。`MathTree { schemaVersion, root }` 的字段与验证由本页定义：`root` 是 `MathFlow`，`MathContent` 按源码顺序交替保存 `Math(MathNode)`、`Text(TextFlow)` 和行内格式环境。分数、根式、脚本等结构节点的每个语义槽位各持有一个有序 `MathFlow`；流内切分不得增加、删除或重排这些固定槽位。行内环境是 `InlineEnvironment<Child>` 包装节点，`ParagraphContent::Environment` 使用 `InlineEnvironment<ParagraphContent>`，`MathContent::Environment` 使用 `InlineEnvironment<MathContent>`；共享包装语义与树操作，子项类型由宿主流约束。MathTree 是唯一持久表示；LaTeX 规范文本由转换器按需生成。文档级能力登记和未知能力行为见[文档存储](document-model/document-storage.md)。早期临时字符串 `TextContent` 格式不属于受支持 schema，也不提供兼容或迁移路径。
 
+### `.cdoc` 数学属性值域
+
+数学格式属性的权威值域与矩阵描述符由 `caret-doc` 定义，`caret-math` 的解析、序列化和布局直接消费这些契约；修改属性值时同步更新本节与 `caret-doc` 中的共享定义。属性值如下：
+
+| 属性 | 合法值与语义 |
+| --- | --- |
+| `Symbol.atomClass`（可选）、`SizedDelimiter.atomClass`（必填） | `ord`、`op`、`bin`、`rel`、`open`、`close`、`punct`、`inner`。两种节点的必填性不同，值域相同。 |
+| `Accent.accent` | `hat`、`check`、`breve`、`acute`、`grave`、`tilde`、`bar`、`vec`、`dot`、`ddot`、`dddot`、`ddddot`、`widehat`、`widetilde`、`overline`、`underline`、`overbrace`、`underbrace`、`overleftarrow`、`overrightarrow`、`overleftrightarrow`、`underleftarrow`、`underrightarrow`、`underleftrightarrow`、`cancel`、`bcancel`、`xcancel`、`boxed`、`ring`、`not`。持久值 `ring` 只由 `\mathring` 输入并规范导出；`\ring` 仍不受支持。 |
+| `Delimited.left/right`、`SizedDelimiter.text` | `empty`；`char:` 后接 `(`、`)`、`[`、`]`、竖线、`/`、`<`、`>`；或 `named:` 后接 `{`、`}`、竖线、`langle`、`rangle`、`lfloor`、`rfloor`、`lceil`、`rceil`、`lvert`、`rvert`、`lVert`、`rVert`、`vert`、`Vert`、`uparrow`、`downarrow`、`Uparrow`、`Downarrow`、`updownarrow`、`Updownarrow`、`backslash`、`lgroup`、`rgroup`、`lmoustache`、`rmoustache`。TeX 别名 `\{`、`\lbrace`、`\}`、`\rbrace` 和反斜杠加竖线的命令先规范化为上述编码；它们不是额外的文档值。 |
+| `SizedDelimiter.size` | `big`、`Big`、`bigg`、`Bigg`。 |
+| `Matrix.style` | `matrix`、`pmatrix`、`bmatrix`、`Bmatrix`、`vmatrix`、`Vmatrix`、`cases`、`array`、`aligned`、`split`。描述符同时定义自动定界符、列对齐、单元格字号、列距和是否带 array 列规格。`columns` 字段始终存在且可含 `l`、`c`、`r` 和竖线；只有 `array` 会从 TeX 读取和导出列规格。`gathered` 不属于受支持值。顶层 `Align` 仍固定使用 `aligned` 环境，并保留它自己的尾空行规则。 |
+
+公式源码中的 `em` / `mu` 小数长度解析为 `.cdoc` 的整数分子、正整数分母和 `em` 单位；序列化从同一有理数格式化实现生成规范 TeX。解析最多接受 18 位数字；序列化的小数最多输出 18 位小数并截断、不舍入。由于总位数限制，部分序列化结果不能再次由当前解析器读取。该精度和单位转换属于源码边界，不是新的持久属性值域。
+
 ### 数学树限制
 
 每个节点只保存自身的原子文本和有序子节点；单棵树受深度 32、节点 65,536 与可变载荷 8 MiB 的持久化上限约束。单次导入或源码编辑草稿另受 1 MiB TeX 输入上限约束，该限制不改变 `.cdoc` schema。行内公式在段落逻辑文本中占一个 U+FFFC（3 字节），作为原子对象参与编辑和布局。若测量显示大量公式文档的内存或编辑成本成为热点，再评估连续 arena 等紧凑表示，不改变 `.cdoc` 编码。

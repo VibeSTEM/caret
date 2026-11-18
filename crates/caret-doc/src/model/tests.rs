@@ -1,10 +1,13 @@
 //! 验证文档模型、结构约束和默认值。
 
+use super::math::math_node_attributes_supported;
 use super::{
     Align, Block, Document, DocumentFontTarget, DocumentSettings, Equation, InlineEnvironment,
-    InlineEnvironmentKind, MATH_TREE_SCHEMA_VERSION, MAX_MATH_TREE_DEPTH,
-    MAX_MATH_TREE_PAYLOAD_BYTES, MathAlignRow, MathContent, MathFlow, MathNode, MathNodeKind,
-    MathTree, NodeId, OpaqueNode, Run, TextFlow, is_valid_language_tag,
+    InlineEnvironmentKind, MATH_ACCENTS, MATH_ATOM_CLASSES, MATH_DELIMITER_SIZES,
+    MATH_DELIMITER_VALUES, MATH_MATRIX_STYLES, MATH_TREE_SCHEMA_VERSION, MAX_MATH_TREE_DEPTH,
+    MAX_MATH_TREE_PAYLOAD_BYTES, MathAlignRow, MathAtomClass, MathContent, MathDelimiterSize,
+    MathFlow, MathNode, MathNodeKind, MathTree, NodeId, OpaqueNode, Run, TextFlow,
+    is_valid_language_tag,
 };
 use std::collections::BTreeMap;
 
@@ -30,6 +33,58 @@ fn math_node_kinds_share_optional_placeholder_operand_slots() {
             .optional_placeholder_operands()
             .is_empty()
     );
+}
+
+#[test]
+fn shared_math_format_values_are_the_values_accepted_by_document_validation() {
+    for class in MATH_ATOM_CLASSES {
+        assert_eq!(MathAtomClass::parse(class.as_str()), Some(*class));
+        let attributes = BTreeMap::from([("atomClass".to_owned(), class.as_str().to_owned())]);
+        assert!(math_node_attributes_supported(
+            MathNodeKind::Symbol,
+            Some("x"),
+            &attributes
+        ));
+    }
+
+    for accent in MATH_ACCENTS {
+        let attributes = BTreeMap::from([("accent".to_owned(), accent.value.to_owned())]);
+        assert!(math_node_attributes_supported(
+            MathNodeKind::Accent,
+            None,
+            &attributes
+        ));
+    }
+
+    for style in MATH_MATRIX_STYLES {
+        let attributes = BTreeMap::from([
+            ("style".to_owned(), style.name.to_owned()),
+            ("columns".to_owned(), String::new()),
+        ]);
+        assert!(math_node_attributes_supported(
+            MathNodeKind::Matrix,
+            None,
+            &attributes
+        ));
+    }
+
+    for delimiter in MATH_DELIMITER_VALUES {
+        assert!(super::is_valid_math_delimiter(delimiter));
+        let attributes = BTreeMap::from([
+            ("size".to_owned(), "big".to_owned()),
+            ("atomClass".to_owned(), "ord".to_owned()),
+        ]);
+        assert!(math_node_attributes_supported(
+            MathNodeKind::SizedDelimiter,
+            Some(delimiter),
+            &attributes
+        ));
+    }
+
+    for size in MATH_DELIMITER_SIZES {
+        assert_eq!(MathDelimiterSize::parse(size.name), Some(size));
+    }
+    assert!(MathDelimiterSize::parse("Biggg").is_none());
 }
 
 #[test]

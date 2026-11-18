@@ -13,12 +13,15 @@ use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 
 use caret_doc::{
-    Align, InlineEnvironment, InlineEnvironmentKind, MATH_TREE_SCHEMA_VERSION, MAX_MATH_TREE_DEPTH,
-    MAX_MATH_TREE_NODES, MathAlignRow, MathContent, MathFlow, MathTree, NodeId, Run, TextFlow,
+    Align, InlineEnvironment, InlineEnvironmentKind, MATH_ALIGNED_MATRIX_STYLE,
+    MATH_TREE_SCHEMA_VERSION, MAX_MATH_TREE_DEPTH, MAX_MATH_TREE_NODES, MathAlignRow,
+    MathAtomClass, MathContent, MathDelimiterSize, MathFlow, MathTree, NodeId, Run, TextFlow,
+    math_matrix_style,
 };
 use serde_json::Value;
 
 use crate::backend::BackendNodeKind as MathNodeKind;
+use crate::dimension::{add_ratio, parse_em};
 use crate::projection::AlignSourceRanges;
 use crate::symbols::{
     NAMED_COLORS, accent_attribute, encode_delimiter, literal_class, named_symbol,
@@ -34,6 +37,16 @@ use crate::{
 };
 
 type ParseResult<T> = Result<T, MathParseError>;
+
+fn sized_delimiter_command(command: &str) -> Option<(&str, MathAtomClass)> {
+    let (size, class) = match command.as_bytes().last() {
+        Some(b'l') => (&command[..command.len() - 1], MathAtomClass::Open),
+        Some(b'r') => (&command[..command.len() - 1], MathAtomClass::Close),
+        Some(b'm') => (&command[..command.len() - 1], MathAtomClass::Rel),
+        _ => (command, MathAtomClass::Ord),
+    };
+    MathDelimiterSize::parse(size).map(|_| (size, class))
+}
 
 /// LaTeX parser 暂存用节点；解析完成后立即降为持久化内容流模型。
 #[derive(Debug, Clone)]
@@ -67,12 +80,6 @@ const NUMBERING_ENVIRONMENTS: &[&str] = &[
     "alignat",
     "alignat*",
 ];
-/// 公式内支持的矩阵类环境，名称即文档属性 `style`。
-const MATRIX_ENVIRONMENTS: &[&str] = &[
-    "matrix", "pmatrix", "bmatrix", "Bmatrix", "vmatrix", "Vmatrix", "cases", "array", "aligned",
-    "split",
-];
-
 /// 把输入解析为目标对象类型的文档数学树。
 pub fn parse(source: &str, kind: MathInputKind) -> ParseResult<ParsedMath> {
     parse_projection_with_source(source, kind, Cow::Borrowed(source), false)
@@ -296,7 +303,7 @@ fn parse_align<'source>(
         parser.read_command();
         let name = parser.read_raw_group();
         parser.pos = saved;
-        matches!(name.as_deref(), Ok("aligned"))
+        matches!(name.as_deref(), Ok(name) if name == MATH_ALIGNED_MATRIX_STYLE.name)
     };
     if !is_aligned {
         // 先让解析器报告编号环境等更具体的错误。
@@ -308,7 +315,7 @@ fn parse_align<'source>(
     parser.read_command();
     parser.read_raw_group()?;
     let environment_content_start = parser.pos;
-    let parsed_rows = parser.parse_matrix_rows("aligned", true)?;
+    let parsed_rows = parser.parse_matrix_rows(MATH_ALIGNED_MATRIX_STYLE.name, true)?;
     let environment_end_start = parsed_rows.environment_end_start;
     let environment_content_end = parsed_rows.environment_content_end;
     let environment_end = parsed_rows.environment_end;
@@ -1801,19 +1808,15 @@ impl<'s> Parser<'s> {
                     vec![body],
                 ))
             }
-            "big" | "Big" | "bigg" | "Bigg" | "bigl" | "Bigl" | "biggl" | "Biggl" | "bigr"
-            | "Bigr" | "biggr" | "Biggr" | "bigm" | "Bigm" | "biggm" | "Biggm" => {
-                let (size, class) = match name.as_bytes().last() {
-                    Some(b'l') => (&name[..name.len() - 1], "open"),
-                    Some(b'r') => (&name[..name.len() - 1], "close"),
-                    Some(b'm') => (&name[..name.len() - 1], "rel"),
-                    _ => (name, "ord"),
-                };
+            command if let Some((size, class)) = sized_delimiter_command(command) => {
                 let delimiter = self.parse_delimiter()?;
                 Ok(self.node(
                     K::SizedDelimiter,
                     Some(delimiter),
-                    &[("size", size.to_owned()), ("atomClass", class.to_owned())],
+                    &[
+                        ("size", size.to_owned()),
+                        ("atomClass", class.as_str().to_owned()),
+                    ],
                     Some(start..self.pos),
                     Vec::new(),
                 ))
@@ -1825,14 +1828,10 @@ impl<'s> Parser<'s> {
                         command: format!("\\begin{{{environment}}}"),
                     });
                 }
-                let Some(style) = MATRIX_ENVIRONMENTS
-                    .iter()
-                    .copied()
-                    .find(|candidate| *candidate == environment)
-                else {
+                let Some(matrix_style) = math_matrix_style(&environment) else {
                     return Err(self.error_at(start, "unsupported environment"));
                 };
-                let columns = if style == "array" {
+                let columns = if matrix_style.has_column_spec {
                     let columns: String = self
                         .read_raw_group()?
                         .chars()
@@ -1848,6 +1847,7 @@ impl<'s> Parser<'s> {
                 } else {
                     String::new()
                 };
+                let style = matrix_style.name;
                 let rows = self.parse_matrix_rows(style, false)?.rows;
                 let mut children = Vec::new();
                 for row in rows {
@@ -2501,57 +2501,6 @@ fn coalesce(items: Vec<MathNode>, source: &str) -> Vec<MathNode> {
         output.push(item);
     }
     output
-}
-
-/// 解析 `em` 或 `mu` 长度为有理数 em。
-fn parse_em(raw: &str) -> Option<(i128, i128)> {
-    let raw = raw.trim();
-    let (number, unit) = raw.split_at(raw.find(|c: char| c.is_ascii_alphabetic())?);
-    let unit = unit.trim();
-    let number = number.trim();
-    let (negative, digits) = match number.strip_prefix('-') {
-        Some(rest) => (true, rest.trim()),
-        None => (false, number.strip_prefix('+').unwrap_or(number).trim()),
-    };
-    let (whole, fraction) = digits.split_once('.').unwrap_or((digits, ""));
-    if whole.is_empty() && fraction.is_empty()
-        || !whole
-            .bytes()
-            .chain(fraction.bytes())
-            .all(|b| b.is_ascii_digit())
-        || whole.len() + fraction.len() > 18
-    {
-        return None;
-    }
-    let mut numerator: i128 = format!("{whole}{fraction}").parse().ok()?;
-    let mut denominator: i128 = 10i128.pow(fraction.len() as u32);
-    match unit {
-        "em" => {}
-        "mu" => denominator *= 18,
-        _ => return None,
-    }
-    if negative {
-        numerator = -numerator;
-    }
-    Some(reduce((numerator, denominator)))
-}
-
-fn gcd(mut a: i128, mut b: i128) -> i128 {
-    a = a.abs();
-    b = b.abs();
-    while b != 0 {
-        (a, b) = (b, a % b);
-    }
-    a.max(1)
-}
-
-fn reduce((numerator, denominator): (i128, i128)) -> (i128, i128) {
-    let divisor = gcd(numerator, denominator);
-    (numerator / divisor, denominator / divisor)
-}
-
-fn add_ratio(left: (i128, i128), right: (i128, i128)) -> (i128, i128) {
-    reduce((left.0 * right.1 + right.0 * left.1, left.1 * right.1))
 }
 
 #[cfg(test)]

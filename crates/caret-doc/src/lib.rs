@@ -13,15 +13,20 @@ mod storage_format;
 
 pub use document_units::DocumentUnits;
 pub use model::{
-    Align, Block, BlockEnvironment, BlockEnvironmentKind, DEFAULT_FONT_FAMILY, Document,
-    DocumentFontTarget, DocumentSettings, Equation, ExplicitBreak, FlowContent, InlineEnvironment,
-    InlineEnvironmentKind, InlineEnvironmentTemplateError, InlineEnvironmentTemplates, InlineMath,
-    InlineTextStyle, MATH_TREE_SCHEMA_VERSION, MAX_DOCUMENT_NESTING_DEPTH, MAX_MATH_TREE_DEPTH,
-    MAX_MATH_TREE_NODES, MAX_MATH_TREE_PAYLOAD_BYTES, MathAlignRow, MathContent, MathFlow,
-    MathNode, MathNodeKind, MathPathStep, MathTree, Media, ModelError, NodeId, OpaqueNode,
-    PageSection, Paragraph, ParagraphContent, ParagraphLayoutOverrides, ParagraphLayoutStyle,
-    ParagraphLineSpacing, Run, SoftBreak, TextFlow, ThemeSnapshot, default_font_size_centipoints,
-    is_valid_language_tag,
+    Align, Block, BlockEnvironment, BlockEnvironmentKind, DEFAULT_FONT_FAMILY,
+    DEFAULT_MATH_MATRIX_STYLE, Document, DocumentFontTarget, DocumentSettings, Equation,
+    ExplicitBreak, FlowContent, InlineEnvironment, InlineEnvironmentKind,
+    InlineEnvironmentTemplateError, InlineEnvironmentTemplates, InlineMath, InlineTextStyle,
+    MATH_ACCENTS, MATH_ALIGNED_MATRIX_STYLE, MATH_ATOM_CLASSES, MATH_DELIMITER_SIZES,
+    MATH_DELIMITER_VALUES, MATH_MATRIX_STYLES, MATH_TREE_SCHEMA_VERSION,
+    MAX_DOCUMENT_NESTING_DEPTH, MAX_MATH_TREE_DEPTH, MAX_MATH_TREE_NODES,
+    MAX_MATH_TREE_PAYLOAD_BYTES, MathAccent, MathAccentPlacement, MathAccentRendering,
+    MathAlignRow, MathAtomClass, MathContent, MathDelimiterSize, MathFlow, MathMatrixAlignment,
+    MathMatrixCellSize, MathMatrixColumnGap, MathMatrixStyle, MathNode, MathNodeKind, MathPathStep,
+    MathTree, Media, ModelError, NodeId, OpaqueNode, PageSection, Paragraph, ParagraphContent,
+    ParagraphLayoutOverrides, ParagraphLayoutStyle, ParagraphLineSpacing, Run, SoftBreak, TextFlow,
+    ThemeSnapshot, default_font_size_centipoints, is_valid_language_tag, is_valid_math_delimiter,
+    math_accent_by_command, math_accent_by_value, math_matrix_style,
 };
 pub use page_geometry::{
     Orientation, PageGeometry, PageGeometryError, PageMargins, PaperSize, millimeters_to_points,
