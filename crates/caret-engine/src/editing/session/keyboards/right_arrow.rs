@@ -58,7 +58,8 @@ impl Session {
                             NavigationCandidate::Document { generation, .. } => {
                                 self.validate_navigation_generation(&generation)?
                             }
-                            NavigationCandidate::MathText { .. }
+                            NavigationCandidate::BlockEdge { .. }
+                            | NavigationCandidate::MathText { .. }
                             | NavigationCandidate::MathTextHit { .. }
                             | NavigationCandidate::MathTreeHit { .. } => {
                                 return Err(EditError::InvalidPosition);
@@ -82,6 +83,9 @@ impl Session {
         }
         // 结构范围是文档级选区：普通 Right 先折叠到范围终点并消费按键，不能沿用
         // 折叠在焦点端的文本光标继续前移一个步长。
+        if extend {
+            return self.extend_inline_selection(Direction::Forward, candidate.as_ref());
+        }
         if !extend && self.has_structure_selection() {
             return self.collapse_structure_selection(Direction::Forward);
         }
@@ -122,7 +126,8 @@ impl Session {
                 extend,
             ),
             Some(
-                NavigationCandidate::MathText { .. }
+                NavigationCandidate::BlockEdge { .. }
+                | NavigationCandidate::MathText { .. }
                 | NavigationCandidate::MathTextHit { .. }
                 | NavigationCandidate::MathTreeHit { .. },
             ) => Err(EditError::InvalidPosition),

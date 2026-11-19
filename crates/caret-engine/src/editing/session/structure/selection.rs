@@ -189,6 +189,12 @@ impl Session {
     /// 记录结构编辑前的选区、视觉侧与文档边界停靠，供历史回退精确恢复。
     fn capture_structure_edit_before_state(&self) -> StructureEditBeforeState {
         StructureEditBeforeState {
+            inline_range: self
+                .structure_selection
+                .as_ref()
+                .filter(|range| matches!(range.focus, DocumentRangeEndpoint::InlineMathTree { .. }))
+                .cloned()
+                .map(Box::new),
             selection: self.selection.clone(),
             anchor_visual_affinity: self.selection_anchor_visual_affinity,
             visual_affinity: self.selection_visual_affinity,
@@ -268,6 +274,55 @@ impl Session {
 
     /// 规划结构范围删除；没有结构选区时返回 `None`。
     fn plan_structure_range_deletion(&self) -> Result<Option<StructureRangeDeletion>, EditError> {
+        if let Some(parts) = self.inline_math_range_parts() {
+            let crate::MathEditTarget::Inline {
+                paragraph_id,
+                math_id,
+            } = &parts.target
+            else {
+                return Err(EditError::InvalidPosition);
+            };
+            let location = self
+                .paragraph_index
+                .get(paragraph_id)
+                .ok_or(EditError::InvalidPosition)?;
+            let mut document = self.document.clone();
+            let paragraph = paragraph_at_location_mut(&mut document.body, location)
+                .ok_or(EditError::InvalidPosition)?;
+            let before = history::paragraph_states_for_ids(
+                &self.document,
+                &self.paragraph_index,
+                [paragraph_id.clone()],
+            );
+            let (start, end) = if parts.body.anchor.offset < parts.body.focus.offset {
+                (&parts.body.anchor, &parts.body.focus)
+            } else {
+                (&parts.body.focus, &parts.body.anchor)
+            };
+            if start.offset != end.offset {
+                TextMap::new(paragraph)?.delete_range(paragraph, start.offset, end.offset)?;
+            }
+            let formula =
+                super::super::math_edit::find_inline_math_mut(&mut paragraph.inlines, math_id)
+                    .ok_or(EditError::InvalidPosition)?;
+            formula.math_tree.root.content.drain(parts.indices());
+            document
+                .validate()
+                .map_err(|e| EditError::InvalidDocument(e.to_string()))?;
+            let after = history::paragraph_states_for_ids(
+                &document,
+                &self.paragraph_index,
+                [paragraph_id.clone()],
+            );
+            return Ok(Some(StructureRangeDeletion {
+                node_patches: vec![],
+                document_after_nodes: self.document.clone(),
+                document,
+                before_paragraphs: before,
+                after_paragraphs: after,
+                caret: start.clone(),
+            }));
+        }
         let Some((start, end)) = self.ordered_range_endpoints()? else {
             return Ok(None);
         };
@@ -569,13 +624,15 @@ impl Session {
             DocumentRangeEndpoint::Text(position) => {
                 Some((&position.paragraph_id, position.offset))
             }
-            DocumentRangeEndpoint::BlockEdge { .. } => None,
+            DocumentRangeEndpoint::BlockEdge { .. }
+            | DocumentRangeEndpoint::InlineMathTree { .. } => None,
         };
         let end_paragraph = match end {
             DocumentRangeEndpoint::Text(position) => {
                 Some((&position.paragraph_id, position.offset))
             }
-            DocumentRangeEndpoint::BlockEdge { .. } => None,
+            DocumentRangeEndpoint::BlockEdge { .. }
+            | DocumentRangeEndpoint::InlineMathTree { .. } => None,
         };
         let mut text_edits = Vec::new();
         let mut removed_ids = Vec::new();
@@ -717,7 +774,8 @@ impl Session {
         let mut candidates = Vec::new();
         match start {
             DocumentRangeEndpoint::Text(position) => candidates.push(position.clone()),
-            DocumentRangeEndpoint::BlockEdge { .. } => {
+            DocumentRangeEndpoint::BlockEdge { .. }
+            | DocumentRangeEndpoint::InlineMathTree { .. } => {
                 if let Some(position) = self.text_endpoint_clamped(start) {
                     candidates.push(position);
                 }

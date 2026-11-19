@@ -231,7 +231,9 @@ fn shift_left(session: &mut Session) {
 fn text_endpoint(endpoint: &DocumentRangeEndpoint) -> &Pos {
     match endpoint {
         DocumentRangeEndpoint::Text(position) => position,
-        DocumentRangeEndpoint::BlockEdge { .. } => panic!("expected text endpoint: {endpoint:?}"),
+        DocumentRangeEndpoint::BlockEdge { .. } | DocumentRangeEndpoint::InlineMathTree { .. } => {
+            panic!("expected text endpoint: {endpoint:?}")
+        }
     }
 }
 
@@ -640,7 +642,10 @@ fn vertical_shift_down_covers_adjacent_equation_without_layout_candidate() {
         }))
         .unwrap_or_else(|error| panic!("shift-down failed: {error}"));
 
-    assert_eq!(session.selected_math_blocks(), &[equation_id]);
+    assert_eq!(
+        session.selected_math_blocks(),
+        std::slice::from_ref(&equation_id)
+    );
     assert_eq!(session.selection().focus, parked_start(&after));
     assert!(session.structure_selection_range().is_some());
 
@@ -651,7 +656,13 @@ fn vertical_shift_down_covers_adjacent_equation_without_layout_candidate() {
             structure: false,
         }))
         .unwrap_or_else(|error| panic!("up failed: {error}"));
-    assert!(session.math_edit().is_some());
+    // 该端点已停在公式外后；没有相邻视觉行候选，Up 保持原范围和停靠。
+    assert!(session.math_edit().is_none());
+    assert_eq!(
+        session.block_boundary_exit(),
+        Some((equation_id, Direction::Forward))
+    );
+    assert!(session.structure_selection_range().is_some());
 }
 
 #[test]

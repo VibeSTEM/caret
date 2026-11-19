@@ -242,13 +242,6 @@ impl DocumentViewRuntime {
                 "navigation.command_line",
             );
         }
-        if !extend && self.session.math_block_boundary_exit().is_some() {
-            return dispatch_navigation_key(
-                self,
-                vertical_navigation_key(line_delta, None, false),
-                "navigation.math_block_boundary",
-            );
-        }
         // InlineMath 在公式内没有垂直候选时先退出 MathEdit，同一次按键还要继续
         // 文档纵向导航；记录进入数学分支前的 Inline 目标，退出后按文档路径重放。
         let inline_math_edit = self
@@ -277,6 +270,53 @@ impl DocumentViewRuntime {
                 // 纵向导航；此时 math_edit 为 None，递归不会再次进入数学分支。
                 return self.move_vertical_caret_json(line_delta, extend);
             }
+            return Ok(result);
+        }
+        let boundary = self.session.block_boundary_exit();
+        let has_block_anchor = matches!(
+            self.session.structure_selection_range(),
+            Some((caret_engine::DocumentRangeEndpoint::BlockEdge { .. }, _))
+        );
+        if boundary.is_some() || has_block_anchor {
+            let generation = navigation_generation(self)?;
+            let focus = self.session.selection().focus.clone();
+            let affinity = self.session.selection_visual_affinity();
+            let preferred = self.preferred_visual_x_pt;
+            let snapshot = self.current_snapshot()?;
+            let fallback = snapshot
+                .caret_geometry(&focus, affinity)
+                .ok_or_else(|| "navigation.invalid_caret".to_owned())?;
+            let caret = boundary.as_ref().map_or(fallback, |(id, side)| {
+                snapshot.block_boundary_caret(id, *side, fallback)
+            });
+            let margin = snapshot.pages[caret.page_index].margin_left_pt as f32;
+            // 块外侧停靠的页面列独立于借用的正文光标；后续连续扩选仍沿用同一列。
+            let x = if boundary.is_some() {
+                caret.x_pt as f32
+            } else {
+                preferred.map_or(caret.x_pt as f32, |x| x + margin)
+            };
+            let candidate =
+                snapshot.vertical_candidate_from_block(caret, line_delta, x, generation);
+            let target_margin = match &candidate {
+                Some(NavigationCandidate::Document {
+                    focus,
+                    visual_affinity,
+                    ..
+                }) => snapshot
+                    .caret_geometry(focus, *visual_affinity)
+                    .map(|geometry| snapshot.pages[geometry.page_index].margin_left_pt as f32),
+                _ => None,
+            };
+            if candidate.is_none() {
+                return self.interaction_state_json();
+            }
+            let result = dispatch_navigation_key(
+                self,
+                vertical_navigation_key(line_delta, candidate, extend),
+                "navigation.vertical",
+            )?;
+            self.preferred_visual_x_pt = Some(target_margin.map_or(x, |margin| x - margin));
             return Ok(result);
         }
         let at_vertical_edge = {

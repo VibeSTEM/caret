@@ -181,6 +181,7 @@ pub(super) struct SessionHistoryState {
     pending_style: PendingInlineStyle,
     math_edit: Option<MathEditPosition>,
     host_caret_position: Option<HostCaretPosition<Pos>>,
+    pub(super) inline_range: Option<Box<super::StructureSelection>>,
     state_id: u64,
 }
 
@@ -256,6 +257,7 @@ impl SessionHistoryState {
             pending_style,
             math_edit: None,
             host_caret_position: None,
+            inline_range: None,
             state_id,
         }
     }
@@ -290,6 +292,7 @@ pub(super) struct HistoryTransition {
     pub pending_style: PendingInlineStyle,
     pub math_edit: Option<MathEditPosition>,
     pub host_caret_position: Option<HostCaretPosition<Pos>>,
+    pub inline_range: Option<Box<super::StructureSelection>>,
     pub state_id: u64,
     pub changed_paragraph_id: Option<NodeId>,
     pub document_changed: bool,
@@ -321,6 +324,16 @@ impl SessionHistoryEdit {
             + self.patch.estimated_bytes()
             + selection_id_bytes(&self.before.selection)
             + selection_id_bytes(&self.after.selection)
+            + self
+                .before
+                .inline_range
+                .as_deref()
+                .map_or(0, inline_range_bytes)
+            + self
+                .after
+                .inline_range
+                .as_deref()
+                .map_or(0, inline_range_bytes)
             + self
                 .before
                 .math_edit
@@ -359,6 +372,7 @@ impl SessionHistoryEdit {
             pending_style: self.before.pending_style.clone(),
             math_edit: self.before.math_edit.clone(),
             host_caret_position: self.before.host_caret_position.clone(),
+            inline_range: self.before.inline_range.clone(),
             state_id: self.before.state_id,
             changed_paragraph_id: self.patch.single_changed_paragraph_id(),
             document_changed: self.patch.affects_document(),
@@ -374,6 +388,7 @@ impl SessionHistoryEdit {
             pending_style: self.after.pending_style.clone(),
             math_edit: self.after.math_edit.clone(),
             host_caret_position: self.after.host_caret_position.clone(),
+            inline_range: self.after.inline_range.clone(),
             state_id: self.after.state_id,
             changed_paragraph_id: self.patch.single_changed_paragraph_id(),
             document_changed: self.patch.affects_document(),
@@ -1738,6 +1753,30 @@ fn json_value_bytes(value: &serde_json::Value) -> usize {
     }
 }
 
+/// 历史只保存根序列的混合选区；计入堆上的范围本体和端点持有的稳定 ID。
+fn inline_range_bytes(range: &super::StructureSelection) -> usize {
+    let (
+        super::DocumentRangeEndpoint::Text(anchor),
+        super::DocumentRangeEndpoint::InlineMathTree {
+            paragraph_id,
+            position,
+            ..
+        },
+    ) = (&range.anchor, &range.focus)
+    else {
+        return size_of_val(range);
+    };
+    let owner_bytes = match &position.host {
+        super::MathPositionHost::InlineMath { owner_id } => node_id_bytes(owner_id),
+        _ => 0,
+    };
+    size_of_val(range)
+        + node_id_bytes(&anchor.paragraph_id)
+        + story_id_bytes(&anchor.story)
+        + node_id_bytes(paragraph_id)
+        + owner_bytes
+}
+
 fn selection_id_bytes(selection: &Selection) -> usize {
     node_id_bytes(&selection.anchor.paragraph_id)
         + node_id_bytes(&selection.focus.paragraph_id)
@@ -1813,6 +1852,7 @@ pub(super) struct RestoredHistoryTransition {
     pub(super) document_changed: bool,
     pub(super) math_edit: Option<MathEditPosition>,
     pub(super) host_caret_position: Option<HostCaretPosition<Pos>>,
+    pub(super) inline_range: Option<Box<super::StructureSelection>>,
     pub(super) valid: bool,
 }
 
@@ -1829,6 +1869,7 @@ pub(super) fn restore_history_transition(
         document_changed: transition.document_changed,
         math_edit: transition.math_edit,
         host_caret_position: transition.host_caret_position,
+        inline_range: transition.inline_range,
         valid: transition.valid,
     }
 }

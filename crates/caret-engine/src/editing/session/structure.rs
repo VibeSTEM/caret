@@ -27,6 +27,7 @@ mod environment_mutations;
 mod selection;
 
 struct StructureEditBeforeState {
+    inline_range: Option<Box<super::StructureSelection>>,
     selection: Selection,
     anchor_visual_affinity: VisualAffinity,
     visual_affinity: VisualAffinity,
@@ -49,6 +50,7 @@ impl Session {
             updated_paragraph_index,
             patch,
             StructureEditBeforeState {
+                inline_range: None,
                 selection: before_selection,
                 anchor_visual_affinity: before_anchor_visual_affinity,
                 visual_affinity: before_visual_affinity,
@@ -69,7 +71,7 @@ impl Session {
         self.text_map_cache.clear();
         self.advance_history_merge_epoch();
 
-        let before_state = SessionHistoryState::new(
+        let mut before_state = SessionHistoryState::new(
             before.selection,
             before.visual_affinity,
             self.pending_inline_style.clone(),
@@ -77,6 +79,7 @@ impl Session {
         )
         .with_anchor_visual_affinity(before.anchor_visual_affinity)
         .with_host_caret_position(before.host_caret_position);
+        before_state.inline_range = before.inline_range;
         self.commit_document_edit(patch, before_state, DocumentEditSnapshot::Body);
     }
 
@@ -297,6 +300,7 @@ impl Session {
                 after: Vec::new(),
             },
             StructureEditBeforeState {
+                inline_range: None,
                 selection: before_selection,
                 anchor_visual_affinity: before_anchor_visual_affinity,
                 visual_affinity: before_visual_affinity,
@@ -451,6 +455,7 @@ impl Session {
                 paragraphs_estimated_bytes,
             },
             StructureEditBeforeState {
+                inline_range: None,
                 selection: before_selection,
                 anchor_visual_affinity: before_anchor_visual_affinity,
                 visual_affinity: before_visual_affinity,

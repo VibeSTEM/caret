@@ -39,6 +39,28 @@ impl Session {
     /// 结构选区按同一文档范围遍历物理块序列：覆盖环境的全部段落完整复制，
     /// Equation/Align 与行内公式一致输出 U+FFFC，范围两端的普通文字只取切口。
     pub fn selected_text(&self) -> Result<String, EditError> {
+        if let Some(parts) = self.inline_math_range_parts() {
+            let map = TextMap::new(self.paragraph_for(&parts.body.anchor)?)?;
+            let a = parts.body.anchor.offset;
+            let b = parts.body.focus.offset;
+            let body = map
+                .text
+                .get(a.min(b)..a.max(b))
+                .ok_or(EditError::InvalidPosition)?;
+            let tree = super::math_edit::math_tree_for_target(&self.document, &parts.target, None)
+                .ok_or(EditError::InvalidPosition)?;
+            let flow = caret_doc::MathFlow {
+                id: tree.root.id.clone(),
+                content: tree.root.content[parts.indices()].to_vec(),
+                extra: tree.root.extra.clone(),
+            };
+            let math = caret_math::serialize_node(&flow);
+            return Ok(if parts.math_anchor.offset == 0 {
+                format!("{body}{math}")
+            } else {
+                format!("{math}{body}")
+            });
+        }
         if self.has_structure_selection() {
             return self.structure_selection_text();
         }
@@ -358,7 +380,38 @@ impl Session {
             let (start, end) = self.ordered_structure_selection()?;
             (start.clone(), end.clone())
         };
+        let chosen = if direction == Direction::Forward {
+            &end
+        } else {
+            &start
+        };
+        if let DocumentRangeEndpoint::InlineMathTree {
+            paragraph_id,
+            position,
+            ..
+        } = chosen
+        {
+            let crate::MathPositionHost::InlineMath { owner_id } = &position.host else {
+                return Err(EditError::InvalidPosition);
+            };
+            self.focus_merged_inline_math_at(
+                paragraph_id,
+                owner_id,
+                position.offset,
+                position.affinity,
+            )?;
+            self.clear_structure_selection_state();
+            self.clear_host_caret_position();
+            return Ok(Effect {
+                selection_changed: true,
+                ..Effect::default()
+            });
+        }
         let visual_affinity = |endpoint: &DocumentRangeEndpoint| match endpoint {
+            DocumentRangeEndpoint::InlineMathTree { position, .. } => match position.affinity {
+                crate::MathPositionAffinity::Downstream => VisualAffinity::Downstream,
+                crate::MathPositionAffinity::Upstream => VisualAffinity::Upstream,
+            },
             DocumentRangeEndpoint::Text(position) => visual_affinity_for(position.affinity),
             DocumentRangeEndpoint::BlockEdge { side, .. } => visual_affinity_for_block_edge(*side),
         };
@@ -670,8 +723,11 @@ impl Session {
             return Err(EditError::InvalidPosition);
         }
         // 端点扩展到整个环境外侧边界，使结构范围与派生列表描述同一范围。
-        let structure_selection =
-            self.normalized_environment_range(&anchor, &focus, &environments)?;
+        let structure_selection = self.normalized_environment_range(
+            DocumentRangeEndpoint::Text(anchor),
+            DocumentRangeEndpoint::Text(focus.clone()),
+            &environments,
+        )?;
         let previous_selection = self.structure_selection.clone();
         let previous_environments = self.selected_block_environments.clone();
         let previous_math_blocks = self.selected_math_blocks.clone();

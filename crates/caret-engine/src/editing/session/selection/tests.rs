@@ -477,6 +477,23 @@ fn vertical_extend_from_block_edge_anchor_keeps_the_covered_equation()
         ..paragraph_start(&after)
     };
 
+    let stale = crate::editing::NavigationGeneration {
+        document_generation: generation.document_generation + 1,
+        ..generation.clone()
+    };
+    let stale_edge = Command::EditorKey(EditorKey::UpArrow {
+        candidate: Some(crate::editing::NavigationCandidate::BlockEdge {
+            block_id: equation_id.clone(),
+            side: Direction::Backward,
+            generation: stale,
+        }),
+        extend: true,
+        structure: false,
+    });
+    let previous = session.structure_selection.clone();
+    assert!(session.run(stale_edge).is_err());
+    assert_eq!(session.structure_selection, previous);
+
     session.run(Command::EditorKey(EditorKey::DownArrow {
         candidate: Some(crate::editing::NavigationCandidate::Document {
             focus: focus.clone(),
@@ -487,7 +504,16 @@ fn vertical_extend_from_block_edge_anchor_keeps_the_covered_equation()
         structure: false,
     }))?;
 
-    // 块外侧边界锚点投影到块前文本位置后仍完整覆盖公式对象，不得清掉结构范围。
+    assert_eq!(
+        session.structure_selection_range(),
+        Some((
+            &DocumentRangeEndpoint::BlockEdge {
+                block_id: equation_id.clone(),
+                side: Direction::Backward
+            },
+            &DocumentRangeEndpoint::Text(focus.clone()),
+        ))
+    );
     assert!(session.has_structure_selection());
     assert_eq!(
         session.selected_math_blocks(),

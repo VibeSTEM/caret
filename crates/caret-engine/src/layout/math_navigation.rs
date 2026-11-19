@@ -353,7 +353,7 @@ fn math_sequence_path_for_text(text_path: &MathTextFlowPath) -> Option<(MathSequ
     MathTreePosition::sequence_boundary_from_text_path(text_path.steps()).ok()
 }
 
-fn vertical_caret_key(
+pub(super) fn vertical_caret_key(
     current: PageCaretGeometry,
     candidate: PageCaretGeometry,
     line_delta: isize,

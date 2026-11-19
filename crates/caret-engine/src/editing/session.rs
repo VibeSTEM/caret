@@ -15,6 +15,8 @@ mod document_position;
 mod formatting;
 mod history;
 mod inline_content;
+mod inline_math_range;
+pub use inline_math_range::InlineMathRangeParts;
 mod keyboards;
 mod math_edit;
 pub use math_edit::{
@@ -471,6 +473,14 @@ impl Session {
     pub fn active_host_caret_position(
         &mut self,
     ) -> Option<HostCaretPosition<HostCaretLocalPosition>> {
+        if let Some((_, endpoint @ DocumentRangeEndpoint::InlineMathTree { .. })) =
+            self.structure_selection_range()
+        {
+            let DocumentCaretPosition::Host(host) = endpoint.as_document_caret().ok()? else {
+                return None;
+            };
+            return Some(host);
+        }
         if let Some(position) = self.host_caret_position.clone() {
             match &position {
                 HostCaretPosition::Before {
@@ -693,7 +703,8 @@ impl Session {
     pub fn structure_selection_anchor(&self) -> Option<&Pos> {
         match &self.structure_selection.as_ref()?.anchor {
             DocumentRangeEndpoint::Text(anchor) => Some(anchor),
-            DocumentRangeEndpoint::BlockEdge { .. } => None,
+            DocumentRangeEndpoint::BlockEdge { .. }
+            | DocumentRangeEndpoint::InlineMathTree { .. } => None,
         }
     }
 
@@ -727,13 +738,17 @@ impl Session {
     /// 安装结构选区，并从范围覆盖结果派生块环境与公式块列表。
     ///
     /// 这是结构选区派生状态的唯一写入入口：端点必须能在当前文档中排序，
-    /// 派生失败时不改变任何选区状态。空覆盖（既没有块环境也没有 Equation/Align）
-    /// 不是结构选区，必须在这里拒绝；否则会出现不可见、无法被删除消费且吞掉
-    /// 后续按键的伪结构范围。
+    /// 行内数学切口须包含可消费的根序列项；其余范围须覆盖块环境或显示公式。
+    /// 校验失败时保留已有选区。
     pub(super) fn install_structure_selection(
         &mut self,
         selection: StructureSelection,
     ) -> Result<(), EditError> {
+        if self.resolve_inline_math_parts(&selection)?.is_some() {
+            self.compare_range_endpoints(&selection.anchor, &selection.focus)?;
+            self.assign_structure_selection_state(selection, Vec::new(), Vec::new());
+            return Ok(());
+        }
         let (start, end) =
             match self.compare_range_endpoints(&selection.anchor, &selection.focus)? {
                 std::cmp::Ordering::Greater => (&selection.focus, &selection.anchor),
@@ -1490,6 +1505,7 @@ impl Session {
             document_changed,
             math_edit: math_edit_position,
             host_caret_position,
+            inline_range,
             valid,
         } = history::restore_history_transition(transition);
         if !valid {
@@ -1594,7 +1610,20 @@ impl Session {
                 }
             }
         }
+        if let Some(range) = inline_range.as_deref() {
+            // 历史切口按稳定宿主和树路径在目标文档重验，再移动撤销栈或写会话。
+            let parts = inline_math_range::resolve_inline_math_parts(
+                &next_document,
+                &next_paragraph_index,
+                range,
+            )?
+            .ok_or(EditError::InvalidPosition)?;
+            if parts.body.focus != selection.focus || selection.anchor != selection.focus {
+                return Err(EditError::InvalidPosition);
+            }
+        }
         let selection_changed = self.selection != selection
+            || self.structure_selection.as_ref() != inline_range.as_deref()
             || self.selection_anchor_visual_affinity != anchor_visual_affinity
             || self.selection_visual_affinity != visual_affinity
             || previous_math_edit != restored_math_edit
@@ -1615,6 +1644,9 @@ impl Session {
         self.pending_inline_style = pending_style;
         self.set_math_edit(restored_math_edit);
         self.clear_structure_selection_state();
+        if let Some(range) = inline_range {
+            self.assign_structure_selection_state(*range, Vec::new(), Vec::new());
+        }
         self.history_state_id = state_id;
         self.advance_history_merge_epoch();
         if document_changed {

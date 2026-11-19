@@ -711,11 +711,23 @@ fn caret_geometry_json(caret: PageCaretGeometry, font_size_centipoints: u16) -> 
 /// `body_rectangles` 以闭包延迟求值，使布局入口在公式分支不额外读取正文选区，而
 /// 交互入口可以保持先校验正文矩形的既有顺序。
 fn selection_rectangles_with_math(
+    mixed: Option<&caret_engine::InlineMathRangeParts>,
     math_context: Option<&MathTextInputContext>,
     math_tree_selection_context: Option<&(MathEditTarget, MathTreePosition, MathTreePosition)>,
     body_rectangles: impl FnOnce() -> Result<Value, String>,
     snapshot: &caret_engine::DocumentLayoutSnapshot,
 ) -> Result<Value, String> {
+    if let Some(parts) = mixed {
+        let mut rectangles = snapshot
+            .selection_geometry(&parts.body)
+            .ok_or_else(|| "layout.stale_selection_geometry".to_owned())?;
+        rectangles.extend(
+            snapshot
+                .math_tree_selection_geometry(&parts.target, &parts.math_anchor, &parts.math_focus)
+                .ok_or_else(|| "layout.invalid_math_tree_selection_geometry".to_owned())?,
+        );
+        return Ok(rectangle_values(rectangles));
+    }
     if let Some(context) = math_context {
         return math_text_selection_json(
             snapshot,
@@ -842,7 +854,12 @@ impl DocumentViewRuntime {
                 );
         }
         let math_context = self.session.math_text_input_context();
-        let math_tree_context = self.session.math_tree_input_context();
+        let mixed = self.session.inline_math_range_parts();
+        let math_tree_context = self.session.math_tree_input_context().or_else(|| {
+            mixed
+                .as_ref()
+                .map(|parts| (parts.target.clone(), parts.math_focus.clone()))
+        });
         let math_tree_selection_context = self.session.math_tree_selection_context();
         let (math_geometry_context, math_tree_geometry_context) = math_geometry_contexts(
             self.composition_preview_session.as_ref(),
@@ -853,6 +870,7 @@ impl DocumentViewRuntime {
             Value::Array(Vec::new())
         } else {
             selection_rectangles_with_math(
+                mixed.as_ref(),
                 math_context.as_ref(),
                 math_tree_selection_context.as_ref(),
                 || {
@@ -967,7 +985,12 @@ impl DocumentViewRuntime {
         let visual_affinity = self.session.selection_visual_affinity();
         let command_input_context = self.session.command_line();
         let math_context = self.session.math_text_input_context();
-        let math_tree_context = self.session.math_tree_input_context();
+        let mixed = self.session.inline_math_range_parts();
+        let math_tree_context = self.session.math_tree_input_context().or_else(|| {
+            mixed
+                .as_ref()
+                .map(|parts| (parts.target.clone(), parts.math_focus.clone()))
+        });
         let math_tree_selection_context = self.session.math_tree_selection_context();
         let math_context_key = math_context.as_ref().map(math_interaction_context);
         let math_tree_context_key = math_tree_context
@@ -1019,6 +1042,7 @@ impl DocumentViewRuntime {
             snapshot,
         )?;
         let rectangles = selection_rectangles_with_math(
+            mixed.as_ref(),
             math_geometry_context.as_ref(),
             math_tree_selection_context.as_ref(),
             || Ok(body_rectangles),

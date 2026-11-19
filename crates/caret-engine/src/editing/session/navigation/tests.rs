@@ -2274,3 +2274,239 @@ fn horizontal_candidate_direction_mismatch_does_not_park_at_equation() {
         Some((equation_id, Direction::Backward))
     );
 }
+
+#[test]
+fn shift_between_paragraph_and_inline_math_root_edits_only_the_selected_items()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (forward, start, copied, remaining) in [(true, 1, "bx", "+y"), (false, 6, "yc", "x+")] {
+        let mut session = Session::new(Document::blank())?;
+        session.run(Command::InsertText("ab".into()))?;
+        session.run(Command::InsertInlineMath("x+y".into()))?;
+        session.run(Command::InsertText("cd".into()))?;
+        let original = session.document().clone();
+        let mut anchor = session.selection().focus.clone();
+        anchor.offset = start;
+        let mut edge = anchor.clone();
+        edge.offset = if forward { 2 } else { 5 };
+        session.run(Command::SetSelection(Some(Selection {
+            anchor: anchor.clone(),
+            focus: edge.clone(),
+        })))?;
+        let key = |right: bool| {
+            Command::EditorKey(if right {
+                EditorKey::RightArrow {
+                    candidate: None,
+                    extend: true,
+                }
+            } else {
+                EditorKey::LeftArrow {
+                    candidate: None,
+                    extend: true,
+                }
+            })
+        };
+        session.run(key(forward))?;
+        assert_eq!(session.selected_text()?, copied);
+        let mut collapse = session.clone();
+        collapse.run(Command::EditorKey(if forward {
+            EditorKey::RightArrow {
+                candidate: None,
+                extend: false,
+            }
+        } else {
+            EditorKey::LeftArrow {
+                candidate: None,
+                extend: false,
+            }
+        }))?;
+        assert!(collapse.structure_selection_range().is_none());
+        assert_eq!(
+            collapse
+                .math_tree_input_context()
+                .ok_or("expected math focus after collapse")?
+                .1
+                .affinity,
+            if forward {
+                crate::editing::MathPositionAffinity::Upstream
+            } else {
+                crate::editing::MathPositionAffinity::Downstream
+            }
+        );
+        session.run(key(!forward))?;
+        assert_eq!(session.selection().anchor, anchor);
+        assert_eq!(session.selection().focus.offset, edge.offset);
+        session.run(key(forward))?;
+        let parts = session
+            .inline_math_range_parts()
+            .ok_or("expected mixed selection")?;
+        let stale = NavigationCandidate::Document {
+            focus: edge.clone(),
+            visual_affinity: caret_layout::VisualAffinity::Downstream,
+            generation: NavigationGeneration {
+                session_id: session.session_id().clone(),
+                document_generation: session.document_generation() + 1,
+                font_generation: 0,
+            },
+        };
+        let history = session.history_state_id();
+        assert!(
+            session
+                .run(Command::EditorKey(EditorKey::RightArrow {
+                    candidate: Some(stale),
+                    extend: true
+                }))
+                .is_err()
+        );
+        assert_eq!(session.history_state_id(), history);
+        assert_eq!(session.inline_math_range_parts().as_ref(), Some(&parts));
+        for replacement in [false, true] {
+            let mut edit = session.clone();
+            if replacement {
+                edit.run(Command::InsertText("Z".into()))?;
+            } else {
+                edit.run(Command::EditorKey(EditorKey::Delete))?;
+            }
+            let Block::Paragraph(p) = &edit.document().body[0] else {
+                return Err("expected paragraph".into());
+            };
+            let text = p
+                .inlines
+                .iter()
+                .map(|node| match node {
+                    ParagraphContent::Math(math) => {
+                        format!("<{}>", caret_math::serialize_tree(&math.math_tree))
+                    }
+                    ParagraphContent::Text(flow) => {
+                        flow.runs.iter().map(|run| run.text.as_str()).collect()
+                    }
+                    _ => String::new(),
+                })
+                .collect::<String>();
+            let insert = if replacement { "Z" } else { "" };
+            let expected = if forward {
+                format!("a{insert}<{remaining}>cd")
+            } else {
+                format!("ab<{remaining}>{insert}d")
+            };
+            assert_eq!(text, expected);
+            let result = edit.document().clone();
+            edit.run(Command::Undo)?;
+            assert_eq!(edit.document(), &original);
+            assert_eq!(edit.inline_math_range_parts().as_ref(), Some(&parts));
+            edit.run(Command::Redo)?;
+            assert_eq!(edit.document(), &result);
+            assert!(edit.structure_selection_range().is_none());
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn visual_candidate_crossing_rtl_inline_math_steps_from_the_near_root_edge()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (mut session, paragraph_id) = session_with_inline_math_in_the_middle("x+y");
+    let after = body_position(&paragraph_id, 5, Affinity::Upstream);
+    let anchor = body_position(&paragraph_id, 6, Affinity::Downstream);
+    let before = body_position(&paragraph_id, 2, Affinity::Downstream);
+    session.run(Command::SetSelection(Some(Selection {
+        anchor: anchor.clone(),
+        focus: after.clone(),
+    })))?;
+
+    // RTL 视觉右移可从 InlineMath 之后跨到逻辑上较早的正文偏移。
+    for expected_offset in [2, 1] {
+        let candidate = document_candidate_for(
+            &session,
+            before.clone(),
+            caret_layout::VisualAffinity::Downstream,
+        );
+        session.run(Command::EditorKey(EditorKey::RightArrow {
+            candidate: Some(candidate),
+            extend: true,
+        }))?;
+        let parts = session
+            .inline_math_range_parts()
+            .ok_or("visual crossing should retain an InlineMath range")?;
+        assert_eq!(parts.math_focus.offset, expected_offset);
+        assert_eq!(parts.body.anchor.offset, 6);
+    }
+    assert_eq!(session.selected_text()?, "+yc");
+
+    // 视觉左移回到正文锚点时，候选不再跨公式，交给共享范围入口收缩。
+    let outside = document_candidate_for(
+        &session,
+        body_position(&paragraph_id, 6, Affinity::Downstream),
+        caret_layout::VisualAffinity::Downstream,
+    );
+    session.run(Command::EditorKey(EditorKey::LeftArrow {
+        candidate: Some(outside),
+        extend: true,
+    }))?;
+    assert_eq!(
+        session
+            .inline_math_range_parts()
+            .ok_or("reverse visual direction should retract one MathTree item")?
+            .math_focus
+            .offset,
+        2
+    );
+    assert_eq!(session.selected_text()?, "yc");
+    Ok(())
+}
+
+#[test]
+fn inline_math_entry_direction_is_independent_of_the_body_selection_anchor()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (mut session, paragraph_id) = session_with_inline_math_in_the_middle("x+y");
+    let anchor = body_position(&paragraph_id, 1, Affinity::Downstream);
+    let focus = body_position(&paragraph_id, 5, Affinity::Upstream);
+    let entered_edge = body_position(&paragraph_id, 2, Affinity::Downstream);
+    session.run(Command::SetSelection(Some(Selection {
+        anchor: anchor.clone(),
+        focus,
+    })))?;
+
+    for expected_offset in [2, 1] {
+        let candidate = document_candidate_for(
+            &session,
+            entered_edge.clone(),
+            caret_layout::VisualAffinity::Downstream,
+        );
+        session.run(Command::EditorKey(EditorKey::LeftArrow {
+            candidate: Some(candidate),
+            extend: true,
+        }))?;
+        assert_eq!(
+            session
+                .inline_math_range_parts()
+                .ok_or("expected mixed InlineMath range")?
+                .math_focus
+                .offset,
+            expected_offset
+        );
+    }
+    assert_eq!(session.selected_text()?, "bx");
+
+    let candidate = document_candidate_for(
+        &session,
+        body_position(&paragraph_id, 5, Affinity::Upstream),
+        caret_layout::VisualAffinity::Upstream,
+    );
+    session.run(Command::EditorKey(EditorKey::RightArrow {
+        candidate: Some(candidate),
+        extend: true,
+    }))?;
+    let parts = session
+        .inline_math_range_parts()
+        .ok_or("reverse direction should restore the prior MathTree extent")?;
+    assert_eq!(parts.math_focus.offset, 2);
+    assert_eq!(session.selected_text()?, "bx+");
+    let range = session
+        .structure_selection_range()
+        .ok_or("expected document-level InlineMath range")?;
+    assert_eq!(
+        range.0,
+        &crate::editing::DocumentRangeEndpoint::Text(anchor)
+    );
+    Ok(())
+}

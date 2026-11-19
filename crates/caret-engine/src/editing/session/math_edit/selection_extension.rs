@@ -182,47 +182,47 @@ impl Session {
     /// `(start, Downstream)`、后侧用 `(end, Upstream)` 才会投影到对象的左/右边缘。
     /// 该编码与 `exit_math_edit_for_navigation` 和 InlineMath 停靠位置一致；若后侧
     /// 用 Downstream，公式位于段落末尾时布局会把 caret 回退到对象左缘。
-    fn inline_math_slot_bounds(
-        &mut self,
+    pub(in crate::editing::session) fn inline_math_slot_bounds(
+        &self,
         paragraph_id: &NodeId,
         math_id: &NodeId,
     ) -> Result<(Pos, Pos), EditError> {
         let story = self
             .story_for_paragraph(paragraph_id)
             .ok_or_else(|| EditError::UnknownParagraph(paragraph_id.to_string()))?;
-        let probe = Pos {
-            story,
-            paragraph_id: paragraph_id.clone(),
-            offset: 0,
-            affinity: Affinity::Downstream,
-        };
-        let start = {
-            let location = self
-                .paragraph_index
-                .get(paragraph_id)
-                .ok_or_else(|| EditError::UnknownParagraph(paragraph_id.to_string()))?;
-            let paragraph = paragraph_at_location(&self.document.body, location)
-                .ok_or_else(|| EditError::UnknownParagraph(paragraph_id.to_string()))?;
-            inline_math_slots(paragraph)?
-                .into_iter()
-                .find(|(_, id)| id == math_id)
-                .map(|(start, _)| start)
-                .ok_or(EditError::InvalidPosition)?
-        };
-        let end = start
-            .checked_add(crate::editing::text_map::OBJECT_REPLACEMENT.len_utf8())
+        let location = self
+            .paragraph_index
+            .get(paragraph_id)
             .ok_or(EditError::InvalidPosition)?;
-        Ok((
-            Pos {
-                offset: start,
-                affinity: Affinity::Downstream,
-                ..probe.clone()
-            },
-            Pos {
-                offset: end,
-                affinity: Affinity::Upstream,
-                ..probe
-            },
-        ))
+        let paragraph = paragraph_at_location(&self.document.body, location)
+            .ok_or(EditError::InvalidPosition)?;
+        slot_bounds(paragraph, &story, math_id)
     }
+}
+
+pub(in crate::editing::session) fn slot_bounds(
+    paragraph: &caret_doc::Paragraph,
+    story: &crate::StoryId,
+    math_id: &NodeId,
+) -> Result<(Pos, Pos), EditError> {
+    let start = inline_math_slots(paragraph)?
+        .into_iter()
+        .find(|(_, id)| id == math_id)
+        .map(|(start, _)| start)
+        .ok_or(EditError::InvalidPosition)?;
+    let end = start
+        .checked_add(crate::editing::text_map::OBJECT_REPLACEMENT.len_utf8())
+        .ok_or(EditError::InvalidPosition)?;
+    let before = Pos {
+        story: story.clone(),
+        paragraph_id: paragraph.id.clone(),
+        offset: start,
+        affinity: Affinity::Downstream,
+    };
+    let after = Pos {
+        offset: end,
+        affinity: Affinity::Upstream,
+        ..before.clone()
+    };
+    Ok((before, after))
 }

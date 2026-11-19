@@ -22,6 +22,7 @@ use caret_layout::{
 };
 use std::{collections::HashMap, ops::Range, sync::Arc};
 
+mod block_navigation;
 mod geometry;
 mod hit;
 mod items;

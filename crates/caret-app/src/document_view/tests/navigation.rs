@@ -411,7 +411,7 @@ fn horizontal_navigation_enters_adjacent_inline_and_display_math_from_both_sides
 }
 
 #[test]
-fn vertical_navigation_enters_and_exits_equation_and_multiline_align_blocks()
+fn vertical_navigation_leaves_math_block_boundary_for_adjacent_visual_paragraph()
 -> Result<(), Box<dyn std::error::Error>> {
     for align in [false, true] {
         let mut document = Document::blank();
@@ -419,87 +419,113 @@ fn vertical_navigation_enters_and_exits_equation_and_multiline_align_blocks()
         let before_id = before.id.clone();
         let after = paragraph_with_text("after");
         let after_id = after.id.clone();
-        let block_id = NodeId::generate();
-        let formula = if align {
-            Block::Align(caret_doc::Align {
-                id: block_id.clone(),
-                rows: ["x", "y"]
-                    .into_iter()
-                    .map(|text| caret_doc::MathAlignRow {
-                        id: NodeId::generate(),
-                        cells: vec![align_text_tree(text)],
-                        extra: BTreeMap::new(),
-                    })
-                    .collect(),
-                extra: BTreeMap::new(),
-            })
-        } else {
-            Block::Equation(caret_doc::Equation {
-                id: block_id.clone(),
-                math_tree: align_text_tree("x"),
-                extra: BTreeMap::new(),
-            })
-        };
+        let (formula, block_id) = formula_block(align);
         document.body = vec![Block::Paragraph(before), formula, Block::Paragraph(after)];
 
-        let mut from_above = DocumentViewRuntime::new(document.clone())?;
-        set_body_caret(&mut from_above, before_id.clone(), 2)?;
-        from_above.move_vertical_caret_json(1, false)?;
-        assert!(from_above.session.math_edit().is_none());
+        use caret_engine::{Direction, DocumentRangeEndpoint};
+        for (approach, side, start, delta, goal, offset, crosses) in [
+            (1, Direction::Backward, &before_id, -1, &before_id, 0, false),
+            (1, Direction::Backward, &before_id, 1, &after_id, 0, true),
+            (
+                -1,
+                Direction::Forward,
+                &after_id,
+                -1,
+                &before_id,
+                "before".len(),
+                true,
+            ),
+            (
+                -1,
+                Direction::Forward,
+                &after_id,
+                1,
+                &after_id,
+                "after".len(),
+                false,
+            ),
+        ] {
+            for extend in [false, true] {
+                let mut view = DocumentViewRuntime::new(document.clone())?;
+                set_body_caret(&mut view, start.clone(), 2)?;
+                view.move_vertical_caret_json(approach, false)?;
+                let boundary = Some((block_id.clone(), side));
+                assert_eq!(view.session.block_boundary_exit(), boundary);
+                view.move_vertical_caret_json(delta, extend)?;
+                let selection = view.session.selection();
+                assert_eq!(
+                    (&selection.focus.paragraph_id, selection.focus.offset),
+                    (goal, offset)
+                );
+                assert!(view.session.math_edit().is_none());
+                assert!(view.session.block_boundary_exit().is_none());
+                if extend && crosses {
+                    let anchor = DocumentRangeEndpoint::BlockEdge {
+                        block_id: block_id.clone(),
+                        side,
+                    };
+                    assert_eq!(
+                        view.session.structure_selection_range(),
+                        Some((
+                            &anchor,
+                            &DocumentRangeEndpoint::Text(selection.focus.clone())
+                        ))
+                    );
+                    view.move_vertical_caret_json(-delta, true)?;
+                    assert!(view.session.structure_selection_range().is_none());
+                    assert_eq!(view.session.block_boundary_exit(), boundary);
+                } else if extend {
+                    // 向块外邻段扩展只覆盖正文，普通选区锚点取该段靠近块的一端。
+                    let anchor_offset = if delta < 0 { "before".len() } else { 0 };
+                    assert_eq!(
+                        (&selection.anchor.paragraph_id, selection.anchor.offset),
+                        (start, anchor_offset)
+                    );
+                    assert!(view.session.structure_selection_range().is_none());
+                } else {
+                    assert_eq!(selection.anchor, selection.focus);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn vertical_navigation_visits_each_neighboring_display_row_and_section_title()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("before");
+    let before_id = before.id.clone();
+    let (first, first_id) = formula_block(false);
+    let (second, second_id) = formula_block(true);
+    let environment = section("title", "body");
+    let (environment_id, title, _) = section_environment_ids(&environment);
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(before), first, second, environment];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    set_body_caret(&mut runtime, before_id, 0)?;
+    for block_id in [&first_id, &second_id] {
+        runtime.move_vertical_caret_json(1, false)?;
         assert_eq!(
-            from_above.session.block_boundary_exit(),
+            runtime.session.block_boundary_exit(),
             Some((block_id.clone(), caret_engine::Direction::Backward))
         );
-        from_above.move_vertical_caret_json(1, false)?;
-        assert!(matches!(
-            from_above.session.math_edit().map(|edit| &edit.target),
-            Some(caret_engine::MathEditTarget::Block {
-                block_id: active,
-                align: active_align,
-            }) if active == &block_id && *active_align == align
-        ));
-        if align {
-            from_above.move_vertical_caret_json(1, false)?;
-            assert!(matches!(
-                from_above.session.math_edit().map(|edit| &edit.target),
-                Some(caret_engine::MathEditTarget::Block { block_id: active, align: true })
-                    if active == &block_id
-            ));
-        }
-        from_above.move_vertical_caret_json(1, false)?;
-        assert!(from_above.session.math_edit().is_none());
-        assert_eq!(from_above.session.selection().focus.paragraph_id, after_id);
-        assert_eq!(
-            from_above.session.block_boundary_exit(),
-            Some((block_id.clone(), caret_engine::Direction::Forward))
-        );
-        from_above.move_vertical_caret_json(-1, false)?;
-        assert!(matches!(
-            from_above.session.math_edit().map(|edit| &edit.target),
-            Some(caret_engine::MathEditTarget::Block { block_id: active, align: active_align })
-                if active == &block_id && *active_align == align
-        ));
-
-        let mut from_below = DocumentViewRuntime::new(document)?;
-        set_body_caret(&mut from_below, after_id.clone(), 2)?;
-        from_below.move_vertical_caret_json(-1, false)?;
-        assert!(from_below.session.math_edit().is_none());
-        assert_eq!(
-            from_below.session.block_boundary_exit(),
-            Some((block_id.clone(), caret_engine::Direction::Forward))
-        );
-        from_below.move_vertical_caret_json(-1, false)?;
-        assert!(matches!(
-            from_below.session.math_edit().map(|edit| &edit.target),
-            Some(caret_engine::MathEditTarget::Block {
-                block_id: active,
-                align: active_align,
-            }) if active == &block_id && *active_align == align
-        ));
-        from_below.move_vertical_caret_json(1, false)?;
-        assert!(from_below.session.math_edit().is_none());
-        assert_eq!(from_below.session.selection().focus.paragraph_id, after_id);
     }
+    runtime.move_vertical_caret_json(1, true)?;
+    assert_eq!(
+        runtime.session.selected_block_environments(),
+        &[environment_id]
+    );
+    assert_eq!(
+        runtime.session.selected_math_blocks(),
+        std::slice::from_ref(&second_id)
+    );
+    assert!(
+        matches!(runtime.session.structure_selection_range(), Some((caret_engine::DocumentRangeEndpoint::BlockEdge {block_id, side: caret_engine::Direction::Backward}, _)) if block_id == &second_id)
+    );
+    assert_eq!(runtime.session.selection().focus.paragraph_id, title);
+    assert_eq!(runtime.session.selection().focus.offset, 0);
+    assert!(runtime.session.block_boundary_exit().is_none());
     Ok(())
 }
 
@@ -2484,17 +2510,10 @@ fn align_vertical_navigation_moves_between_row_and_neighboring_paragraph_edges()
         .session
         .math_text_input_context()
         .ok_or_else(|| std::io::Error::other("Down did not reenter Align"))?;
-    assert_eq!(reentered.focus.path.align_cell(), Some((0, 0)));
+    // 外前在首行左侧，Down 进入下一视觉行，并从页面左端投影到该行起点。
+    assert_eq!(reentered.focus.path.align_cell(), Some((1, 0)));
     assert_eq!(reentered.focus.offset, 0);
 
-    runtime.move_vertical_caret_json(1, false)?;
-    let returned = runtime
-        .session
-        .math_text_input_context()
-        .ok_or_else(|| std::io::Error::other("Down left Align text focus"))?;
-    assert_eq!(returned.focus.path.align_cell(), Some((1, 0)));
-    assert_eq!(returned.focus.offset, 3);
-    assert_align_caret_is_nearest_to_x(&mut runtime, target_x)?;
     runtime.move_vertical_caret_json(1, false)?;
     assert!(runtime.session.math_edit().is_none());
     assert_eq!(
@@ -2506,8 +2525,8 @@ fn align_vertical_navigation_moves_between_row_and_neighboring_paragraph_edges()
         .session
         .math_text_input_context()
         .ok_or_else(|| std::io::Error::other("Up did not reenter Align at its bottom edge"))?;
-    assert_eq!(reentered_bottom.focus.path.align_cell(), Some((1, 0)));
-    assert_eq!(reentered_bottom.focus.offset, "second".len());
+    assert_eq!(reentered_bottom.focus.path.align_cell(), Some((0, 0)));
+    assert_eq!(reentered_bottom.focus.offset, "first".len());
     assert_eq!(runtime.session.document_generation(), generation);
     Ok(())
 }
@@ -5950,5 +5969,127 @@ fn shift_right_from_text_adds_environment_equation_environment_by_document_units
         runtime.session.selected_math_blocks(),
         std::slice::from_ref(&equation_id)
     );
+    Ok(())
+}
+
+#[test]
+fn inline_math_partial_root_selection_publishes_both_parts_and_its_caret()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut view = DocumentViewRuntime::new(Document::blank())?;
+    view.session
+        .run(caret_engine::Command::InsertText("ab".into()))?;
+    view.session
+        .run(caret_engine::Command::InsertInlineMath("x+y".into()))?;
+    view.session
+        .run(caret_engine::Command::InsertText("cd".into()))?;
+    let id = view.session.selection().focus.paragraph_id.clone();
+    for (start, right, expected) in [(1, true, "bx"), (6, false, "yc")] {
+        set_body_caret(&mut view, id.clone(), start)?;
+        view.move_visual_caret_json(right, true)?;
+        let interaction: Value = serde_json::from_str(&view.move_visual_caret_json(right, true)?)?;
+        let parts = view
+            .session
+            .inline_math_range_parts()
+            .ok_or("expected partial formula selection")?;
+        assert_eq!(view.session.selected_text()?, expected);
+        let snapshot = view.current_snapshot()?;
+        let mut rectangles = snapshot
+            .selection_geometry(&parts.body)
+            .ok_or("missing body geometry")?;
+        let math = snapshot
+            .math_tree_selection_geometry(&parts.target, &parts.math_anchor, &parts.math_focus)
+            .ok_or("missing math geometry")?;
+        assert!(!rectangles.is_empty() && !math.is_empty());
+        rectangles.extend(math);
+        let (caret, _) = snapshot
+            .math_tree_caret(&parts.target, &parts.math_focus)
+            .ok_or("missing tree caret")?;
+        assert!(
+            (interaction["caretGeometry"]["xPt"]
+                .as_f64()
+                .ok_or("missing caret x")?
+                - caret.x_pt)
+                .abs()
+                < 1e-8
+        );
+        let full: Value = serde_json::from_str(&view.layout_snapshot_json()?)?;
+        assert_eq!(interaction["selectionRects"], full["selectionRects"]);
+        let projected = interaction["selectionRects"]
+            .as_array()
+            .ok_or("missing selection rectangles")?;
+        assert_eq!(projected.len(), rectangles.len());
+        for (rect, dto) in rectangles.iter().zip(projected) {
+            assert!((dto["x0Pt"].as_f64().ok_or("missing left edge")? - rect.x0_pt).abs() < 1e-8);
+            assert!((dto["x1Pt"].as_f64().ok_or("missing right edge")? - rect.x1_pt).abs() < 1e-8);
+        }
+        view.move_visual_caret_json(!right, true)?;
+        assert!(view.session.inline_math_range_parts().is_none());
+    }
+    Ok(())
+}
+
+#[test]
+fn rtl_visual_arrow_enters_inline_math_from_the_crossed_side()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (boundary, expected_first_offset) in [(10, 1), (13, 2)] {
+        let mut math_tree = inline_math_tree();
+        math_tree
+            .root
+            .content
+            .extend([symbol_content("+"), symbol_content("y")]);
+        let mut paragraph = paragraph_with_text("مرحبا");
+        paragraph
+            .inlines
+            .push(ParagraphContent::Math(caret_doc::InlineMath {
+                id: NodeId::generate(),
+                math_tree,
+                extra: BTreeMap::new(),
+            }));
+        paragraph
+            .inlines
+            .push(ParagraphContent::Text(caret_doc::TextFlow {
+                runs: vec![Run {
+                    text: "شكرا".to_owned(),
+                    language: None,
+                    props: BTreeMap::new(),
+                    extra: BTreeMap::new(),
+                }],
+                extra: BTreeMap::new(),
+            }));
+        let paragraph_id = paragraph.id.clone();
+        let mut document = Document::blank();
+        document.body.push(Block::Paragraph(paragraph));
+        let mut entered = Vec::new();
+        for right in [false, true] {
+            let mut runtime = DocumentViewRuntime::new(document.clone())?;
+            runtime.layout_snapshot_json()?;
+            set_body_caret(&mut runtime, paragraph_id.clone(), boundary)?;
+            runtime.move_visual_caret_json(right, true)?;
+            if let Some(parts) = runtime.session.inline_math_range_parts() {
+                let first_offset = parts.math_focus.offset;
+                assert_eq!(first_offset, expected_first_offset);
+                runtime.move_visual_caret_json(right, true)?;
+                let continued = runtime
+                    .session
+                    .inline_math_range_parts()
+                    .ok_or("same visual direction should continue into MathTree")?;
+                let expected_second_offset = if expected_first_offset == 1 { 2 } else { 1 };
+                assert_eq!(continued.math_focus.offset, expected_second_offset);
+                runtime.move_visual_caret_json(!right, true)?;
+                let reversed = runtime
+                    .session
+                    .inline_math_range_parts()
+                    .ok_or("opposite visual direction should retract the range")?;
+                assert_eq!(reversed.math_focus.offset, expected_first_offset);
+                entered.push((right, first_offset));
+            }
+        }
+        assert_eq!(
+            entered.len(),
+            1,
+            "one visual direction should cross the formula"
+        );
+        assert_eq!(entered[0].1, expected_first_offset);
+    }
     Ok(())
 }

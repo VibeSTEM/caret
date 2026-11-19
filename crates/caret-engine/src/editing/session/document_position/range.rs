@@ -8,7 +8,7 @@ use super::super::{
     HostCaretPosition, Pos, Session, StructureSelection,
 };
 use crate::editing::paragraph_ops::compare_positions;
-use crate::editing::text_map::TextMap;
+use crate::editing::{Selection, text_map::TextMap};
 use caret_doc::{Block, NodeId};
 use caret_structure::{
     DocumentNodeEdge, DocumentNodeKind, compare_document_node_edges, find_document_node,
@@ -50,6 +50,13 @@ impl Session {
         right: &DocumentRangeEndpoint,
     ) -> Result<Ordering, EditError> {
         match (left, right) {
+            (DocumentRangeEndpoint::InlineMathTree { .. }, _)
+            | (_, DocumentRangeEndpoint::InlineMathTree { .. }) => {
+                let snapshot = |endpoint: &DocumentRangeEndpoint| -> Result<super::super::SessionCaretSnapshot, EditError> {
+                    Ok(super::super::SessionCaretSnapshot {session_id:self.session_id.clone(),document_generation:self.document_generation,position:endpoint.as_document_caret()?})
+                };
+                self.compare_caret_snapshots(&snapshot(left)?, &snapshot(right)?)
+            }
             (DocumentRangeEndpoint::Text(left), DocumentRangeEndpoint::Text(right)) => {
                 compare_positions(&self.document.body, &self.paragraph_index, left, right)
             }
@@ -173,6 +180,14 @@ impl Session {
     /// 端点之间只有块对象而没有可截断文字时，两边界折叠到起点，保证返回值按
     /// 文档顺序排列；对象本身由结构选区的块节点列表投影，不伪造文本切口。
     pub fn structure_selection_text_bounds(&self) -> Option<(Pos, Pos)> {
+        if let Some(parts) = self.inline_math_range_parts() {
+            let Selection { anchor, focus } = parts.body;
+            return Some(if anchor.offset <= focus.offset {
+                (anchor, focus)
+            } else {
+                (focus, anchor)
+            });
+        }
         let (start, end) = self.ordered_structure_selection().ok()?;
         let start_text = self.text_endpoint_at_or_after(start)?;
         let end_text = self.text_endpoint_at_or_before(end)?;
@@ -198,6 +213,7 @@ impl Session {
         let selection = self.structure_selection.as_ref()?;
         match &selection.anchor {
             DocumentRangeEndpoint::Text(position) => Some(position.clone()),
+            DocumentRangeEndpoint::InlineMathTree { .. } => None,
             endpoint @ DocumentRangeEndpoint::BlockEdge { side, .. } => {
                 let projected = self.text_endpoint_clamped(endpoint)?;
                 let ordering = self
@@ -223,6 +239,9 @@ impl Session {
         endpoint: &DocumentRangeEndpoint,
     ) -> Option<Pos> {
         match endpoint {
+            DocumentRangeEndpoint::InlineMathTree { .. } => {
+                self.inline_math_range_parts().map(|parts| parts.body.focus)
+            }
             DocumentRangeEndpoint::Text(position) => Some(position.clone()),
             DocumentRangeEndpoint::BlockEdge {
                 side: Direction::Forward,
@@ -252,6 +271,7 @@ impl Session {
         environment_id: &NodeId,
     ) -> bool {
         let node_id = match endpoint {
+            DocumentRangeEndpoint::InlineMathTree { paragraph_id, .. } => paragraph_id,
             DocumentRangeEndpoint::Text(position) => &position.paragraph_id,
             DocumentRangeEndpoint::BlockEdge { block_id, .. } => block_id,
         };
@@ -276,14 +296,13 @@ impl Session {
     /// 使结构选区端点与派生出的环境列表描述同一范围（两个消费者不再各自解释）。
     pub(in crate::editing::session) fn normalized_environment_range(
         &self,
-        anchor: &Pos,
-        focus: &Pos,
+        mut anchor_endpoint: DocumentRangeEndpoint,
+        mut focus_endpoint: DocumentRangeEndpoint,
         environments: &[NodeId],
     ) -> Result<StructureSelection, EditError> {
-        let anchor_is_start =
-            !compare_positions(&self.document.body, &self.paragraph_index, anchor, focus)?.is_gt();
-        let mut anchor_endpoint = DocumentRangeEndpoint::Text(anchor.clone());
-        let mut focus_endpoint = DocumentRangeEndpoint::Text(focus.clone());
+        let anchor_is_start = !self
+            .compare_range_endpoints(&anchor_endpoint, &focus_endpoint)?
+            .is_gt();
         for environment_id in environments {
             if self.endpoint_is_inside_environment(&anchor_endpoint, environment_id) {
                 anchor_endpoint = DocumentRangeEndpoint::BlockEdge {

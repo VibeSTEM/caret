@@ -23,7 +23,7 @@ mod multiline;
 mod navigation;
 mod path;
 mod projection;
-mod selection_extension;
+pub(super) mod selection_extension;
 mod source_commit;
 mod source_draft;
 mod symbol_input;
@@ -1414,7 +1414,7 @@ pub(super) fn find_inline_math<'a>(
     })
 }
 
-fn find_inline_math_mut<'a>(
+pub(super) fn find_inline_math_mut<'a>(
     nodes: &'a mut [ParagraphContent],
     id: &NodeId,
 ) -> Option<&'a mut InlineMath> {

@@ -1272,6 +1272,7 @@ impl Session {
         paragraph_id: &NodeId,
         math_id: &NodeId,
         root_offset: usize,
+        affinity: MathPositionAffinity,
     ) -> Result<(), EditError> {
         let story = self
             .story_for_paragraph(paragraph_id)
@@ -1303,6 +1304,8 @@ impl Session {
             anchor: position.clone(),
             focus: position,
         };
+        // 兼容的正文停靠点固定在 U+FFFC 后侧；公式内部 caret affinity
+        // 独立保存在 MathTreePosition，不能用正文视觉侧替代。
         self.selection_visual_affinity = VisualAffinity::Upstream;
         let host = MathPositionHost::InlineMath {
             owner_id: math_id.clone(),
@@ -1312,7 +1315,7 @@ impl Session {
             host,
             path: path.clone(),
             offset: root_offset,
-            affinity: MathPositionAffinity::Downstream,
+            affinity,
         };
         self.set_math_edit(Some(MathEdit::entering(
             MathEditTarget::Inline {

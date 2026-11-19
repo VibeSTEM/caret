@@ -5,8 +5,8 @@
 
 use super::super::super::Session;
 use crate::editing::{
-    Command, Direction, EditError, Effect, MathEditBranch, NavigationCandidate,
-    NavigationGeneration, NavigationIntent, Selection,
+    Command, Direction, DocumentRangeEndpoint, EditError, Effect, MathEditBranch,
+    NavigationCandidate, NavigationGeneration, NavigationIntent, Selection,
 };
 
 impl Session {
@@ -89,14 +89,18 @@ impl Session {
                     self.focus_math_structure_hit(&hit, generation.font_generation)
                 }
                 None => self.exit_vertical_math_block(direction, extend),
-                Some(NavigationCandidate::Document { .. }) => Err(EditError::InvalidPosition),
+                Some(
+                    NavigationCandidate::BlockEdge { .. } | NavigationCandidate::Document { .. },
+                ) => Err(EditError::InvalidPosition),
             },
             MathEditBranch::Tree { .. } | MathEditBranch::Source => match candidate {
                 Some(NavigationCandidate::Document { generation, .. }) => {
                     self.validate_navigation_generation(&generation)?;
                     Ok(Effect::default())
                 }
-                Some(NavigationCandidate::MathText { .. }) => Err(EditError::InvalidPosition),
+                Some(
+                    NavigationCandidate::BlockEdge { .. } | NavigationCandidate::MathText { .. },
+                ) => Err(EditError::InvalidPosition),
                 Some(NavigationCandidate::MathTextHit { hit, generation }) => {
                     self.validate_navigation_generation(&generation)?;
                     self.validate_math_text_hit(&hit, &generation)?;
@@ -147,20 +151,53 @@ impl Session {
         if self.math_edit.is_some() {
             return Err(EditError::InvalidPosition);
         }
-        if extend
-            && self.has_structure_selection()
-            && self.structure_selection_text_anchor().is_none()
-        {
-            // 文档边缘的块对象没有同侧文本锚点：按文档方向继续扩展，保持已覆盖对象。
-            return self.extend_structure_selection(direction);
-        }
+        let from_block = self.block_boundary_exit().is_some()
+            || matches!(
+                self.structure_selection_range(),
+                Some((DocumentRangeEndpoint::BlockEdge { .. }, _))
+            );
         match candidate {
+            Some(NavigationCandidate::BlockEdge {
+                block_id,
+                side,
+                generation,
+            }) => {
+                self.validate_navigation_generation(&generation)?;
+                self.commit_range_focus(
+                    DocumentRangeEndpoint::BlockEdge { block_id, side },
+                    None,
+                    extend,
+                )
+            }
+            Some(NavigationCandidate::MathTextHit { hit, generation }) if from_block => {
+                self.validate_navigation_generation(&generation)?;
+                self.validate_math_text_hit(&hit, &generation)?;
+                if extend {
+                    return self.extend_vertical_math_target(&hit.target, direction);
+                }
+                self.focus_math_text_hit(&hit, generation.font_generation)
+            }
+            Some(NavigationCandidate::MathTreeHit { hit, generation }) if from_block => {
+                self.validate_navigation_generation(&generation)?;
+                self.validate_math_tree_hit(&hit, &generation)?;
+                if extend {
+                    return self.extend_vertical_math_target(&hit.target, direction);
+                }
+                self.focus_math_structure_hit(&hit, generation.font_generation)
+            }
             Some(NavigationCandidate::Document {
                 focus,
                 visual_affinity,
                 generation,
             }) => {
                 self.validate_navigation_generation(&generation)?;
+                if extend && from_block {
+                    return self.commit_range_focus(
+                        DocumentRangeEndpoint::Text(focus),
+                        Some(visual_affinity),
+                        true,
+                    );
+                }
                 let anchor = if extend {
                     self.structure_selection_text_anchor()
                         .unwrap_or_else(|| self.selection.anchor.clone())
@@ -183,15 +220,34 @@ impl Session {
         }
     }
 
+    /// 文档扩选触及显示公式内容时由 Session 按现有范围协议纳入该宿主。
+    fn extend_vertical_math_target(
+        &mut self,
+        target: &crate::MathEditTarget,
+        side: Direction,
+    ) -> Result<Effect, EditError> {
+        let crate::MathEditTarget::Block { block_id, .. } = target else {
+            return Err(EditError::InvalidPosition);
+        };
+        self.commit_range_focus(
+            DocumentRangeEndpoint::BlockEdge {
+                block_id: block_id.clone(),
+                side,
+            },
+            None,
+            true,
+        )
+    }
+
     fn validate_math_tree_hit(
         &self,
         hit: &crate::PageMathStructureHit,
         generation: &NavigationGeneration,
     ) -> Result<(), EditError> {
-        let Some(current) = &self.math_edit else {
-            return Err(EditError::InvalidPosition);
-        };
-        if current.target != hit.target
+        if self
+            .math_edit
+            .as_ref()
+            .is_some_and(|current| current.target != hit.target)
             || hit.session_id.as_ref() != Some(&generation.session_id)
             || hit.document_generation != generation.document_generation
             || hit.font_generation != generation.font_generation
@@ -206,10 +262,10 @@ impl Session {
         hit: &crate::PageMathTextHit,
         generation: &NavigationGeneration,
     ) -> Result<(), EditError> {
-        let Some(current) = &self.math_edit else {
-            return Err(EditError::InvalidPosition);
-        };
-        if current.target != hit.target
+        if self
+            .math_edit
+            .as_ref()
+            .is_some_and(|current| current.target != hit.target)
             || hit.session_id.as_ref() != Some(&generation.session_id)
             || hit.document_generation != generation.document_generation
             || hit.font_generation != generation.font_generation
