@@ -2440,6 +2440,110 @@ void ShellDocumentInteractionTest::mathTextDragUsesSharedPreviewAndCommitProtoco
     delete surface;
 }
 
+void ShellDocumentInteractionTest::emptyInlineMathFocusRendersInsertionSlotAcrossZoom() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString path = directory.filePath(QStringLiteral("empty-inline-math.cdoc"));
+    QFile document_file(path);
+    QVERIFY(document_file.open(QIODevice::WriteOnly | QIODevice::Text));
+    const QByteArray document = QByteArrayLiteral(R"json({
+        "format":"caret","version":1,
+        "requiredFeatures":["caret.math.content-flow.v2","caret.math.equation","caret.math.inline",
+            "caret.math.syntax.v1","caret.paragraph.content-flow.v1",
+            "caret.paragraph.layout-settings","caret.text.default-font-size"],
+        "media":[],"document":{
+            "globalSettings":{},"body":[{"type":"paragraph","id":"paragraph","inlines":[
+                {"type":"text","runs":[{"text":"A"}]},
+                {"type":"inlineMath","id":"inline-empty-math","mathTree":{
+                    "schemaVersion":3,"root":{"id":"empty-root","content":[]}}},
+                {"type":"text","runs":[{"text":"B"}]}
+            ]}],
+            "pageSections":[{"id":"page-section","props":{}}]
+        }
+    })json");
+    QCOMPARE(document_file.write(document), document.size());
+    document_file.close();
+
+    DocumentInteractionFixture fixture;
+    QVERIFY2(prepareDocumentInteractionFixture(fixture), qPrintable(fixture.error));
+    QSignalSpy open_finished(fixture.layout_view_model,
+                             &caret::LayoutViewModel::documentFileOperationFinished);
+    QVERIFY(open_finished.isValid());
+    const QVariantMap open_result = fixture.layout_view_model->openDocument(path);
+    QVERIFY2(open_result.value(QStringLiteral("valid")).toBool(),
+             qPrintable(open_result.value(QStringLiteral("error")).toString()));
+    QTRY_COMPARE_WITH_TIMEOUT(open_finished.size(), 1, 5000);
+    QVERIFY2(open_finished.first().at(0).toBool(),
+             qPrintable(open_finished.first().at(1).toString()));
+
+    fixture.canvas->setCaretWidthCentipixels(100);
+    fixture.window.requestActivate();
+    fixture.canvas->forceActiveFocus(Qt::OtherFocusReason);
+    QTRY_VERIFY_WITH_TIMEOUT(fixture.canvas->hasActiveFocus(), 3000);
+
+    // 用拖选命中图中 offset=1（"A" 之后、空公式之前）定位插入槽中心。
+    const QVariantMap hit_map = fixture.layout_view_model->dragHitMap(0);
+    QVERIFY2(hit_map.value(QStringLiteral("valid")).toBool(),
+             qPrintable(hit_map.value(QStringLiteral("error")).toString()));
+    QVariantMap boundary;
+    for (const QVariant& value : hit_map.value(QStringLiteral("stops")).toList()) {
+        const QVariantMap stop = value.toMap();
+        if (stop.value(QStringLiteral("position"))
+                .toMap()
+                .value(QStringLiteral("offsetUtf8"))
+                .toString() == QStringLiteral("1")) {
+            boundary = stop;
+            break;
+        }
+    }
+    QVERIFY2(!boundary.isEmpty(), "拖选命中图缺少空公式前的正文边界");
+    const qreal boundary_y_pt = (boundary.value(QStringLiteral("y0Pt")).toReal() +
+                                 boundary.value(QStringLiteral("y1Pt")).toReal()) /
+                                2.0;
+    const QVariantMap placed = fixture.layout_view_model->placeCaretAtPage(
+        0, boundary.value(QStringLiteral("xPt")).toReal(), boundary_y_pt);
+    QVERIFY2(placed.value(QStringLiteral("valid")).toBool(),
+             qPrintable(placed.value(QStringLiteral("error")).toString()));
+    QVERIFY2(placed.value(QStringLiteral("mathTree")).toBool(),
+             "空 InlineMath 插入槽应进入公式编辑");
+    QTRY_COMPARE_WITH_TIMEOUT(fixture.layout_view_model->inlineHighlightRects().size(), 1, 3000);
+    const QVariantMap slot = fixture.layout_view_model->inlineHighlightRects().first().toMap();
+    const QVariantMap caret = fixture.layout_view_model->caretGeometry();
+    const qreal slot_x0 = slot.value(QStringLiteral("x0Pt")).toReal();
+    const qreal slot_x1 = slot.value(QStringLiteral("x1Pt")).toReal();
+    // 12pt 默认字号：槽宽 max(0.5em, 4pt) = 6pt，且以公式 caret 居中。
+    QVERIFY(qAbs((slot_x1 - slot_x0) - 6.0) < 1e-3);
+    QVERIFY(qAbs((slot_x0 + slot_x1) / 2.0 - caret.value(QStringLiteral("xPt")).toReal()) < 1e-3);
+    QTRY_COMPARE_WITH_TIMEOUT(fixture.canvas->inlineHighlightRects().size(), 1, 3000);
+
+    const QColor highlight_color = fixture.canvas->inlineHighlightColor();
+    const qreal sample_x = slot_x0 + 1.5;
+    const qreal sample_y = (slot.value(QStringLiteral("y0Pt")).toReal() +
+                            slot.value(QStringLiteral("y1Pt")).toReal()) /
+                           2.0;
+    const auto pixel_at_document_point = [&fixture](int page_index, const QPointF& point_pt) {
+        const QPointF content = fixture.canvas->documentToContent(page_index, point_pt);
+        const QPointF window_point =
+            fixture.canvas->mapToItem(fixture.window.contentItem(), content);
+        const QImage frame = fixture.window.grabWindow();
+        if (frame.isNull()) {
+            return QColor{};
+        }
+        const qreal scale_x = static_cast<qreal>(frame.width()) / fixture.window.width();
+        const qreal scale_y = static_cast<qreal>(frame.height()) / fixture.window.height();
+        return frame.pixelColor(qFloor(window_point.x() * scale_x),
+                                qFloor(window_point.y() * scale_y));
+    };
+    QTRY_COMPARE_WITH_TIMEOUT(pixel_at_document_point(0, QPointF(sample_x, sample_y)),
+                              highlight_color, 3000);
+
+    // zoom≠1：同一文档点映射到缩放后的内容坐标，槽仍以该高亮色绘制。
+    fixture.canvas->setZoom(2.0);
+    QTRY_COMPARE_WITH_TIMEOUT(fixture.canvas->zoom(), 2.0, 3000);
+    QTRY_COMPARE_WITH_TIMEOUT(pixel_at_document_point(0, QPointF(sample_x, sample_y)),
+                              highlight_color, 3000);
+}
+
 void ShellDocumentInteractionTest::documentInputDeltaKeepsUntouchedPagesAndParagraphs() {
     auto runtime = caret::ffi::new_blank_document_runtime();
     QString source;

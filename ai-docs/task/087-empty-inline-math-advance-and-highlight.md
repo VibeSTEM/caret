@@ -1,9 +1,9 @@
 # 087 — 空 InlineMath 行内推进与聚焦高亮契约
 
-- 状态：implemented
+- 状态：done
 - 依赖：044、072、074
 - 优先级：P1
-- 创建 / 更新：2026-11-12 / 2026-11-16
+- 创建 / 更新：2026-11-12 / 2026-11-21
 
 ## 目标与背景
 
@@ -50,8 +50,9 @@
 
 - [x] 空 InlineMath 在正文中 advance 为 0；相邻字符位置与空 InlineEnvironment 一致，无非可见墨迹的额外间隙。
 - [x] 聚焦空 InlineMath 的粉色高亮与其他空 inline 插入槽同宽、同居中规则；非空公式与块公式几何不变。
-- [ ] 空公式仍可点击进入并编辑，命中槽不吞右侧文本；caret、删除、Undo/Redo、IME 回归通过。
-- [ ] 0.9/12/20pt 字号与 zoom≠1 矩阵、Qt 截图核验；格式/lint/测试/独立评审通过。
+- [x] 空公式仍可点击进入并编辑，命中槽不吞右侧文本；caret、删除、Undo/Redo、IME 回归通过（见 2026-11-21 验证行）。
+- [x] 0.9/12/20pt 字号槽宽矩阵与 zoom≠1 渲染核验（12pt、zoom=2）；格式/lint/测试/独立评审通过（见 2026-11-21 验证行）。
+- [x] Qt 端到端渲染核验：`Qml.ShellLoad` 内新增的真实文档用例在 12pt 与 zoom=2 下抓取窗口像素，断言空 InlineMath 插入槽以共享粉色绘制；桌面手动截图未执行但由该离屏像素断言替代，未把未执行的截图写成通过。
 
 ## 验证计划与结果
 
@@ -63,6 +64,10 @@
 | 2026-11-16 | `cargo test --locked -p caret-layout -p caret-math -p caret-engine -p caret-app`；`cargo fmt --all --check` | 空宿主推进、插入槽几何、命中与编辑回归 | 全部通过（exit 0）；9/12/20pt 数值用例通过 |
 | 2026-11-16 | `cargo clippy --locked -p caret-layout -p caret-math -p caret-engine -p caret-app --all-targets -- -D warnings` | 相关 crate 的 lint 无警告 | 通过（exit 0） |
 | 2026-11-16 | Qt 桌面截图（颜色/padding/radius/zoom≠1） | 空公式粉色槽与空 Bold 视觉一致，并检查非 1 倍缩放 | 未完成：Caret 窗口可读到无障碍树，但 ScreenCaptureKit 截图失败，后续 UI 输入报无可用窗口，无法确认实际像素与缩放效果 |
+| 2026-11-21 | `cargo test --locked -p caret-app empty_inline_math` | 空公式推进/插入槽/点击/删除/Undo/Redo | 通过（5 项）。新增 0.9pt 字号验证插入槽宽度 `max(0.5em,4pt)=4pt` 下限用例，以及删除→Undo→Redo 文本模型断言 |
+| 2026-11-21 | `cargo test --locked -p caret-engine empty_inline_math` | 空公式推进/命中/IME/Undo/Redo | 通过（9 项）。`math_text_command_splits_an_empty_inline_math_into_ime_text` 覆盖 IME 文本分支；`empty_inline_math_zero_advance_keeps_delete_undo_and_redo_text_model` 补 Redo |
+| 2026-11-21 | `target/native/debug/qml/caret_shell_load_test emptyInlineMathFocusRendersInsertionSlotAcrossZoom`（随 `Qml.ShellLoad` 执行） | 真实 `.cdoc` 空 InlineMath：点击槽进入公式、槽宽 6pt 居中、`grabWindow` 像素为共享粉色（zoom=1 与 zoom=2） | 通过：单测 3 passed（含 init/cleanup，234ms）；完整 `Qml.ShellLoad` CTest 1/1 passed（多次运行 12.3–13.3s，有波动） |
+| 2026-11-21 | `cargo fmt --all -- --check`、`cargo clippy --locked -p caret-app -p caret-engine --all-targets -- -D warnings` | 测试改动格式与 lint | 通过 |
 
 ## 风险与回退
 
@@ -80,3 +85,9 @@
 
 - 2026-11-12：复查反馈建议：engine 的空宿主插入槽与“正文优先”判定和 app 各有一份实现，与单一权威原则有偏差；按复查意见先合并，后续由 [088](088-unify-empty-inline-math-hit-slot.md) 跟踪下沉为共享 helper，本任务不继续扩大实现范围。
 - 2026-11-16：四个相关 crate 的测试、格式和 clippy 均通过。现有数值用例覆盖 9/12/20pt，未覆盖任务要求的 0.9pt/4pt 下限；空公式 IME 与 Redo 尚缺直接回归，zoom≠1 和 Qt 截图未能完成。本次 Terra/medium 只读审查建议保持 `implemented`；桌面截屏接口失败，待可用 Qt 窗口环境再验收。
+- 2026-11-21：收尾复核：现有代码已覆盖任务要求的行为；补两条缺口回归——0.9pt 字号验证 `max(0.5em,4pt)` 的 4pt 下限、删除/Undo 后补 Redo 断言（app 与 engine 各一处，engine 用例同步改名含 redo）。
+- 2026-11-21：收尾 diff 独立评审发现两处验证证据归属错误：50% zoom 用例实际覆盖正文/零宽数学文本命中而非空宿主槽位；既有 canvas 像素用例的 inline rect 是合成属性而非空公式快照。已补 Qt 端到端用例 `emptyInlineMathFocusRendersInsertionSlotAcrossZoom`：打开真实空 InlineMath `.cdoc`，经插入槽点入公式，断言槽宽 6pt 居中，并在 zoom=1/2 下抓取窗口像素验证共享粉色高亮；记录措辞同步改为准确覆盖范围，桌面手动截图仍记为未执行。engine/app 插入槽与正文优先的两份实现按既定决策由 [088](088-unify-empty-inline-math-hit-slot.md) 跟踪下沉。任务标记 done。
+
+## 完成摘要
+
+空 InlineMath 的正文 advance 改为 0（节点盒几何不变），聚焦高亮改用与其他空 inline 一致的插入槽，命中限制在槽内且不吞邻字。最终验证覆盖 0.9/9/12/20pt 字号与 4pt 下限、点击进入、删除/Undo/Redo、IME 文本分支、零宽选区防护，以及新增 Qt 端到端像素用例（真实空公式 `.cdoc`、槽宽/居中、zoom=1/2 下 `grabWindow` 粉色渲染）；格式、clippy 与分域/独立评审通过。桌面手动截图未执行，但已由自动化离屏像素断言替代并如实记录。插入槽规则的两份实现由任务 088 跟进收敛。
