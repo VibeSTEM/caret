@@ -194,7 +194,11 @@ pub struct MathMatrixStyle {
     pub column_gap: MathMatrixColumnGap,
 }
 
-/// 旧或未验证节点缺少矩阵样式时使用的兼容默认值。
+/// 矩阵样式的构造期默认值。
+///
+/// 未经持久化校验的构造期/中间 `Matrix` 节点未设置 `style` 时，布局与序列化按规范
+/// `matrix` 环境处理；有效 `.cdoc` 的 `Matrix` 节点仍必须显式带 `style`，此常量不是
+/// 持久化格式的兼容路径。
 pub const DEFAULT_MATH_MATRIX_STYLE: MathMatrixStyle = MathMatrixStyle {
     name: "matrix",
     left_delimiter: None,
@@ -290,8 +294,6 @@ pub struct MathAccent {
     pub command: &'static str,
     /// 对应的布局语义。
     pub rendering: MathAccentRendering,
-    /// 兼容 `accent_char` 的历史显示字符；方向重音的此字符不同于排版组合符。
-    pub legacy_character: Option<char>,
 }
 
 /// 根据规范属性值查找重音映射。
@@ -535,27 +537,12 @@ const INTEGRAL_KINDS: &[&str] = &["int", "iint", "iiint", "oint", "oiint"];
 /// 重音节点的规范属性值与其 TeX 命令和布局语义。
 macro_rules! accent {
     ($value:literal, $rendering:expr) => {
-        accent!(
-            $value,
-            $rendering,
-            default_legacy_accent_character($rendering)
-        )
-    };
-    ($value:literal, $rendering:expr, $legacy_character:expr) => {
         MathAccent {
             value: $value,
             command: $value,
             rendering: $rendering,
-            legacy_character: $legacy_character,
         }
     };
-}
-
-const fn default_legacy_accent_character(rendering: MathAccentRendering) -> Option<char> {
-    match rendering {
-        MathAccentRendering::Mark { character, .. } => Some(character),
-        _ => None,
-    }
 }
 
 pub const MATH_ACCENTS: &[MathAccent] = &[
@@ -695,8 +682,7 @@ pub const MATH_ACCENTS: &[MathAccent] = &[
             character: '\u{20D6}',
             placement: MathAccentPlacement::Over,
             brace: false
-        },
-        Some('←')
+        }
     ),
     accent!(
         "overrightarrow",
@@ -704,8 +690,7 @@ pub const MATH_ACCENTS: &[MathAccent] = &[
             character: '\u{20D7}',
             placement: MathAccentPlacement::Over,
             brace: false
-        },
-        Some('→')
+        }
     ),
     accent!(
         "overleftrightarrow",
@@ -713,8 +698,7 @@ pub const MATH_ACCENTS: &[MathAccent] = &[
             character: '\u{20E1}',
             placement: MathAccentPlacement::Over,
             brace: false
-        },
-        Some('↔')
+        }
     ),
     accent!(
         "underleftarrow",
@@ -722,8 +706,7 @@ pub const MATH_ACCENTS: &[MathAccent] = &[
             character: '\u{20EE}',
             placement: MathAccentPlacement::Under,
             brace: false
-        },
-        Some('←')
+        }
     ),
     accent!(
         "underrightarrow",
@@ -731,8 +714,7 @@ pub const MATH_ACCENTS: &[MathAccent] = &[
             character: '\u{20EF}',
             placement: MathAccentPlacement::Under,
             brace: false
-        },
-        Some('→')
+        }
     ),
     accent!(
         "underleftrightarrow",
@@ -740,8 +722,7 @@ pub const MATH_ACCENTS: &[MathAccent] = &[
             character: '\u{034D}',
             placement: MathAccentPlacement::Under,
             brace: false
-        },
-        Some('↔')
+        }
     ),
     accent!("cancel", MathAccentRendering::CancelForward),
     accent!("bcancel", MathAccentRendering::CancelBackward),
@@ -755,7 +736,6 @@ pub const MATH_ACCENTS: &[MathAccent] = &[
             placement: MathAccentPlacement::Over,
             brace: false,
         },
-        legacy_character: Some('\u{030A}'),
     },
     accent!("not", MathAccentRendering::Negate),
 ];

@@ -176,6 +176,8 @@ endfunction()
 # Windows 无控制台时 QtTest 默认写调试输出；强制 stderr 使 CTest 能展示断言。
 # 普通 QML 测试超时为 20s；sanitizer 下放宽到 120s，防止工具或平台
 # 挂起拖垮整个 CI。实际超时和失败证据记录在 Caret 的对应任务中。
+# 第三个参数是额外的 label 列表（分号分隔，缺省只有 qml），第四个参数（可选）
+# 是测试函数实参；label 去重后再写入测试属性，其他调用方保持原行为。
 function(caret_add_qml_test name target)
   set(_caret_qml_timeout 20)
   if(_caret_sanitizers)
@@ -184,6 +186,7 @@ function(caret_add_qml_test name target)
   set(_caret_qml_labels qml)
   if(ARGC GREATER 2)
     list(APPEND _caret_qml_labels "${ARGV2}")
+    list(REMOVE_DUPLICATES _caret_qml_labels)
   endif()
   set(_caret_qml_arguments)
   if(ARGC GREATER 3)

@@ -648,6 +648,7 @@ impl Writer {
     }
 
     fn matrix(&mut self, node: &MathNode) {
+        // 未持久化校验的构造期兜底；缺省语义见 `DEFAULT_MATH_MATRIX_STYLE`。
         let style = match Self::attribute(node, "style") {
             "" => DEFAULT_MATH_MATRIX_STYLE.name,
             style => style,

@@ -7,6 +7,14 @@ use std::process::Command;
 use crate::command::{cargo, run, run_scanner};
 use crate::paths::native_build_dir;
 
+/// CTest 排除条件：`names` 经 `-E` 按测试名排除，`labels` 经 `-LE` 按 label
+/// 排除；同时提供时 CTest 一并应用。按 label 排除让同类测试只登记一次条件。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct CtestExclusion<'a> {
+    pub(super) names: Option<&'a str>,
+    pub(super) labels: Option<&'a str>,
+}
+
 pub(super) fn test_all() -> Result<(), Box<dyn Error>> {
     // native integration 会构建并验证真实窗口，不排除 runner 自身的回归测试。
     cargo("test", ["--locked", "--workspace", "--target-dir"])
@@ -28,12 +36,12 @@ pub(super) fn test_native() -> Result<(), Box<dyn Error>> {
 }
 
 /// 在指定 CMake 树执行完整 CTest；环境由调用方准备（常规树、覆盖率或
-/// sanitizer 各有差异）。
+/// sanitizer 各有差异），排除条件按测试名和/或 label 应用。
 pub(super) fn run_ctest_in(
     native_dir: &Path,
     envs: Vec<(std::ffi::OsString, std::ffi::OsString)>,
     description: &str,
-    exclude: Option<&str>,
+    exclude: Option<CtestExclusion<'_>>,
 ) -> Result<(), Box<dyn Error>> {
     let cmake = caret_build::resolve_cmake()?;
     let ctest = cmake.with_file_name(caret_build::exe_name("ctest"));
@@ -45,7 +53,12 @@ pub(super) fn run_ctest_in(
     test.current_dir(native_dir)
         .args(["--output-on-failure", "--no-tests=error"]);
     if let Some(exclude) = exclude {
-        test.args(["-E", exclude]);
+        if let Some(names) = exclude.names {
+            test.args(["-E", names]);
+        }
+        if let Some(labels) = exclude.labels {
+            test.args(["-LE", labels]);
+        }
     }
     run(description, test)
 }

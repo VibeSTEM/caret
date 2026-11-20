@@ -64,8 +64,10 @@ fn sanitizer_profiles_keep_checks_enabled() {
 
 #[test]
 fn ctest_exclusions_are_limited_to_reported_linux_qt_thread_conflicts() {
-    let expected =
-        Some(r"^(Qml\.ShellLoad|Qml\.MathTextDrag|Qml\.Close.*|App\.HeadlessWindowLoads)$");
+    let expected = Some(CtestExclusion {
+        names: Some(r"^App\.HeadlessWindowLoads$"),
+        labels: Some(r"^qt-qml-runtime$"),
+    });
     assert_eq!(
         ctest_exclusion(SanitizerProfile::Thread, SanitizerPlatform::Linux),
         expected

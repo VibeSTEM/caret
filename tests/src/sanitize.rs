@@ -4,7 +4,7 @@ use std::error::Error;
 use std::path::Path;
 use std::process::Command;
 
-use crate::build::run_ctest_in;
+use crate::build::{CtestExclusion, run_ctest_in};
 use crate::command::run;
 use crate::paths::{repository_root, target_root};
 
@@ -102,11 +102,28 @@ fn sanitize_profile(profile: SanitizerProfile) -> Result<(), Box<dyn Error>> {
 /// 新增的 9 个 Qml.Close* 复用同一个 caret_shell_load_test（qml/CMakeLists.txt），
 /// 同样会初始化 QML 引擎，因此与既有启动测试同类；run 44426253052 的 job
 /// 135231750091 是首次 ubuntu TSan 失败，run 44646139582 再次失败，run
-/// 44665955367 的 job 136055176276 报 9 个 Qml.Close 失败 / 17 个测试。只跳过
-/// Linux TSan 中的这些测试，其余检查仍运行；Qt 更新或启用带 TSan 插桩的 Qt 后复查。
-fn ctest_exclusion(profile: SanitizerProfile, platform: SanitizerPlatform) -> Option<&'static str> {
-    (profile == SanitizerProfile::Thread && platform == SanitizerPlatform::Linux)
-        .then_some(r"^(Qml\.ShellLoad|Qml\.MathTextDrag|Qml\.Close.*|App\.HeadlessWindowLoads)$")
+/// 44665955367 的 job 136055176276 报 9 个 Qml.Close 失败 / 17 个测试。
+///
+/// 会初始化 QML 引擎或创建窗口的 `caret_shell_load_test` 用例统一带
+/// `qt-qml-runtime` label（Qml.ShellLoad、Qml.MathTextDrag 和 9 个 Qml.Close*），
+/// 这里按 label 排除，新增同类 QML 测试只需加 label，不必再扩展排除表。
+/// `Qml.PreferencesWithoutRuntime` 只构造 ViewModel、不创建引擎，保持运行；
+/// `Qml.FormatCheck` 同样保持运行。App.HeadlessWindowLoads 不经过
+/// caret_shell_load_test，仍按名字排除。
+///
+/// 只跳过 Linux TSan 中的这些测试，其余检查仍运行。复查条件：Qt 提供 TSan
+/// 插桩或上游给出结论后复跑 Linux TSan；冲突确认消失时移除这里的 label 排除
+/// （连同 App.HeadlessWindowLoads 名字项一起复查），在此之前保留排除。
+fn ctest_exclusion(
+    profile: SanitizerProfile,
+    platform: SanitizerPlatform,
+) -> Option<CtestExclusion<'static>> {
+    (profile == SanitizerProfile::Thread && platform == SanitizerPlatform::Linux).then_some(
+        CtestExclusion {
+            names: Some(r"^App\.HeadlessWindowLoads$"),
+            labels: Some(r"^qt-qml-runtime$"),
+        },
+    )
 }
 
 /// 确认 Windows 动态 ASan 在 Qt 模块之前初始化，避免未插桩 DLL 的启动期分配被误报。

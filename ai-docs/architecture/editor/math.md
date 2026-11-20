@@ -51,7 +51,7 @@ Caret 数学树保留 TeX 原子与符号顺序，不解析成代数关系或运
 | `Accent.accent` | `hat`、`check`、`breve`、`acute`、`grave`、`tilde`、`bar`、`vec`、`dot`、`ddot`、`dddot`、`ddddot`、`widehat`、`widetilde`、`overline`、`underline`、`overbrace`、`underbrace`、`overleftarrow`、`overrightarrow`、`overleftrightarrow`、`underleftarrow`、`underrightarrow`、`underleftrightarrow`、`cancel`、`bcancel`、`xcancel`、`boxed`、`ring`、`not`。持久值 `ring` 只由 `\mathring` 输入并规范导出；`\ring` 仍不受支持。 |
 | `Delimited.left/right`、`SizedDelimiter.text` | `empty`；`char:` 后接 `(`、`)`、`[`、`]`、竖线、`/`、`<`、`>`；或 `named:` 后接 `{`、`}`、竖线、`langle`、`rangle`、`lfloor`、`rfloor`、`lceil`、`rceil`、`lvert`、`rvert`、`lVert`、`rVert`、`vert`、`Vert`、`uparrow`、`downarrow`、`Uparrow`、`Downarrow`、`updownarrow`、`Updownarrow`、`backslash`、`lgroup`、`rgroup`、`lmoustache`、`rmoustache`。TeX 别名 `\{`、`\lbrace`、`\}`、`\rbrace` 和反斜杠加竖线的命令先规范化为上述编码；它们不是额外的文档值。 |
 | `SizedDelimiter.size` | `big`、`Big`、`bigg`、`Bigg`。 |
-| `Matrix.style` | `matrix`、`pmatrix`、`bmatrix`、`Bmatrix`、`vmatrix`、`Vmatrix`、`cases`、`array`、`aligned`、`split`。描述符同时定义自动定界符、列对齐、单元格字号、列距和是否带 array 列规格。`columns` 字段始终存在且可含 `l`、`c`、`r` 和竖线；只有 `array` 会从 TeX 读取和导出列规格。`gathered` 不属于受支持值。顶层 `Align` 仍固定使用 `aligned` 环境，并保留它自己的尾空行规则。 |
+| `Matrix.style` | `matrix`、`pmatrix`、`bmatrix`、`Bmatrix`、`vmatrix`、`Vmatrix`、`cases`、`array`、`aligned`、`split`。描述符同时定义自动定界符、列对齐、单元格字号、列距和是否带 array 列规格。`style` 与 `columns` 均为必填字段；`columns` 可含 `l`、`c`、`r` 和竖线（其它样式也始终持久化该字段）；只有 `array` 会从 TeX 读取和导出列规格。`gathered` 不属于受支持值。顶层 `Align` 仍固定使用 `aligned` 环境，并保留它自己的尾空行规则。 |
 
 公式源码中的 `em` / `mu` 小数长度解析为 `.cdoc` 的整数分子、正整数分母和 `em` 单位；序列化从同一有理数格式化实现生成规范 TeX。解析最多接受 18 位数字；序列化的小数最多输出 18 位小数并截断、不舍入。由于总位数限制，部分序列化结果不能再次由当前解析器读取。该精度和单位转换属于源码边界，不是新的持久属性值域。
 

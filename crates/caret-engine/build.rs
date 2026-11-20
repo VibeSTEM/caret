@@ -65,7 +65,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     generated.push_str("        }\n    }\n");
 
-    generated.push_str("    /// 返回旧快照省略 prefix 字段时使用的兼容缺省值。\n    pub fn wire_default_prefix(self) -> &'static str {\n        match self {\n");
+    generated.push_str("    /// 返回该模式的共享协议默认前缀。\n    pub fn wire_default_prefix(self) -> &'static str {\n        match self {\n");
     for mode in modes {
         let variant = required_string(mode, "variant")?;
         let default_prefix = rust_string(required_string(mode, "defaultPrefix")?)?;

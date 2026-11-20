@@ -176,54 +176,9 @@ pub fn text_operator_limits(name: &str) -> Option<bool> {
         .map(|(_, limits)| *limits)
 }
 
-const fn is_ring_accent(accent: &caret_doc::MathAccent) -> bool {
-    matches!(accent.value.as_bytes(), [b'r', b'i', b'n', b'g'])
-}
-
-const fn legacy_accent_count(accents: &[caret_doc::MathAccent]) -> usize {
-    let mut count = 0;
-    let mut index = 0;
-    while index < accents.len() {
-        if !is_ring_accent(&accents[index]) {
-            count += 1;
-        }
-        index += 1;
-    }
-    count
-}
-
-const LEGACY_ACCENT_COUNT: usize = legacy_accent_count(caret_doc::MATH_ACCENTS);
-
-const fn legacy_accent_values<const N: usize>(
-    accents: &[caret_doc::MathAccent],
-) -> [&'static str; N] {
-    let mut values = [""; N];
-    let mut source = 0;
-    let mut target = 0;
-    while source < accents.len() {
-        if !is_ring_accent(&accents[source]) {
-            values[target] = accents[source].command;
-            target += 1;
-        }
-        source += 1;
-    }
-    values
-}
-
-const LEGACY_ACCENT_VALUES: [&str; LEGACY_ACCENT_COUNT] =
-    legacy_accent_values(caret_doc::MATH_ACCENTS);
-
-/// 兼容保留的原始 accent 命令清单，由文档契约派生并排除 `mathring` 特例。
-pub const ACCENTS: &[&str] = &LEGACY_ACCENT_VALUES;
-
 /// 重音命令名到文档属性值；`\mathring` 存为 `ring`。
 pub fn accent_attribute(command: &str) -> Option<&'static str> {
     caret_doc::math_accent_by_command(command).map(|accent| accent.value)
-}
-
-/// 重音属性值对应的组合字符或装饰字符。`None` 表示由规则线或特殊绘制实现。
-pub fn accent_char(accent: &str) -> Option<char> {
-    caret_doc::math_accent_by_value(accent)?.legacy_character
 }
 
 /// 文档定界符编码对应的显示字符；`empty` 返回 `None`。
@@ -299,23 +254,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn accents_match_document_values_without_accepting_the_ring_shorthand() {
-        const LEGACY_API_TYPE_CHECK: &[&str] = ACCENTS;
-        let expected: Vec<_> = caret_doc::MATH_ACCENTS
-            .iter()
-            .filter(|accent| !is_ring_accent(accent))
-            .map(|accent| accent.command)
-            .collect();
-        assert_eq!(LEGACY_API_TYPE_CHECK, expected.as_slice());
-        assert!(!ACCENTS.contains(&"ring"));
-        for accent in ACCENTS.iter().copied() {
-            assert!(caret_doc::math_accent_by_command(accent).is_some());
-        }
+    fn accent_command_lookup_keeps_the_mathring_alias() {
         assert_eq!(accent_attribute("mathring"), Some("ring"));
         assert_eq!(accent_attribute("ring"), None);
-        assert_eq!(accent_char("overleftarrow"), Some('←'));
-        assert_eq!(accent_char("overrightarrow"), Some('→'));
-        assert_eq!(accent_char("overleftrightarrow"), Some('↔'));
     }
 
     #[test]
