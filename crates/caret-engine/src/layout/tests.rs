@@ -4577,7 +4577,7 @@ fn empty_inline_math_zero_advance_across_font_sizes() {
 }
 
 #[test]
-fn empty_inline_math_zero_advance_keeps_delete_and_undo_text_model()
+fn empty_inline_math_zero_advance_keeps_delete_undo_and_redo_text_model()
 -> Result<(), Box<dyn std::error::Error>> {
     let document = inline_math_document(empty_inline_math_host());
     let paragraph_id = match &document.body[0] {
@@ -4612,6 +4612,11 @@ fn empty_inline_math_zero_advance_keeps_delete_and_undo_text_model()
     assert!(paragraph.inlines.iter().any(|inline| {
         matches!(inline, ParagraphContent::Math(math) if math.math_tree.root.content.is_empty())
     }));
+    session.run(Command::Redo)?;
+    let Block::Paragraph(paragraph) = &session.document().body[0] else {
+        panic!("paragraph should stay after redo");
+    };
+    assert_eq!(paragraph_plain_text(paragraph), "AB");
     Ok(())
 }
 

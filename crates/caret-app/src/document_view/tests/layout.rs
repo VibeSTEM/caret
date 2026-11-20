@@ -2519,7 +2519,8 @@ fn focus_empty_inline_math(
 #[test]
 fn empty_inline_math_focus_publishes_the_shared_insertion_slot()
 -> Result<(), Box<dyn std::error::Error>> {
-    for font_size_centipoints in [900u16, 1200, 2000] {
+    // 0.9pt 的 0.5em 低于 4pt，用于验证插入槽宽度下限；9/12/20pt 覆盖常规字号。
+    for font_size_centipoints in [90u16, 900, 1200, 2000] {
         let (mut runtime, paragraph_id) = empty_inline_math_runtime(font_size_centipoints)?;
         focus_empty_inline_math(&mut runtime, &paragraph_id)?;
         let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
@@ -2696,14 +2697,16 @@ fn empty_inline_math_click_hits_the_slot_without_swallowing_following_text()
 }
 
 #[test]
-fn empty_inline_math_zero_advance_keeps_delete_and_undo() -> Result<(), Box<dyn std::error::Error>>
-{
+fn empty_inline_math_zero_advance_keeps_delete_undo_and_redo()
+-> Result<(), Box<dyn std::error::Error>> {
     let (mut runtime, paragraph_id) = empty_inline_math_runtime(1200)?;
     focus_empty_inline_math(&mut runtime, &paragraph_id)?;
     runtime.delete_backward_json()?;
     assert_eq!(paragraph_plain_text(runtime.document()), "AB");
     runtime.undo_json()?;
     assert_eq!(paragraph_plain_text(runtime.document()), "A\u{fffc}B");
+    runtime.redo_json()?;
+    assert_eq!(paragraph_plain_text(runtime.document()), "AB");
     Ok(())
 }
 

@@ -37,6 +37,7 @@ class ShellDocumentInteractionTest final : public ShellTestBase {
     void insertReplacementClearsSelectionAndPublishesInteractionChange();
     void crossPageDragPreviewIncludesIntermediatePages();
     void mathTextDragUsesSharedPreviewAndCommitProtocol();
+    void emptyInlineMathFocusRendersInsertionSlotAcrossZoom();
     void documentInputDeltaKeepsUntouchedPagesAndParagraphs();
     void invalidDocumentFileStatusPreservesThePublishedProjection();
     void interactionResponseErrorsRefreshAutoSaveDeadline();
