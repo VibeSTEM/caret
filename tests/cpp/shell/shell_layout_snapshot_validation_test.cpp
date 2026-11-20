@@ -30,16 +30,23 @@ void ShellLayoutSnapshotValidationTest::commandLineProtocolDescriptionMatchesCod
     QCOMPARE(parsed.value(QStringLiteral("prefix")).toString(), QStringLiteral("\\"));
     QCOMPARE(parsed.value(QStringLiteral("cursorUtf16")).toInt(), 1);
 
-    const auto accepts = [&parsed, &error](const QString& mode, const QString& prefix) {
-        return caret::layout_snapshot::parse_command_line_state(
-            QJsonObject{{QStringLiteral("active"), true},
-                        {QStringLiteral("mode"), mode},
-                        {QStringLiteral("prefix"), prefix},
-                        {QStringLiteral("query"), QString{}},
-                        {QStringLiteral("cursor"), 0},
-                        {QStringLiteral("selected"), 0},
-                        {QStringLiteral("candidates"), QJsonArray{}}},
-            parsed, error);
+    // 有效快照始终输出 mode、prefix 与 cursorUtf16；只有 commandLine 整体缺省才使用默认结果。
+    const auto command_line = [](const QString& mode, const QString& prefix) {
+        return QJsonObject{{QStringLiteral("active"), true},
+                           {QStringLiteral("mode"), mode},
+                           {QStringLiteral("prefix"), prefix},
+                           {QStringLiteral("query"), QString{}},
+                           {QStringLiteral("cursor"), 0},
+                           {QStringLiteral("cursorUtf16"), static_cast<qint64>(prefix.size())},
+                           {QStringLiteral("selected"), 0},
+                           {QStringLiteral("candidates"), QJsonArray{}}};
+    };
+    const auto parse = [&parsed, &error](const QJsonObject& value) {
+        error.clear();
+        return caret::layout_snapshot::parse_command_line_state(value, parsed, error);
+    };
+    const auto accepts = [&command_line, &parse](const QString& mode, const QString& prefix) {
+        return parse(command_line(mode, prefix));
     };
     const QList<QPair<QString, QString>> valid_modes{
         {QStringLiteral("command"), QStringLiteral("\\")},
@@ -53,15 +60,35 @@ void ShellLayoutSnapshotValidationTest::commandLineProtocolDescriptionMatchesCod
         QVERIFY2(accepts(mode, prefix), qPrintable(error));
     }
     QVERIFY(!accepts(QStringLiteral("unknown"), QStringLiteral("\\")));
+    QCOMPARE(error, QStringLiteral("layout.invalid_command_line"));
     QVERIFY(accepts(QStringLiteral("defaultFontScope"), QStringLiteral("\\defaultfont ")));
-    QVERIFY(!caret::layout_snapshot::parse_command_line_state(
-        QJsonObject{{QStringLiteral("active"), true},
-                    {QStringLiteral("mode"), QStringLiteral("defaultFontLanguage")},
-                    {QStringLiteral("query"), QString{}},
-                    {QStringLiteral("cursor"), 0},
-                    {QStringLiteral("selected"), 0},
-                    {QStringLiteral("candidates"), QJsonArray{}}},
-        parsed, error));
+
+    for (const QString& field :
+         {QStringLiteral("mode"), QStringLiteral("prefix"), QStringLiteral("cursorUtf16")}) {
+        QJsonObject missing_required =
+            command_line(QStringLiteral("command"), QStringLiteral("\\"));
+        missing_required.remove(field);
+        QVERIFY2(!parse(missing_required),
+                 qPrintable(QStringLiteral("缺少必填字段 %1 仍被接受").arg(field)));
+        QCOMPARE(error, QStringLiteral("layout.invalid_command_line"));
+    }
+    for (const QString& field :
+         {QStringLiteral("mode"), QStringLiteral("prefix"), QStringLiteral("cursorUtf16")}) {
+        QJsonObject wrong_type = command_line(QStringLiteral("command"), QStringLiteral("\\"));
+        wrong_type.insert(field, true);
+        QVERIFY2(!parse(wrong_type),
+                 qPrintable(QStringLiteral("必填字段 %1 类型错误仍被接受").arg(field)));
+        QCOMPARE(error, QStringLiteral("layout.invalid_command_line"));
+    }
+    QJsonObject mismatched_cursor = command_line(QStringLiteral("math"), QStringLiteral("\\"));
+    mismatched_cursor.insert(QStringLiteral("cursorUtf16"), 0);
+    QVERIFY(!parse(mismatched_cursor));
+    QCOMPARE(error, QStringLiteral("layout.invalid_command_line"));
+    QJsonObject omitted_scope_prefix =
+        command_line(QStringLiteral("defaultFontScope"), QStringLiteral("\\defaultfont Latin "));
+    omitted_scope_prefix.remove(QStringLiteral("prefix"));
+    QVERIFY(!parse(omitted_scope_prefix));
+    QCOMPARE(error, QStringLiteral("layout.invalid_command_line"));
 }
 
 #ifdef CARET_ENABLE_APP
@@ -170,26 +197,26 @@ void ShellLayoutSnapshotValidationTest::
     invalid_command_cursor.insert(QStringLiteral("cursorUtf16"), 6);
     QVERIFY(!caret::layout_snapshot::parse_command_line_state(
         invalid_command_cursor, parsed_command_line, command_line_error));
-    const QJsonObject omitted_scope_prefix{
-        {QStringLiteral("active"), true},
-        {QStringLiteral("mode"), QStringLiteral("defaultFontScope")},
-        {QStringLiteral("query"), QString{}},
-        {QStringLiteral("cursor"), 0},
-        {QStringLiteral("selected"), 0},
-        {QStringLiteral("candidates"), QJsonArray{}}};
-    QVERIFY(caret::layout_snapshot::parse_command_line_state(
-        omitted_scope_prefix, parsed_command_line, command_line_error));
-    QCOMPARE(parsed_command_line.value(QStringLiteral("prefix")).toString(),
-             QStringLiteral("\\defaultfont "));
-    const QJsonObject omitted_language_prefix{
-        {QStringLiteral("active"), true},
-        {QStringLiteral("mode"), QStringLiteral("defaultFontLanguage")},
-        {QStringLiteral("query"), QString{}},
-        {QStringLiteral("cursor"), 0},
-        {QStringLiteral("selected"), 0},
-        {QStringLiteral("candidates"), QJsonArray{}}};
-    QVERIFY(!caret::layout_snapshot::parse_command_line_state(
-        omitted_language_prefix, parsed_command_line, command_line_error));
+    for (const QString& field :
+         {QStringLiteral("mode"), QStringLiteral("prefix"), QStringLiteral("cursorUtf16")}) {
+        QJsonObject missing_command_line_field = root;
+        QJsonObject command_line = root.value(QStringLiteral("commandLine")).toObject();
+        command_line.remove(field);
+        missing_command_line_field.insert(QStringLiteral("commandLine"), command_line);
+        QVERIFY2(reject(missing_command_line_field), qPrintable(field));
+    }
+    QJsonObject snapshot_without_command_line = root;
+    snapshot_without_command_line.remove(QStringLiteral("commandLine"));
+    caret::layout_snapshot::ParsedLayoutSnapshot parsed_without_command_line;
+    QString without_command_line_error;
+    QVERIFY(caret::layout_snapshot::parse(QJsonDocument(snapshot_without_command_line),
+                                          parsed_without_command_line, without_command_line_error));
+    QCOMPARE(parsed_without_command_line.command_line.value(QStringLiteral("mode")).toString(),
+             QStringLiteral("command"));
+    QCOMPARE(parsed_without_command_line.command_line.value(QStringLiteral("prefix")).toString(),
+             QStringLiteral("\\"));
+    QCOMPARE(parsed_without_command_line.command_line.value(QStringLiteral("cursorUtf16")).toInt(),
+             1);
 
     QJsonObject invalid_partial = root;
     invalid_partial.insert(QStringLiteral("partial"), QStringLiteral("yes"));

@@ -1612,6 +1612,9 @@ fn incomplete_or_malformed_math_nodes_are_rejected() -> Result<(), Box<dyn std::
         json!({"id": "root", "kind": "fraction", "attributes": {"style": "frac"}, "children": []}),
         json!({"id": "root", "kind": "text", "text": "中文", "attributes": {"style": "text"}, "children": []}),
         json!({"id": "root", "kind": "matrix", "attributes": {"style": "equation", "columns": ""}, "children": []}),
+        // Matrix 节点的 style 与 columns 都是必填属性；缺任一都必须按格式错误拒绝。
+        json!({"id": "root", "kind": "matrix", "attributes": {"columns": ""}, "children": []}),
+        json!({"id": "root", "kind": "matrix", "attributes": {"style": "matrix"}, "children": []}),
         json!({"id": "root", "kind": "hline", "children": []}),
     ] {
         let mut envelope = blank_envelope()?;

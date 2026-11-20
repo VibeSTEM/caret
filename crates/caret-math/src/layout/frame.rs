@@ -45,7 +45,7 @@ pub struct MathColor {
 impl MathColor {
     /// 解析 `#rrggbb`。
     pub fn parse_hex(value: &str) -> Option<Self> {
-        let hex = value.strip_prefix('#').unwrap_or(value);
+        let hex = value.trim_prefix('#');
         if hex.len() != 6 || !hex.is_ascii() {
             return None;
         }

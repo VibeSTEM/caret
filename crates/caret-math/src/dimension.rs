@@ -11,7 +11,7 @@ pub(crate) fn parse_em(raw: &str) -> Option<(i128, i128)> {
     let number = number.trim();
     let (negative, digits) = match number.strip_prefix('-') {
         Some(rest) => (true, rest.trim()),
-        None => (false, number.strip_prefix('+').unwrap_or(number).trim()),
+        None => (false, number.trim_prefix('+').trim()),
     };
     let (whole, fraction) = digits.split_once('.').unwrap_or((digits, ""));
     if whole.is_empty() && fraction.is_empty()

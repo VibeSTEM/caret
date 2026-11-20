@@ -6,8 +6,10 @@ use std::process::Command;
 use crate::command::run;
 use crate::paths::{repository_root, target_root};
 
-/// Miri 只随 nightly 发布；固定日期，升级记录在所属基础设施任务中。
-const MIRI_NIGHTLY: &str = "nightly-2026-09-15";
+/// Miri 只随 nightly 发布；固定日期，本次升级记录见任务 104。
+/// 2026-09-22 是 1.100 开发周期内、已验证 `str::trim_prefix` 稳定且 `miri`
+/// 组件可用的 nightly；相比旧日期只升级到满足 API 边界的最近版本。
+const MIRI_NIGHTLY: &str = "nightly-2026-09-22";
 /// 在 Miri 语义内运行一组 Cargo 测试目标。
 fn miri_test(args: &[&str]) -> Result<(), Box<dyn Error>> {
     let mut test = Command::new("cargo");

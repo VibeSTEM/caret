@@ -135,6 +135,6 @@
 | 101 | native 架构 | [native 边界协议与渲染期重复校验收敛](task/101-native-protocol-and-render-revalidation.md) | P2 | 093 | L | done |
 | 102 | 质量清理 | [Brooks sweep 后续收敛项](task/102-sweep-followup-convergence.md) | P2 | 093、095 | M | done |
 | 103 | 工具链 | [Rust 1.100 工具链升级与 Nightly sanitizer 恢复](task/103-rust-1-100-upgrade.md) | P0 | 001、006、070 | M | done |
-| 104 | 工具链 | [Rust 1.100 与质量清理的后续项](task/104-rust-1-100-followups.md) | P2 | 103 | M | planned |
+| 104 | 工具链 | [Rust 1.100 与质量清理的后续项](task/104-rust-1-100-followups.md) | P2 | 103 | M | implemented |
 
 分类描述任务主题；里程碑和实施边界写在对应任务中。任务拆分、状态变更及执行记录以各任务文档为准。

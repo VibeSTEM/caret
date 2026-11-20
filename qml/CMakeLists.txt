@@ -201,8 +201,11 @@ if(BUILD_TESTING)
       target_link_libraries(caret_shell_load_test PRIVATE ws2_32 userenv ntdll)
     endif()
   endif()
-  caret_add_qml_test(Qml.ShellLoad caret_shell_load_test)
-  caret_add_qml_test(Qml.MathTextDrag caret_shell_load_test qml
+  # 下列 caret_shell_load_test 用例会初始化 QML 引擎或创建窗口；qt-qml-runtime
+  # label 供 Linux TSan 按类排除（见 tests/src/sanitize.rs）。PreferencesWithoutRuntime
+  # 只构造 PreferencesViewModel、不创建引擎，保持运行，不加该 label。
+  caret_add_qml_test(Qml.ShellLoad caret_shell_load_test "qml;qt-qml-runtime")
+  caret_add_qml_test(Qml.MathTextDrag caret_shell_load_test "qml;qt-qml-runtime"
                      mathTextDragUsesSharedPreviewAndCommitProtocol)
   # 该聚合测试在 Ubuntu CI 超过通用 20 秒阈值；按 21 个窗口 fixture 的独立重放
   # 留出余量（本地 macOS 约 12s，CI 余量按 60s 设置）。
@@ -212,23 +215,23 @@ if(BUILD_TESTING)
   if(CARET_ENABLE_APP)
     caret_add_qml_test(Qml.PreferencesWithoutRuntime caret_shell_load_test qml
                        preferencesWithoutRuntimeRejectChangesAndKeepDefaults)
-    caret_add_qml_test(Qml.CloseUnedited caret_shell_load_test qml
+    caret_add_qml_test(Qml.CloseUnedited caret_shell_load_test "qml;qt-qml-runtime"
                        closingAnUneditedWindowClosesImmediately)
-    caret_add_qml_test(Qml.CloseCancelEdited caret_shell_load_test qml
+    caret_add_qml_test(Qml.CloseCancelEdited caret_shell_load_test "qml;qt-qml-runtime"
                        cancellingEditedDocumentCloseKeepsChanges)
-    caret_add_qml_test(Qml.CloseDiscardEdited caret_shell_load_test qml
+    caret_add_qml_test(Qml.CloseDiscardEdited caret_shell_load_test "qml;qt-qml-runtime"
                        discardingEditedDocumentClosesWithoutSaving)
-    caret_add_qml_test(Qml.CloseSaveEdited caret_shell_load_test qml
+    caret_add_qml_test(Qml.CloseSaveEdited caret_shell_load_test "qml;qt-qml-runtime"
                        savingEditedDocumentBeforeClosePersistsChanges)
-    caret_add_qml_test(Qml.CloseAutoSaveFlush caret_shell_load_test qml
+    caret_add_qml_test(Qml.CloseAutoSaveFlush caret_shell_load_test "qml;qt-qml-runtime"
                        autoSaveFlushCompletesBeforeClosing)
-    caret_add_qml_test(Qml.CloseAutoSaveFailure caret_shell_load_test qml
+    caret_add_qml_test(Qml.CloseAutoSaveFailure caret_shell_load_test "qml;qt-qml-runtime"
                        autoSaveFailureReopensCloseConfirmation)
-    caret_add_qml_test(Qml.CloseInFlightSaveFailure caret_shell_load_test qml
+    caret_add_qml_test(Qml.CloseInFlightSaveFailure caret_shell_load_test "qml;qt-qml-runtime"
                        closeRequestDuringFailedSaveDoesNotReopenConfirmation)
-    caret_add_qml_test(Qml.CloseSaveConflict caret_shell_load_test qml
+    caret_add_qml_test(Qml.CloseSaveConflict caret_shell_load_test "qml;qt-qml-runtime"
                        saveConflictKeepsWindowAndRecoveryCopy)
-    caret_add_qml_test(Qml.CloseRecoveryWriteFailure caret_shell_load_test qml
+    caret_add_qml_test(Qml.CloseRecoveryWriteFailure caret_shell_load_test "qml;qt-qml-runtime"
                        recoveryWriteFailureReopensCloseConfirmation)
   endif()
 

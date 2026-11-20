@@ -175,19 +175,23 @@ bool parse_geometry_rectangles(const QJsonValue& value, const QVariantList& page
 }
 
 bool parse_command_line(const QJsonValue& value, QVariantMap& result, QString& error) {
-    const QString default_mode_text = command_line_wire_default_mode();
-    const QString default_prefix_text = command_line_wire_default_prefix(default_mode_text);
-    result = {{protocol_field(QStringLiteral("Active")), false},
-              {protocol_field(QStringLiteral("Mode")), default_mode_text},
-              {protocol_field(QStringLiteral("Prefix")), default_prefix_text},
-              {protocol_field(QStringLiteral("Query")), QString{}},
-              {protocol_field(QStringLiteral("Cursor")), 0},
-              {protocol_field(QStringLiteral("CursorUtf16")), default_prefix_text.size()},
-              {protocol_field(QStringLiteral("Preedit")), QString{}},
-              {protocol_field(QStringLiteral("PreeditCursorUtf16")), 0},
-              {protocol_field(QStringLiteral("Selected")), 0},
-              {protocol_field(QStringLiteral("Candidates")), QVariantList{}}};
+    // commandLine 整体缺省是手写/测试快照表示「无活动命令行」的哨兵；Rust 生产快照
+    // 始终包含 commandLine，这不是旧快照兼容路径。对象存在时 Mode/Prefix/CursorUtf16
+    // 必填；Preedit 仅在活动分支输出，故保持可选；Cursor/CodeFontFamily 已由 Rust
+    // 两端始终输出，后续如需彻底关闭缺省容忍可一并收紧。
     if (value.isUndefined()) {
+        const QString default_mode_text = command_line_wire_default_mode();
+        const QString default_prefix_text = command_line_wire_default_prefix(default_mode_text);
+        result = {{protocol_field(QStringLiteral("Active")), false},
+                  {protocol_field(QStringLiteral("Mode")), default_mode_text},
+                  {protocol_field(QStringLiteral("Prefix")), default_prefix_text},
+                  {protocol_field(QStringLiteral("Query")), QString{}},
+                  {protocol_field(QStringLiteral("Cursor")), 0},
+                  {protocol_field(QStringLiteral("CursorUtf16")), default_prefix_text.size()},
+                  {protocol_field(QStringLiteral("Preedit")), QString{}},
+                  {protocol_field(QStringLiteral("PreeditCursorUtf16")), 0},
+                  {protocol_field(QStringLiteral("Selected")), 0},
+                  {protocol_field(QStringLiteral("Candidates")), QVariantList{}}};
         return true;
     }
     if (!value.isObject()) {
@@ -215,10 +219,8 @@ bool parse_command_line(const QJsonValue& value, QVariantMap& result, QString& e
     qsizetype preedit_cursor_position_utf16 = 0;
     if (!active.isBool() || !query.isString() ||
         (!cursor.isUndefined() && !nonnegative_index(cursor, cursor_position)) ||
-        !nonnegative_index(selected, selected_index) || !candidates.isArray() ||
-        (!mode.isUndefined() && !mode.isString()) ||
-        (!prefix.isUndefined() && !prefix.isString()) ||
-        (!cursor_utf16.isUndefined() && !nonnegative_index(cursor_utf16, cursor_position_utf16)) ||
+        !nonnegative_index(selected, selected_index) || !candidates.isArray() || !mode.isString() ||
+        !prefix.isString() || !nonnegative_index(cursor_utf16, cursor_position_utf16) ||
         (!preedit.isUndefined() && !preedit.isString()) ||
         (!code_font_family.isUndefined() && !code_font_family.isString()) ||
         (!preedit_cursor_utf16.isUndefined() &&
@@ -231,25 +233,19 @@ bool parse_command_line(const QJsonValue& value, QVariantMap& result, QString& e
         error = QStringLiteral("layout.invalid_command_line");
         return false;
     }
-    const QString normalized_mode = mode.toString(default_mode_text);
-    const QString mode_default_prefix_text = command_line_wire_default_prefix(normalized_mode);
-    const QString normalized_prefix = prefix.toString(mode_default_prefix_text);
+    const QString normalized_mode = mode.toString();
+    const QString normalized_prefix = prefix.toString();
     if (!command_line_wire_valid(normalized_mode, normalized_prefix)) {
         error = QStringLiteral("layout.invalid_command_line");
         return false;
     }
     const QString normalized_preedit = preedit.toString();
-    if (cursor_utf16.isUndefined()) {
-        cursor_position_utf16 = normalized_prefix.size() +
-                                QString::fromUtf8(query_utf8.constData(), cursor_position).size();
-    } else {
-        const qsizetype expected_cursor_utf16 =
-            normalized_prefix.size() +
-            QString::fromUtf8(query_utf8.constData(), cursor_position).size();
-        if (cursor_position_utf16 != expected_cursor_utf16) {
-            error = QStringLiteral("layout.invalid_command_line");
-            return false;
-        }
+    const qsizetype expected_cursor_utf16 =
+        normalized_prefix.size() +
+        QString::fromUtf8(query_utf8.constData(), cursor_position).size();
+    if (cursor_position_utf16 != expected_cursor_utf16) {
+        error = QStringLiteral("layout.invalid_command_line");
+        return false;
     }
     if (preedit_cursor_position_utf16 > normalized_preedit.size()) {
         error = QStringLiteral("layout.invalid_command_line");

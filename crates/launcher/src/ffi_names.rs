@@ -12,7 +12,7 @@ pub(crate) fn is_caret_ffi_staticlib(name: &str) -> bool {
     else {
         return false;
     };
-    let stem = stem.strip_prefix("lib").unwrap_or(stem);
+    let stem = stem.trim_prefix("lib");
     stem == "caret_ffi" || stem.starts_with("caret_ffi-")
 }
 

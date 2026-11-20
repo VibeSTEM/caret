@@ -902,7 +902,7 @@ fn source_gap_is_tex_comment(source: &str, offset: usize, start: usize, end: usi
         let line_end = comment.find(['\r', '\n']).unwrap_or(comment.len());
         remaining = &comment[line_end..];
         if let Some(after_cr) = remaining.strip_prefix('\r') {
-            remaining = after_cr.strip_prefix('\n').unwrap_or(after_cr);
+            remaining = after_cr.trim_prefix('\n');
         } else if let Some(after_lf) = remaining.strip_prefix('\n') {
             remaining = after_lf;
         }
@@ -1940,7 +1940,7 @@ impl<'s> Parser<'s> {
             }
             "mathrm" | "mathbf" | "mathit" | "mathsf" | "mathtt" | "mathbb" | "mathcal"
             | "mathfrak" | "mathscr" | "boldsymbol" | "pmb" => {
-                let style = name.strip_prefix("math").unwrap_or(name);
+                let style = name.trim_prefix("math");
                 self.skip_space();
                 let children = if self.peek() == Some('{') {
                     self.bump();

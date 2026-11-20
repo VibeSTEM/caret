@@ -1147,6 +1147,7 @@ impl Converter<'_> {
     }
 
     fn matrix(&mut self, node: &MathNode, style: Style) -> Fragment {
+        // 未持久化校验的构造期兜底；缺省语义见 `DEFAULT_MATH_MATRIX_STYLE`。
         let kind = match Self::attribute(node, "style") {
             "" => DEFAULT_MATH_MATRIX_STYLE.name,
             other => other,
