@@ -1,6 +1,6 @@
 # 数学公式
 
-更新日期：2026-11-20。本文是 Caret 数学文档模型、LaTeX 子集、公式编辑语义和字体选择的唯一权威。公式与表格之间的工作边界见[专题索引](math-and-table.md)。
+更新日期：2026-11-21。本文是 Caret 数学文档模型、LaTeX 子集、公式编辑语义和字体选择的唯一权威。公式与表格之间的工作边界见[专题索引](math-and-table.md)。
 
 ## 公式节点与 LaTeX 语义
 
@@ -61,11 +61,22 @@ Caret 数学树保留 TeX 原子与符号顺序，不解析成代数关系或运
 
 已知 `MathNodeKind` 必须满足当前 schema 定义的操作数数量、槽类型、原子文本和属性值域；缺失/多余操作数、错误槽类型或非法属性属于格式错误，打开时拒绝，不降级成 Opaque 或 SafePreview。MathTree 的 `schemaVersion` 高于当前版本同样按格式错误拒绝，不做向前兼容，不进入 Opaque 或只读 SafePreview；更低版本与遗留源码字段按既有规则拒绝。无法识别的未来 kind 属于未知节点类型，只有在其原始节点边界可无损保留、宿主位置可可靠定位时才按未知节点进入只读 SafePreview；否则拒绝打开。未知语义不可由当前公式布局或编辑器猜测。数学节点结构验证是存储与模型的同一契约，布局和编辑不得各自推断更宽松的结构。
 
+## 共享片段转换
+
+`caret-math` 的 `MathFragment` 是所有数学子语言入口共用的唯一转换边界：Markdown/TeX 文档适配器、公式源码输入和富剪贴板都应由它完成“源码 ↔ 规范模型/规范 TeX”转换，不建立第二套 AST、第二套序列化器或外层格式依赖。外层公式定界符的识别与生成、源位置和格式诊断由各适配器自己处理；`parse` 只对可选的合法外层定界符作容忍，并在定界符/环境与宿主种类不符时报告 `InputKindMismatch`。
+
+- `MathFragment::parse(source, kind)`：解析并约束宿主种类；`Inline`/`Equation` 得到 `MathTree`，`Align` 得到 `Align`。`from_math` 接收已有的规范模型并维持同一宿主种类不变式；`kind`/`math`/`into_math` 供消费者读取。解析失败保留结构化分类：语法错误与字节偏移、输入超长/过深/节点超限、公式内的编号命令、以及定界符/环境与宿主种类不匹配。
+- `MathFragment::to_tex()`：从规范模型生成规范 TeX 正文。对解析器产生或编辑器维护、且尺寸在规范 TeX 精度预算内的标准模型，输出可被当前解析器再次读取且是序列化不动点；尺寸超出预算时返回 `UnrepresentableDimension` 而不是写出不可回读的 TeX。检查式序列化不保证任意手工构造的 schema 合法模型都落在可表达子集内（尤其是自定义 `MathNode.text` 组合与退化结构），调用方应从 `parse` 或编辑器模型获得输入。
+- 检查式序列化先按当前 schema 校验树形、已知节点属性、深度/节点/负载限制和 ID 唯一性，再逐层检查 TeX 无法无损表达的元数据与技术预算。失败返回模型路径（content/operand/environmentChild/textRun/align row/cell）与原因，不静默删除内容；转换失败不修改输入模型，一次转换只报告首个损失。
+- 目前作为损失拒绝的已知情况：任意层级的 `extra` 扩展字段（含 SoftBreak 与 TextFlow Run）；`Opaque` 内容；TextFlow Run 的 `props`/`language`/`extra`；零 Run 的 TextFlow；行内环境的主题模板引用、未知实例属性、缺少 `fontFamily` 的 Font 环境，以及 `serif`/`sans-serif`/`monospace` 之外的 Font 字体族；空白/支柱尺寸超出规范 TeX 的精度预算或序列化算术溢出。透明 Row/Style 包装、空根 flow、空 Group、空 Align/空 cell 由规范序列化归一化（有行为测试）；空操作数槽位沿用既有规范序列化归一化，不在片段层单独断言。ID 与源位置不参与片段身份；片段校验不替代文档级 InlineMath/Equation/Align 宿主规则。
+- 本节的 `MathFragment` 指源码转换结果；[画布高亮](../interface/canvas-highlighting.md)中同名概念指排版/分页的公式几何片段，两者不是同一类型。
+- 047/049/公式源码输入与 091 的实际接入由各自任务验收；剪贴板的完整 Caret 结构往返仍由版本化 MIME 承载，不以 TeX 片段冒充无损结构复制。
+
 ## 解析、排版与字体
 
 公式后端是工作区内的 `caret-math` crate，选型依据见[研究 010](../../research/010-typst-math-layout.md)：
 
-- **解析与导出**：`caret-math` 提供共享的数学片段转换边界，将受支持 TeX 数学语法转换为 `MathTree` / `Align`，并从规范树生成规范 TeX。序列化遇到不可表达的语义或扩展字段必须返回结构化损失，不得静默删减；checked API 的实现由任务 092 验收。Markdown、完整 TeX 文档适配器、显式公式源码输入和剪贴板纯文本投影复用此能力；外层分隔符、文档结构、源位置与转换诊断归调用方，不为不同入口复制数学 parser、serializer 或 AST。该接口不是完整 TeX 文档 parser，也不执行用户宏。编辑 TextFlow 不经此转换边界；显式源码编辑才使用临时 TeX 草稿和会话映射。树与草稿无法无歧义对齐，或导出无法表达格式与扩展元数据时，返回明确错误并保留有效状态。
+- **解析与导出**：`caret-math` 提供共享的数学片段转换边界，将受支持 TeX 数学语法转换为 `MathTree` / `Align`，并从规范树生成规范 TeX。序列化遇到不可表达的语义或扩展字段必须返回结构化损失，不得静默删减；checked 转换边界见[共享片段转换](#共享片段转换)（任务 092）。Markdown、完整 TeX 文档适配器、显式公式源码输入和剪贴板纯文本投影复用此能力；外层分隔符、文档结构、源位置与转换诊断归调用方，不为不同入口复制数学 parser、serializer 或 AST。该接口不是完整 TeX 文档 parser，也不执行用户宏。编辑 TextFlow 不经此转换边界；显式源码编辑才使用临时 TeX 草稿和会话映射。树与草稿无法无歧义对齐，或导出无法表达格式与扩展元数据时，返回明确错误并保留有效状态。
 - **排版**：`layout/` 移植自 Typst v0.15.1 的数学排版，度量来自 OpenType MATH 表，经 `read-fonts` / `skrifa` 读取。`Align` 的显示布局在调用期间适配成数学后端的 `aligned` 矩阵，由数学表格适配器计算对齐列与行距；Equation 是单行单格的显示公式，Align 是多行多格的显示公式；两者都不转存为 Caret 文档表格。行框和网格纯几何由共享的 `caret-grid-layout` 计算，正文布局与数学宿主向它提供测量结果和行距策略；文档表格以后也复用同一层。嵌套 matrix/cases 保持数学自身排版，不继承宿主正文行高。移植文件的来源与修改记录在文件头，见[源码署名](../../standards/source-attribution.md)。
 - **输出**：`MathLayout` 独立产出 Glyph、Rule、Line、Rectangle 和 MathNodeBox 项及其几何；页面布局将这些项适配到 Caret 页面快照，并让绘制、命中和光标共用几何。InlineMath 作为行内对象参与正文段落行框；Equation 作为一行一格、Align 作为多行多格使用正文基础行框和共享网格推进。超出行框的上标、分数等由 Natural、Multiple、AtLeast、Exactly 规则处理。数学 caret 使用宿主的正文基础行高，并锚定 MathNodeBox 或 MathText 当前视觉行的真实基线；上下标等结构保留相对基线偏移，多行文本岛按当前视觉行取基线。Exactly 按宿主行距固定推进，逐行溢出裁切必须与行身份、绘制、命中和 caret 共用同一几何。Equation/Align 的块前后间距沿用普通段落的相邻间距合并规则。空公式宿主（InlineMath 根、Equation 根与 Align cell 根）保留非零 MathNodeBox 作为命中、插入点和 caret 的布局锚点，但不输出内部必填槽使用的描边 Rectangle；分数、脚本、根式等内部必填空槽仍绘制该矩形。这个区别属于稳定的树布局角色，与当前焦点无关。空宿主参与行内流时另有行内推进契约：空 InlineMath 的 `MathLayout.inline_advance` 为 0（与空 InlineEnvironment 一致，不在正文中留下不可见间隙），非空 InlineMath 与显示公式使用排版宽度；聚焦空 InlineMath 的内联环境高亮使用与其它空行内环境相同的插入槽（字号相关、以公式 caret 居中），其命中区同样限制在插入槽内且不吞掉相邻正文点击。Equation/Align 的分页与块几何不受该推进字段影响。SVG/PNG 不是文档模型，也不是交互路径。
 - **缓存**：`MathLayoutEngine` 按公式内容、字号、样式与字体缓存排版结果；页面布局服务负责组合和复用。
