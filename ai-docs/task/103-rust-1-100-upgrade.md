@@ -88,7 +88,8 @@
 | 2026-11-20 | `cargo test --locked -p caret-tests sanitize` | sanitizer 排除表断言 | 通过（7 项） |
 | 2026-11-20 | `cargo lint --check` | 通过 | 通过（含 clippy、cargo-machete、CMake/layering、qmllint、clang-tidy、include-cleaner、cppcheck）；独立评审与 final review 修复后再次通过 |
 | 2026-11-20 | 本机 `cargo sanitize`（macOS 27.2.1；只完成 ASan+UBSan profile，TSan profile 未执行） | sanitizer 构建与抑制文件可用 | ASan+UBSan 插桩 native 树构建、CTest 均执行；新增 `implementation_callback_rpc` 抑制实际命中 2 次 / 5224 字节（issue 证据 run：44426253052 job 135231750091、44646139582 job 135989089454、44665955367 job 136055176276；macOS 日志的 10 个分配全部被新增 Qt/FSEvents 模式覆盖）。本机另有 3 个纯系统帧泄漏使 `Qml.ShellLoad`、`Qml.CloseRecoveryWriteFailure`、`App.HeadlessWindowLoads` 失败：libobjc 类初始化（libdispatch 线程）与 CoreGraphics `CGCMSConverterConvertColorComponents`/字形渲染；栈中无 caret 帧，且本分支未改 QML/native 渲染代码，判断为本机 macOS 版本差异下的既有系统泄漏，不据此扩大抑制范围 |
-| — | Nightly `sanitizer matrix`（Linux TSan、macOS ASan/LSan） | 恢复绿色 | 待下一轮 Nightly 复验（本机结果见上一行，不能替代 CI） |
+| 2026-11-20 | PR [#153](https://github.com/VibeSTEM/caret/pull/153) / Actions run [44735158384](https://github.com/VibeSTEM/caret/actions/runs/44735158384) | PR CI 通过 | 全部通过：cargo check/build、format、clippy、cmake、layering、machete、qmllint、clang-tidy/includes/cppcheck、audit、math-backend；selector self-test 按路径规则跳过 |
+| — | Nightly `sanitizer matrix`（Linux TSan、macOS ASan/LSan） | 恢复绿色 | 待合并后下一轮 Nightly 复验（本机结果见上一行，不能替代 CI） |
 
 ## 风险与回退
 
@@ -112,7 +113,7 @@
 工具链升级、Cargo 1.100 build-dir 适配、Nightly sanitizer 修复、`MathTree` 解码向前兼容清理和可选优化已实现；`str::trim_prefix` 在确认固定 Miri nightly 尚未稳定后回退。仓库内验证通过：`cargo fmt --all -- --check`、`cargo format --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo test --workspace --locked`（1914 项 + native CTest 20/20）、`cargo lint --check`、`cargo test -p caret-tests sanitize`、干净 target 与显式 `--target` 的 launcher 构建、Miri 固定 nightly 的 `caret-app` `--lib`/`--tests` 编译检查。分领域评审与未参与实现的只读 final review 均完成，发现项（显式 target 的 staticlib 位置、测试断言、文档同步、trim_prefix 与 Miri nightly 冲突）已处理并复验。
 
 未完成 / 外部待补：
-- PR CI 与合并后下一轮 Nightly `sanitizer matrix`（Linux TSan、macOS ASan/LSan）尚未运行，Nightly「恢复绿色」不能以本机结果代替。
+- PR #153 CI 已通过；合并后下一轮 Nightly `sanitizer matrix`（Linux TSan、macOS ASan/LSan）尚未运行，Nightly「恢复绿色」不能以本机结果代替。
 - 本机 macOS 27.2.1 的 ASan+UBSan 仍报告 3 个纯系统帧泄漏（libobjc/CoreGraphics），未扩大抑制范围；若 CI runner 出现同类栈需要新的证据再决策。
 - `cargo ub-check`（Miri 解释执行）未完整运行；只验证了固定 nightly 下 `caret-app` 可编译。
 - #149/#145 的「顺带清理（Low）」不在本任务范围。
