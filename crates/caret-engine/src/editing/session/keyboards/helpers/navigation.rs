@@ -11,8 +11,36 @@ use crate::editing::{
 use caret_layout::VisualAffinity;
 
 impl Session {
+    /// Inline 扩展的共享入口：InlineMath adapter 可提供局部树坐标，普通文本与
+    /// InlineEnvironment 沿用 TextMap 候选；生成的范围交给共享 Session 仲裁。
+    pub(in crate::editing::session::keyboards) fn extend_inline_selection(
+        &mut self,
+        direction: Direction,
+        candidate: Option<&NavigationCandidate>,
+    ) -> Result<Effect, EditError> {
+        if let Some(effect) = self.step_inline_math_range_adapter(direction, candidate)? {
+            return Ok(effect);
+        }
+        match candidate {
+            Some(NavigationCandidate::Document {
+                focus,
+                visual_affinity,
+                generation,
+            }) => self.commit_document_navigation_candidate(
+                focus.clone(),
+                *visual_affinity,
+                generation.clone(),
+                NavigationIntent::Horizontal,
+                Some(direction),
+                true,
+            ),
+            None => self.complete_horizontal_document_edge(direction, true),
+            Some(_) => Err(EditError::InvalidPosition),
+        }
+    }
+
     /// 验证候选所属的 Session 和文档代际；字体代际由 app 布局服务先行校验。
-    pub(in crate::editing::session::keyboards) fn validate_navigation_generation(
+    pub(in crate::editing::session) fn validate_navigation_generation(
         &self,
         generation: &NavigationGeneration,
     ) -> Result<(), EditError> {
@@ -269,10 +297,11 @@ impl Session {
         direction: Direction,
         extend: bool,
     ) -> Result<Effect, EditError> {
+        // 外侧停靠的前进方向取决于真实视觉行；没有候选即保持原位。
+        if self.block_boundary_exit().is_some() {
+            return Ok(Effect::default());
+        }
         if !extend {
-            if let Some(effect) = self.move_from_math_block_boundary_stop(direction)? {
-                return Ok(effect);
-            }
             if self.enter_adjacent_block_math_if_present(direction)? {
                 return Ok(Effect {
                     selection_changed: true,
@@ -282,7 +311,10 @@ impl Session {
             return Ok(Effect::default());
         }
         // 块外侧端点（例如选中公式后的焦点）按共享文档单元继续移动。
-        if self.has_structure_selection() && self.structure_selection_anchor().is_none() {
+        if self
+            .structure_selection_range()
+            .is_some_and(|(_, focus)| matches!(focus, DocumentRangeEndpoint::BlockEdge { .. }))
+        {
             return self.extend_structure_selection(direction);
         }
         // 没有视觉行候选时，只有焦点已停在段落边界且相邻块是显示公式，才按文档

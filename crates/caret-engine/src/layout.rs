@@ -22,6 +22,7 @@ use caret_layout::{
 };
 use std::{collections::HashMap, ops::Range, sync::Arc};
 
+mod block_navigation;
 mod geometry;
 mod hit;
 mod items;
@@ -307,6 +308,15 @@ pub struct PageMathTextDragStop {
     pub order_utf8: usize,
     pub target: MathEditTarget,
     pub position: MathTextPosition,
+    pub visual_affinity: VisualAffinity,
+    pub caret: PageCaretGeometry,
+}
+
+/// 公式树序列在页面上的插入点，供公式内部和跨宿主拖选共用。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PageMathTreeDragStop {
+    pub target: MathEditTarget,
+    pub position: MathTreePosition,
     pub visual_affinity: VisualAffinity,
     pub caret: PageCaretGeometry,
 }

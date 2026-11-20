@@ -37,16 +37,69 @@ impl Session {
         }
         self.ensure_math_edit_revision_current()?;
         let current = self.current_range_focus_endpoint();
-        let anchor = match &self.structure_selection {
-            Some(selection) => selection.anchor.clone(),
-            None if self.selection.anchor == self.selection.focus => current.clone(),
-            None => DocumentRangeEndpoint::Text(self.selection.anchor.clone()),
-        };
         let Some(focus) = self.range_focus_step(&current, direction)? else {
             return Ok(Effect::default());
         };
-        let (anchor, focus) = self.normalize_environment_range(anchor, focus)?;
-        let selection = StructureSelection { anchor, focus };
+        self.commit_range_focus(focus, None, true)
+    }
+
+    /// 提交已解析的端点，布局扩选与文档顺序扩选共用锚点、覆盖及折叠规则。
+    pub(super) fn commit_range_focus(
+        &mut self,
+        focus: DocumentRangeEndpoint,
+        visual: Option<crate::VisualAffinity>,
+        extend: bool,
+    ) -> Result<Effect, EditError> {
+        let anchor = match &self.structure_selection {
+            _ if !extend => focus.clone(),
+            Some(selection) => selection.anchor.clone(),
+            None if self.selection.anchor == self.selection.focus => {
+                self.current_range_focus_endpoint()
+            }
+            None => DocumentRangeEndpoint::Text(self.selection.anchor.clone()),
+        };
+        // 跨越 Section 边界时，区域按整棵环境覆盖，几何焦点仍停在候选视觉行。
+        let visual_focus = if visual.is_some() && extend {
+            Some(self.park_at_range_endpoint(&focus)?)
+        } else {
+            None
+        };
+        let selection = if visual_focus.is_some() {
+            let ancestor_ids = |endpoint: &DocumentRangeEndpoint| {
+                let id = match endpoint {
+                    DocumentRangeEndpoint::InlineMathTree { paragraph_id, .. }
+                    | DocumentRangeEndpoint::InlineMathText { paragraph_id, .. } => paragraph_id,
+                    DocumentRangeEndpoint::Text(position) => &position.paragraph_id,
+                    DocumentRangeEndpoint::BlockEdge { block_id, .. } => block_id,
+                };
+                find_document_node(&self.document, id)
+                    .map(|location| location.parent_environment_ids)
+                    .ok_or(EditError::InvalidPosition)
+            };
+            let anchor_parents = ancestor_ids(&anchor)?;
+            let focus_parents = ancestor_ids(&focus)?;
+            let common = anchor_parents
+                .iter()
+                .zip(&focus_parents)
+                .take_while(|(a, b)| a == b)
+                .count();
+            let crossed = anchor_parents[common..]
+                .iter()
+                .chain(&focus_parents[common..])
+                .cloned()
+                .collect::<Vec<_>>();
+            self.normalized_environment_range(anchor, focus, &crossed)?
+        } else {
+            let (anchor, focus) = self.normalize_environment_range(anchor, focus)?;
+            StructureSelection { anchor, focus }
+        };
+        if selection.anchor.is_inline_math() || selection.focus.is_inline_math() {
+            return self.install_inline_math_selection(
+                selection,
+                self.selection_anchor_visual_affinity,
+                visual.unwrap_or(self.selection_visual_affinity),
+            );
+        }
         // 先派生覆盖列表：空覆盖范围绝不能安装成结构选区，否则隐藏范围会吞掉按键。
         // 结构选区安装入口还有同一空覆盖守卫；这里提前判断是为了回落到普通选区，
         // 而不是让安装失败。
@@ -57,14 +110,25 @@ impl Session {
             };
         let (environments, math_blocks) = self.covered_block_nodes(start, end)?;
         if environments.is_empty() && math_blocks.is_empty() {
-            return self.extend_to_empty_coverage(selection);
+            return self.extend_to_empty_coverage(selection, visual);
         }
         // 落点先验证，随后由统一写入入口派生覆盖列表；失败时选区与历史不变。
-        let (caret, host_caret_position) = self.park_at_range_endpoint(&selection.focus)?;
-        let focus_visual_affinity = match &selection.focus {
+        let (caret, host_caret_position) = match visual_focus {
+            Some(parked) => parked,
+            None => self.park_at_range_endpoint(&selection.focus)?,
+        };
+        let focus_visual_affinity = visual.unwrap_or_else(|| match &selection.focus {
+            DocumentRangeEndpoint::InlineMathTree { position, .. } => match position.affinity {
+                crate::MathPositionAffinity::Upstream => crate::VisualAffinity::Upstream,
+                crate::MathPositionAffinity::Downstream => crate::VisualAffinity::Downstream,
+            },
+            DocumentRangeEndpoint::InlineMathText { position, .. } => match position.affinity {
+                crate::MathPositionAffinity::Upstream => crate::VisualAffinity::Upstream,
+                crate::MathPositionAffinity::Downstream => crate::VisualAffinity::Downstream,
+            },
             DocumentRangeEndpoint::Text(position) => visual_affinity_for(position.affinity),
             DocumentRangeEndpoint::BlockEdge { side, .. } => visual_affinity_for_block_edge(*side),
-        };
+        });
         let previous_selection = self.structure_selection.clone();
         let previous_environments = self.selected_block_environments.clone();
         let previous_math_blocks = self.selected_math_blocks.clone();
@@ -92,25 +156,36 @@ impl Session {
     fn extend_to_empty_coverage(
         &mut self,
         selection: StructureSelection,
+        visual: Option<crate::VisualAffinity>,
     ) -> Result<Effect, EditError> {
         let previous_selection = self.selection.clone();
         let previous_visual_affinity = self.selection_visual_affinity;
         let had_structure = self.has_structure_selection();
-        if had_structure {
-            self.clear_structure_selection_state();
-        }
+        let previous_host = self.host_caret_position.clone();
         match &selection.focus {
+            DocumentRangeEndpoint::InlineMathTree { .. }
+            | DocumentRangeEndpoint::InlineMathText { .. } => {
+                return Err(EditError::InvalidPosition);
+            }
             DocumentRangeEndpoint::Text(focus) => {
+                self.text_map_for(focus)?.validate_pos(focus)?;
                 let anchor = match &selection.anchor {
+                    DocumentRangeEndpoint::InlineMathTree { .. }
+                    | DocumentRangeEndpoint::InlineMathText { .. } => {
+                        return Err(EditError::InvalidPosition);
+                    }
                     DocumentRangeEndpoint::Text(anchor) => anchor.clone(),
-                    DocumentRangeEndpoint::BlockEdge { .. } => focus.clone(),
+                    DocumentRangeEndpoint::BlockEdge { .. } => self
+                        .text_endpoint_clamped(&selection.anchor)
+                        .unwrap_or_else(|| focus.clone()),
                 };
                 self.selection = Selection {
                     anchor,
                     focus: focus.clone(),
                 };
                 self.clear_host_caret_position();
-                self.selection_visual_affinity = visual_affinity_for(focus.affinity);
+                self.selection_visual_affinity =
+                    visual.unwrap_or_else(|| visual_affinity_for(focus.affinity));
             }
             DocumentRangeEndpoint::BlockEdge { block_id, side } => {
                 let (caret, host) = self.park_beside_block_host(block_id, *side)?;
@@ -123,7 +198,9 @@ impl Session {
             }
         }
         self.pending_inline_style.clear();
+        self.clear_structure_selection_state();
         let changed = had_structure
+            || previous_host != self.host_caret_position
             || previous_selection != self.selection
             || previous_visual_affinity != self.selection_visual_affinity;
         if changed {
@@ -155,6 +232,8 @@ impl Session {
         direction: Direction,
     ) -> Result<Option<DocumentRangeEndpoint>, EditError> {
         match focus {
+            DocumentRangeEndpoint::InlineMathTree { .. }
+            | DocumentRangeEndpoint::InlineMathText { .. } => Ok(None),
             DocumentRangeEndpoint::Text(position) => {
                 self.text_range_focus_step(position, direction)
             }

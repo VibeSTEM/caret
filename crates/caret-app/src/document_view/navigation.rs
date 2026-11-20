@@ -5,8 +5,8 @@
 
 use super::DocumentViewRuntime;
 use caret_engine::{
-    Affinity, Command, Direction, DocumentLayoutSnapshot, EditorKey, Effect, HitAffinity,
-    MathEditTarget, NavigationCandidate, Pos, VisualAffinity,
+    Affinity, Command, Direction, DocumentLayoutSnapshot, DocumentRangeEndpoint, EditorKey, Effect,
+    HitAffinity, MathEditTarget, NavigationCandidate, Pos, VisualAffinity,
 };
 
 impl DocumentViewRuntime {
@@ -53,6 +53,131 @@ impl DocumentViewRuntime {
                     }
                 },
                 "navigation.command_line",
+            );
+        }
+        if extend
+            && let Some((
+                _,
+                DocumentRangeEndpoint::InlineMathText {
+                    paragraph_id,
+                    math_id,
+                    position,
+                    ..
+                },
+            )) = self.session.structure_selection_range()
+        {
+            let target = MathEditTarget::Inline {
+                paragraph_id: paragraph_id.clone(),
+                math_id: math_id.clone(),
+            };
+            let position = position.clone();
+            let visual_affinity = self.session.selection_visual_affinity();
+            let snapshot = self.current_snapshot()?;
+            if let Some((focus, visual_affinity)) =
+                snapshot.move_math_text_visual(&target, &position, visual_affinity, forward)
+            {
+                let generation = navigation_generation(self)?;
+                return dispatch_navigation_key(
+                    self,
+                    if forward {
+                        EditorKey::RightArrow {
+                            candidate: Some(NavigationCandidate::MathText {
+                                focus,
+                                visual_affinity,
+                                generation,
+                            }),
+                            extend: true,
+                        }
+                    } else {
+                        EditorKey::LeftArrow {
+                            candidate: Some(NavigationCandidate::MathText {
+                                focus,
+                                visual_affinity,
+                                generation,
+                            }),
+                            extend: true,
+                        }
+                    },
+                    "navigation.inline_math_range_text",
+                );
+            }
+            let edge_hit = snapshot.inline_math_visual_edge_body_hit(
+                &target,
+                &position,
+                visual_affinity,
+                forward,
+            );
+            let generation = navigation_generation(self)?;
+            return dispatch_navigation_key(
+                self,
+                if forward {
+                    EditorKey::RightArrow {
+                        candidate: Some(NavigationCandidate::InlineMathRangeEdge {
+                            body_focus: edge_hit.as_ref().map(|hit| hit.position.clone()),
+                            body_visual_affinity: edge_hit.as_ref().map(|hit| hit.visual_affinity),
+                            forward,
+                            generation,
+                        }),
+                        extend: true,
+                    }
+                } else {
+                    EditorKey::LeftArrow {
+                        candidate: Some(NavigationCandidate::InlineMathRangeEdge {
+                            body_focus: edge_hit.as_ref().map(|hit| hit.position.clone()),
+                            body_visual_affinity: edge_hit.as_ref().map(|hit| hit.visual_affinity),
+                            forward,
+                            generation,
+                        }),
+                        extend: true,
+                    }
+                },
+                "navigation.inline_math_range_text_edge",
+            );
+        }
+        if extend
+            && let Some((
+                _,
+                DocumentRangeEndpoint::InlineMathTree {
+                    paragraph_id,
+                    position,
+                    ..
+                },
+            )) = self.session.structure_selection_range()
+            && let caret_engine::MathPositionHost::InlineMath { owner_id: math_id } = &position.host
+        {
+            let target = MathEditTarget::Inline {
+                paragraph_id: paragraph_id.clone(),
+                math_id: math_id.clone(),
+            };
+            let position = position.clone();
+            let snapshot = self.current_snapshot()?;
+            let edge_hit =
+                snapshot.inline_math_tree_visual_edge_body_hit(&target, &position, forward);
+            let generation = navigation_generation(self)?;
+            return dispatch_navigation_key(
+                self,
+                if forward {
+                    EditorKey::RightArrow {
+                        candidate: Some(NavigationCandidate::InlineMathRangeEdge {
+                            body_focus: edge_hit.as_ref().map(|hit| hit.position.clone()),
+                            body_visual_affinity: edge_hit.as_ref().map(|hit| hit.visual_affinity),
+                            forward,
+                            generation,
+                        }),
+                        extend: true,
+                    }
+                } else {
+                    EditorKey::LeftArrow {
+                        candidate: Some(NavigationCandidate::InlineMathRangeEdge {
+                            body_focus: edge_hit.as_ref().map(|hit| hit.position.clone()),
+                            body_visual_affinity: edge_hit.as_ref().map(|hit| hit.visual_affinity),
+                            forward,
+                            generation,
+                        }),
+                        extend: true,
+                    }
+                },
+                "navigation.inline_math_range_tree_edge",
             );
         }
         if self.session.math_text_input_context().is_some() {
@@ -242,13 +367,6 @@ impl DocumentViewRuntime {
                 "navigation.command_line",
             );
         }
-        if !extend && self.session.math_block_boundary_exit().is_some() {
-            return dispatch_navigation_key(
-                self,
-                vertical_navigation_key(line_delta, None, false),
-                "navigation.math_block_boundary",
-            );
-        }
         // InlineMath 在公式内没有垂直候选时先退出 MathEdit，同一次按键还要继续
         // 文档纵向导航；记录进入数学分支前的 Inline 目标，退出后按文档路径重放。
         let inline_math_edit = self
@@ -279,6 +397,62 @@ impl DocumentViewRuntime {
             }
             return Ok(result);
         }
+        let boundary = self.session.block_boundary_exit();
+        let structure_range = self.session.structure_selection_range();
+        let block_focus = structure_range.and_then(|(_, focus)| match focus {
+            caret_engine::DocumentRangeEndpoint::BlockEdge { block_id, side } => {
+                Some((block_id.clone(), *side))
+            }
+            _ => None,
+        });
+        if boundary.is_some() || block_focus.is_some() {
+            let generation = navigation_generation(self)?;
+            let focus = self.session.selection().focus.clone();
+            let affinity = self.session.selection_visual_affinity();
+            let preferred = self.preferred_visual_x_pt;
+            let snapshot = self.current_snapshot()?;
+            let fallback = snapshot
+                .caret_geometry(&focus, affinity)
+                .ok_or_else(|| "navigation.invalid_caret".to_owned())?;
+            let edge = block_focus;
+            let caret = edge.map_or_else(
+                || {
+                    boundary.as_ref().map_or(fallback, |(id, side)| {
+                        snapshot.block_boundary_caret(id, *side, fallback)
+                    })
+                },
+                |(id, side)| snapshot.block_boundary_caret(&id, side, fallback),
+            );
+            let margin = snapshot.pages[caret.page_index].margin_left_pt as f32;
+            // 块外侧停靠的页面列独立于借用的正文光标；后续连续扩选仍沿用同一列。
+            let x = if boundary.is_some() {
+                caret.x_pt as f32
+            } else {
+                preferred.map_or(caret.x_pt as f32, |x| x + margin)
+            };
+            let candidate =
+                snapshot.vertical_candidate_from_block(caret, line_delta, x, generation);
+            let target_margin = match &candidate {
+                Some(NavigationCandidate::Document {
+                    focus,
+                    visual_affinity,
+                    ..
+                }) => snapshot
+                    .caret_geometry(focus, *visual_affinity)
+                    .map(|geometry| snapshot.pages[geometry.page_index].margin_left_pt as f32),
+                _ => None,
+            };
+            if candidate.is_none() {
+                return self.interaction_state_json();
+            }
+            let result = dispatch_navigation_key(
+                self,
+                vertical_navigation_key(line_delta, candidate, extend),
+                "navigation.vertical",
+            )?;
+            self.preferred_visual_x_pt = Some(target_margin.map_or(x, |margin| x - margin));
+            return Ok(result);
+        }
         let at_vertical_edge = {
             let focus = self.session.selection().focus.clone();
             let visual_affinity = self.session.selection_visual_affinity();
@@ -304,6 +478,12 @@ impl DocumentViewRuntime {
             )?;
             if self.session.math_edit().is_some()
                 || self.session.math_block_boundary_exit().is_some()
+                || self
+                    .session
+                    .structure_selection_range()
+                    .is_some_and(|(_, focus)| {
+                        matches!(focus, caret_engine::DocumentRangeEndpoint::BlockEdge { .. })
+                    })
             {
                 self.preferred_visual_x_pt = None;
                 return Ok(result);

@@ -31,6 +31,7 @@ struct StructureTextCopy<'a> {
     bounds: Option<StructureTextBounds>,
     environments: &'a [NodeId],
     math_blocks: &'a [NodeId],
+    inline_math: Option<&'a super::InlineMathRangeParts>,
 }
 
 impl Session {
@@ -39,8 +40,42 @@ impl Session {
     /// 结构选区按同一文档范围遍历物理块序列：覆盖环境的全部段落完整复制，
     /// Equation/Align 与行内公式一致输出 U+FFFC，范围两端的普通文字只取切口。
     pub fn selected_text(&self) -> Result<String, EditError> {
+        if let Some(parts) = self.inline_math_range_parts() {
+            let (covered_environments, covered_math_blocks) = self.structure_range_block_nodes()?;
+            let body = if !covered_environments.is_empty() || !covered_math_blocks.is_empty() {
+                self.structure_selection_text(Some(&parts))?
+            } else if parts.body.anchor.paragraph_id == parts.body.focus.paragraph_id {
+                let map = TextMap::new(self.paragraph_for(&parts.body.anchor)?)?;
+                let a = parts.body.anchor.offset;
+                let b = parts.body.focus.offset;
+                map.text
+                    .get(a.min(b)..a.max(b))
+                    .ok_or(EditError::InvalidPosition)?
+                    .to_owned()
+            } else {
+                if parts.body.anchor.story != StoryId::Body
+                    || parts.body.focus.story != StoryId::Body
+                {
+                    return Err(EditError::CrossParagraphSelection);
+                }
+                let (start, end) =
+                    self.ordered_text_range(&parts.body.anchor, &parts.body.focus)?;
+                let mut text = String::new();
+                let mut first = true;
+                self.visit_ordered_paragraph_ranges(&start, &end, |_, _, map, range| {
+                    if !first {
+                        text.push('\n');
+                    }
+                    text.push_str(map.text.get(range).ok_or(EditError::InvalidPosition)?);
+                    first = false;
+                    Ok(())
+                })?;
+                text
+            };
+            return parts.copy_with_body(&self.document, body);
+        }
         if self.has_structure_selection() {
-            return self.structure_selection_text();
+            return self.structure_selection_text(None);
         }
         let (anchor, focus) = self.edit_range()?;
         if anchor == focus {
@@ -82,7 +117,10 @@ impl Session {
     }
 
     /// 结构选区的纯文本投影；块公式与行内公式统一输出 U+FFFC。
-    fn structure_selection_text(&self) -> Result<String, EditError> {
+    fn structure_selection_text(
+        &self,
+        inline_math: Option<&super::InlineMathRangeParts>,
+    ) -> Result<String, EditError> {
         // 端点必须可在当前文档排序；投影本身只用覆盖列表与文本边界。
         self.ordered_structure_selection()?;
         let (environments, math_blocks) = self.structure_range_block_nodes()?;
@@ -99,6 +137,7 @@ impl Session {
             bounds,
             environments: &environments,
             math_blocks: &math_blocks,
+            inline_math,
         };
         let mut text = String::new();
         let mut first = true;
@@ -198,7 +237,11 @@ impl Session {
             let to = to.max(from);
             // 范围边界上的空片段不产生空行；范围内整段落即使为空也保留段落分隔。
             let boundary = ordinal == start_ordinal || ordinal == end_ordinal;
-            (from, to, !boundary || to > from)
+            // 数学局部内容另行拼接，但即使该段正文切口为空，仍须为公式所在段保留分隔。
+            let has_formula = copy.inline_math.is_some_and(|parts| parts.formula_ranges().any(|(target, range)| {
+                matches!(target, crate::MathEditTarget::Inline { paragraph_id, .. } if *paragraph_id == paragraph.id) && !range.is_empty()
+            }));
+            (from, to, !boundary || to > from || has_formula)
         };
         if !emit {
             return Ok(());
@@ -358,7 +401,37 @@ impl Session {
             let (start, end) = self.ordered_structure_selection()?;
             (start.clone(), end.clone())
         };
+        let chosen = if direction == Direction::Forward {
+            &end
+        } else {
+            &start
+        };
+        if chosen.is_inline_math() {
+            self.focus_inline_range_endpoint(
+                chosen,
+                if self
+                    .structure_selection_range()
+                    .is_some_and(|(a, _)| a == chosen)
+                {
+                    self.selection_anchor_visual_affinity
+                } else {
+                    self.selection_visual_affinity
+                },
+            )?;
+            return Ok(Effect {
+                selection_changed: true,
+                ..Effect::default()
+            });
+        }
         let visual_affinity = |endpoint: &DocumentRangeEndpoint| match endpoint {
+            DocumentRangeEndpoint::InlineMathTree { position, .. } => match position.affinity {
+                crate::MathPositionAffinity::Downstream => VisualAffinity::Downstream,
+                crate::MathPositionAffinity::Upstream => VisualAffinity::Upstream,
+            },
+            DocumentRangeEndpoint::InlineMathText { position, .. } => match position.affinity {
+                crate::MathPositionAffinity::Downstream => VisualAffinity::Downstream,
+                crate::MathPositionAffinity::Upstream => VisualAffinity::Upstream,
+            },
             DocumentRangeEndpoint::Text(position) => visual_affinity_for(position.affinity),
             DocumentRangeEndpoint::BlockEdge { side, .. } => visual_affinity_for_block_edge(*side),
         };
@@ -670,8 +743,11 @@ impl Session {
             return Err(EditError::InvalidPosition);
         }
         // 端点扩展到整个环境外侧边界，使结构范围与派生列表描述同一范围。
-        let structure_selection =
-            self.normalized_environment_range(&anchor, &focus, &environments)?;
+        let structure_selection = self.normalized_environment_range(
+            DocumentRangeEndpoint::Text(anchor),
+            DocumentRangeEndpoint::Text(focus.clone()),
+            &environments,
+        )?;
         let previous_selection = self.structure_selection.clone();
         let previous_environments = self.selected_block_environments.clone();
         let previous_math_blocks = self.selected_math_blocks.clone();

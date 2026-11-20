@@ -28,6 +28,7 @@ Caret 的 Block/Inline 编辑目前分散管理焦点位置、边界移动、选
 - 在 081–083、091 完成后验收 Paragraph 与当前复杂 Block/Inline 共享位置仲裁、全树顺序、焦点、选区、删除/替换/Undo/Redo、富剪贴板和同代几何。
 - Paragraph 已验证行为作为基线；不得把其 UTF-8 坐标强制成所有宿主的位置类型。
 - 适配器保留 Section/Equation/Align、InlineMath/InlineEnvironment 的真实位置与事务；不复制权威边界状态、焦点、文档顺序或快捷键仲裁。
+- Equation/Align 外侧 Up/Down 必须先消费共享视觉行候选，与 Section/Custom 使用同一块边界仲裁；InlineMath 外部逐项扩选纳入 083 的跨宿主范围适配，不把 U+FFFC 当作内部端点。
 - 保留用户已确认的三态焦点、Block 外侧停靠、空 Inline 粉色槽位和 079 Align 行首退格规则。
 - Table/Figure 仅定义接入契约，不在本任务实现节点、单元格编辑或完整网格选区；不新建 crate。
 
@@ -57,6 +58,7 @@ Caret 的 Block/Inline 编辑目前分散管理焦点位置、边界移动、选
 - [ ] 位置、选区、事务与历史使用同一宿主身份/顺序；完整快照、增量刷新和 Qt 绘制使用同代投影。
 - [ ] 无重复权威状态、任意 Paragraph 隐藏锚点、逐类型补丁、U+FFFC 泄漏、静默对象丢失或失败后非法焦点。
 - [ ] Paragraph、MathEdit、Section、Align 行/cell 的真实局部坐标和行为不因统一底座被抹平；新 Block 只需 adapter 接入。
+- [ ] Section、Equation、Align 的块外侧垂直导航和 Shift 选区共享视觉行候选/块边界仲裁；InlineMath 的外部逐项扩选通过共享端点、范围消费与同代几何协议。
 - [ ] 相关行为测试、格式/lint、覆盖率门槛、分域检查及独立最终评审通过；未执行的桌面平台验收明确记录。
 - [ ] Caret 内复制粘贴保留 MathTree/Align 和 InlineMath 对象；外部应用读取可读 TeX 回退；显式 TeX 数学片段粘贴由 091 接入 092 的共享转换器。
 
@@ -67,6 +69,7 @@ Caret 的 Block/Inline 编辑目前分散管理焦点位置、边界移动、选
 | — | 081/082/083 子任务验证 | 各自契约通过 | 未执行 |
 | — | 跨宿主完整链路回归 | 焦点、选区、编辑、历史和几何一致 | 未执行 |
 | — | Terra 分域检查、Sol final review | 完整 diff 无阻断发现 | 未执行 |
+| 2026-11-18 | `cargo fmt --all -- --check`、`cargo test --locked -p caret-app vertical_navigation_leaves_math_block_boundary_for_adjacent_visual_paragraph`、`cargo check --locked -p caret-engine` | 块级公式外停靠的 Up/Down 先走视觉段落候选，Shift 扩展不误进公式 | 通过；只覆盖 Equation/Align 停靠到相邻 Paragraph 的定向场景，公式本身的共享视觉候选和 InlineMath 跨宿主范围仍待实现/验证 |
 
 ## 风险与回退
 
@@ -79,6 +82,7 @@ Caret 的 Block/Inline 编辑目前分散管理焦点位置、边界移动、选
 - 2026-11-09：将原 L 级混合实现 task 拆为 081（P0）、082 和 083；080 保留为跨子任务整合验收，不重复维护子任务设计细节。
 - 2026-11-09：本 PR 仅更新/整理 Markdown 文档，不包含代码改动或平台验证。
 - 2026-11-16：审计发现原有纯文本剪贴板会将公式降格为 U+FFFC，与结构复制契约冲突。将富剪贴板实现拆为 091；080 保留跨宿主最终集成验收。
+- 2026-11-18：桌面测试发现 Equation 外侧 Up/Down 走入公式边界重入路径，Shift 垂直扩展在视觉候选计算前只覆盖整公式；InlineMath 外部选区也只表达 U+FFFC。按维护者要求在 080/083 中补齐 Section 主导的垂直候选复用与 MathTree 内部跨宿主选区。
 
 ## 完成摘要
 

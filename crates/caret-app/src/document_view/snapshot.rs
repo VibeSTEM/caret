@@ -9,8 +9,9 @@ use super::{
 use caret_doc::NodeId;
 use caret_engine::{
     Affinity, CommandLineWireField as Field, CompositionRange, DocumentLayoutDeltaView,
-    MathEditTarget, MathTextInputContext, MathTreePosition, PageCaretGeometry, PageSelectionRect,
-    Pos, Selection, StructureClass, StructureKind, StructurePosition,
+    DocumentRangeEndpoint, MathEditTarget, MathPositionHost, MathTextInputContext,
+    MathTreePosition, PageCaretGeometry, PageSelectionRect, Pos, Selection, StructureClass,
+    StructureKind, StructurePosition,
 };
 use serde_json::{Value, json};
 
@@ -695,6 +696,51 @@ fn math_caret_geometry(
     Ok(None)
 }
 
+/// 从结构选区焦点端点生成数学光标，避免反向范围或多公式范围借用另一端派生位置。
+fn pointer_selection_caret_geometry(
+    session: &caret_engine::Session,
+    snapshot: &caret_engine::DocumentLayoutSnapshot,
+) -> Result<Option<(PageCaretGeometry, u16)>, String> {
+    let Some((_, focus)) = session.structure_selection_range() else {
+        return Ok(None);
+    };
+    match focus {
+        DocumentRangeEndpoint::InlineMathTree {
+            paragraph_id,
+            position,
+            ..
+        } => {
+            let MathPositionHost::InlineMath { owner_id } = &position.host else {
+                return Err("layout.invalid_inline_math_focus".to_owned());
+            };
+            let target = MathEditTarget::Inline {
+                paragraph_id: paragraph_id.clone(),
+                math_id: owner_id.clone(),
+            };
+            snapshot
+                .math_tree_caret(&target, position)
+                .map(Some)
+                .ok_or_else(|| "layout.invalid_inline_math_tree_focus".to_owned())
+        }
+        DocumentRangeEndpoint::InlineMathText {
+            paragraph_id,
+            math_id,
+            position,
+            ..
+        } => {
+            let target = MathEditTarget::Inline {
+                paragraph_id: paragraph_id.clone(),
+                math_id: math_id.clone(),
+            };
+            snapshot
+                .math_text_caret(&target, position, session.selection_visual_affinity())
+                .map(Some)
+                .ok_or_else(|| "layout.invalid_inline_math_text_focus".to_owned())
+        }
+        DocumentRangeEndpoint::Text(_) | DocumentRangeEndpoint::BlockEdge { .. } => Ok(None),
+    }
+}
+
 /// caret 几何的界面 JSON；两个快照入口的字段名共享一处来源。
 fn caret_geometry_json(caret: PageCaretGeometry, font_size_centipoints: u16) -> Value {
     json!({
@@ -711,11 +757,26 @@ fn caret_geometry_json(caret: PageCaretGeometry, font_size_centipoints: u16) -> 
 /// `body_rectangles` 以闭包延迟求值，使布局入口在公式分支不额外读取正文选区，而
 /// 交互入口可以保持先校验正文矩形的既有顺序。
 fn selection_rectangles_with_math(
+    mixed: Option<&caret_engine::InlineMathRangeParts>,
     math_context: Option<&MathTextInputContext>,
     math_tree_selection_context: Option<&(MathEditTarget, MathTreePosition, MathTreePosition)>,
     body_rectangles: impl FnOnce() -> Result<Value, String>,
     snapshot: &caret_engine::DocumentLayoutSnapshot,
 ) -> Result<Value, String> {
+    if let Some(parts) = mixed {
+        let mut rectangles = body_rectangles()?
+            .as_array()
+            .cloned()
+            .ok_or_else(|| "layout.invalid_selection_rectangles".to_owned())?;
+        let math_rectangles = snapshot
+            .inline_math_selection_geometry(parts)
+            .ok_or_else(|| "layout.invalid_inline_math_selection_geometry".to_owned())?;
+        let Value::Array(math_rectangles) = rectangle_values(math_rectangles) else {
+            return Err("layout.invalid_inline_math_selection_geometry".to_owned());
+        };
+        rectangles.extend(math_rectangles);
+        return Ok(Value::Array(rectangles));
+    }
     if let Some(context) = math_context {
         return math_text_selection_json(
             snapshot,
@@ -842,6 +903,7 @@ impl DocumentViewRuntime {
                 );
         }
         let math_context = self.session.math_text_input_context();
+        let mixed = self.session.inline_math_range_parts();
         let math_tree_context = self.session.math_tree_input_context();
         let math_tree_selection_context = self.session.math_tree_selection_context();
         let (math_geometry_context, math_tree_geometry_context) = math_geometry_contexts(
@@ -853,6 +915,7 @@ impl DocumentViewRuntime {
             Value::Array(Vec::new())
         } else {
             selection_rectangles_with_math(
+                mixed.as_ref(),
                 math_context.as_ref(),
                 math_tree_selection_context.as_ref(),
                 || {
@@ -871,11 +934,14 @@ impl DocumentViewRuntime {
         view.as_object_mut()
             .ok_or_else(|| "layout.invalid_view_object".to_owned())?
             .insert("selectionRects".to_owned(), rectangles);
-        if let Some((caret, font_size_centipoints)) = math_caret_geometry(
+        let pointer_selection_caret = pointer_selection_caret_geometry(&self.session, snapshot)?;
+        let active_math_caret = math_caret_geometry(
             math_geometry_context.as_ref(),
             math_tree_geometry_context.as_ref(),
             snapshot,
-        )? {
+        )?;
+        if let Some((caret, font_size_centipoints)) = pointer_selection_caret.or(active_math_caret)
+        {
             view.as_object_mut()
                 .ok_or_else(|| "layout.invalid_view_object".to_owned())?
                 .insert(
@@ -967,6 +1033,7 @@ impl DocumentViewRuntime {
         let visual_affinity = self.session.selection_visual_affinity();
         let command_input_context = self.session.command_line();
         let math_context = self.session.math_text_input_context();
+        let mixed = self.session.inline_math_range_parts();
         let math_tree_context = self.session.math_tree_input_context();
         let math_tree_selection_context = self.session.math_tree_selection_context();
         let math_context_key = math_context.as_ref().map(math_interaction_context);
@@ -1019,6 +1086,7 @@ impl DocumentViewRuntime {
             snapshot,
         )?;
         let rectangles = selection_rectangles_with_math(
+            mixed.as_ref(),
             math_geometry_context.as_ref(),
             math_tree_selection_context.as_ref(),
             || Ok(body_rectangles),
@@ -1083,24 +1151,26 @@ impl DocumentViewRuntime {
                 serde_json::Value::from(cursor_utf16),
             );
         }
-        let (caret, font_size_centipoints) = if let Some(caret) = math_caret_geometry(
+        let pointer_selection_caret = pointer_selection_caret_geometry(&self.session, snapshot)?;
+        let active_math_caret = math_caret_geometry(
             math_geometry_context.as_ref(),
             math_tree_geometry_context.as_ref(),
             snapshot,
-        )? {
-            caret
-        } else {
-            let caret = snapshot
-                .caret_geometry(focus, visual_affinity)
-                .ok_or_else(|| "layout.invalid_caret_geometry".to_owned())?;
-            let caret =
-                caret_geometry_with_block_boundary_exit(block_boundary_exit, snapshot, caret);
-            let font_size_centipoints =
-                snapshot
+        )?;
+        let (caret, font_size_centipoints) =
+            if let Some(caret) = pointer_selection_caret.or(active_math_caret) {
+                caret
+            } else {
+                let caret = snapshot
+                    .caret_geometry(focus, visual_affinity)
+                    .ok_or_else(|| "layout.invalid_caret_geometry".to_owned())?;
+                let caret =
+                    caret_geometry_with_block_boundary_exit(block_boundary_exit, snapshot, caret);
+                let font_size_centipoints = snapshot
                     .font_size_centipoints_at(focus, visual_affinity)
                     .ok_or_else(|| "layout.invalid_caret_font_size".to_owned())?;
-            (caret, font_size_centipoints)
-        };
+                (caret, font_size_centipoints)
+            };
         let serialized = serde_json::to_string(&serde_json::json!({
             "documentGeneration": snapshot.document_generation.to_string(),
             "fontGeneration": snapshot.font_generation.to_string(),

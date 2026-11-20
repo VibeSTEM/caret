@@ -75,6 +75,81 @@ impl DocumentLayoutSnapshot {
         })
     }
 
+    /// 返回行内公式物理左右边缘对应的正文停靠点。
+    pub fn inline_math_visual_edge_body_hit(
+        &self,
+        target: &MathEditTarget,
+        position: &MathTextPosition,
+        visual_affinity: VisualAffinity,
+        forward: bool,
+    ) -> Option<PageHit> {
+        let caret = self.math_text_caret_geometry(target, position, visual_affinity)?;
+        self.inline_math_body_side_hit(target, caret, forward)
+    }
+
+    /// 返回行内公式树焦点物理左右对应的正文停靠点。
+    pub fn inline_math_tree_visual_edge_body_hit(
+        &self,
+        target: &MathEditTarget,
+        position: &MathTreePosition,
+        forward: bool,
+    ) -> Option<PageHit> {
+        let caret = self.math_tree_caret_geometry(target, position)?;
+        self.inline_math_body_side_hit(target, caret, forward)
+    }
+
+    fn inline_math_body_side_hit(
+        &self,
+        target: &MathEditTarget,
+        math_caret: PageCaretGeometry,
+        forward: bool,
+    ) -> Option<PageHit> {
+        let MathEditTarget::Inline {
+            paragraph_id,
+            math_id,
+        } = target
+        else {
+            return None;
+        };
+        let paragraph = self.paragraph_by_id(paragraph_id)?;
+        let index = paragraph
+            .inline_math_ids
+            .iter()
+            .position(|candidate| candidate == math_id)?;
+        let source_range = paragraph.inline_math_source_ranges.get(index)?;
+        let before = Pos {
+            story: paragraph.story.clone(),
+            paragraph_id: paragraph_id.clone(),
+            offset: source_range.start,
+            affinity: Affinity::Downstream,
+        };
+        let after = Pos {
+            story: paragraph.story.clone(),
+            paragraph_id: paragraph_id.clone(),
+            offset: source_range.end,
+            affinity: Affinity::Upstream,
+        };
+        let before_geometry = self.caret_geometry(&before, VisualAffinity::Downstream)?;
+        let after_geometry = self.caret_geometry(&after, VisualAffinity::Upstream)?;
+        if before_geometry.page_index != math_caret.page_index
+            || after_geometry.page_index != math_caret.page_index
+            || (before_geometry.y0_pt - after_geometry.y0_pt).abs() >= 0.5
+        {
+            return None;
+        }
+        let (position, visual_affinity, caret) =
+            if (before_geometry.x_pt < after_geometry.x_pt) == forward {
+                (after, VisualAffinity::Upstream, after_geometry)
+            } else {
+                (before, VisualAffinity::Downstream, before_geometry)
+            };
+        Some(PageHit {
+            position,
+            visual_affinity,
+            caret,
+        })
+    }
+
     /// 命中公式中的正文文本岛，并从同一快照返回宿主、TextFlow 路径与光标几何。
     pub fn hit_test_math_text(
         &self,
@@ -194,6 +269,74 @@ impl DocumentLayoutSnapshot {
                             target: sidecar.target.clone(),
                             position,
                             visual_affinity,
+                            caret,
+                        });
+                    }
+                }
+            }
+        }
+        stops
+    }
+
+    /// 为行内公式的根序列及嵌套序列生成可见树停靠点。
+    pub fn math_tree_drag_stops(&self, page_index: usize) -> Vec<PageMathTreeDragStop> {
+        let mut stops = Vec::new();
+        for projection in self.math_projections_on_page(page_index) {
+            let Some((layout, _)) = self.math_projection_items(projection) else {
+                continue;
+            };
+            let Some(host) = self.math_host(&projection.math_id) else {
+                continue;
+            };
+            if !matches!(host.target, MathEditTarget::Inline { .. }) {
+                continue;
+            }
+            for node in &layout.nodes {
+                let Some((path, sequence_len, _)) = self.math_layout_sequence(projection, node)
+                else {
+                    continue;
+                };
+                let Some(scope_host) = host.for_scope(&node.scope_id) else {
+                    continue;
+                };
+                if path == MathSequencePath::root() && sequence_len <= 1 {
+                    continue;
+                }
+                let first_offset = usize::from(path == MathSequencePath::root());
+                let last_offset = if path == MathSequencePath::root() {
+                    sequence_len.saturating_sub(1)
+                } else {
+                    sequence_len
+                };
+                for offset in first_offset..=last_offset {
+                    for affinity in [
+                        MathPositionAffinity::Upstream,
+                        MathPositionAffinity::Downstream,
+                    ] {
+                        let position = MathTreePosition {
+                            host: scope_host.host.clone(),
+                            path: path.clone(),
+                            offset,
+                            affinity,
+                        };
+                        if stops.iter().any(|stop: &PageMathTreeDragStop| {
+                            stop.target == host.target && stop.position == position
+                        }) {
+                            continue;
+                        }
+                        let Some((caret, _)) = self.math_tree_caret(&host.target, &position) else {
+                            continue;
+                        };
+                        if caret.page_index != page_index {
+                            continue;
+                        }
+                        stops.push(PageMathTreeDragStop {
+                            target: host.target.clone(),
+                            position,
+                            visual_affinity: match affinity {
+                                MathPositionAffinity::Upstream => VisualAffinity::Upstream,
+                                MathPositionAffinity::Downstream => VisualAffinity::Downstream,
+                            },
                             caret,
                         });
                     }

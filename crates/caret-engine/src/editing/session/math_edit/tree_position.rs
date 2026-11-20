@@ -304,7 +304,7 @@ pub(super) fn math_sequence_order_key(path: &MathSequencePath) -> Vec<usize> {
     key
 }
 
-fn math_tree_order_key(position: &MathTreePosition) -> Vec<usize> {
+pub(in crate::editing::session) fn math_tree_order_key(position: &MathTreePosition) -> Vec<usize> {
     let mut key = math_sequence_order_key(&position.path);
     key.reserve(1);
     key.push(position.offset * 2);
@@ -488,7 +488,7 @@ fn advance_math_tree_position_mode(
     climb_math_tree_position(tree, position, forward, align_cell)
 }
 
-pub(super) fn resolve_sequence_mut<'a>(
+pub(in crate::editing::session) fn resolve_sequence_mut<'a>(
     tree: &'a mut MathTree,
     path: &MathSequencePath,
 ) -> Option<&'a mut Vec<MathContent>> {

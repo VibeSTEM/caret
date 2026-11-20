@@ -69,7 +69,7 @@ impl Session {
         let mut patches = plan.node_patches;
         // 合并或中间段删除可能只登记 before 快照（after 为空即删除段落），因此不能
         // 只在 after 非空时补丁；否则重做无法删除段落、撤销也会与文档状态不一致。
-        if !plan.before_paragraphs.is_empty() || !plan.after_paragraphs.is_empty() {
+        if plan.before_paragraphs != plan.after_paragraphs {
             patches.push(DocumentPatch::Paragraphs {
                 before: plan.before_paragraphs,
                 after: plan.after_paragraphs,
@@ -189,6 +189,12 @@ impl Session {
     /// 记录结构编辑前的选区、视觉侧与文档边界停靠，供历史回退精确恢复。
     fn capture_structure_edit_before_state(&self) -> StructureEditBeforeState {
         StructureEditBeforeState {
+            inline_range: self
+                .structure_selection
+                .as_ref()
+                .filter(|range| range.anchor.is_inline_math() || range.focus.is_inline_math())
+                .cloned()
+                .map(Box::new),
             selection: self.selection.clone(),
             anchor_visual_affinity: self.selection_anchor_visual_affinity,
             visual_affinity: self.selection_visual_affinity,
@@ -268,6 +274,148 @@ impl Session {
 
     /// 规划结构范围删除；没有结构选区时返回 `None`。
     fn plan_structure_range_deletion(&self) -> Result<Option<StructureRangeDeletion>, EditError> {
+        if let Some(parts) = self.inline_math_range_parts() {
+            let Some((start, end)) = self.ordered_range_endpoints()? else {
+                return Ok(None);
+            };
+            let (environments, math_blocks) = self.structure_range_block_nodes()?;
+            if parts.body.anchor == parts.body.focus
+                && parts.formula_ranges().all(|(_, range)| range.is_empty())
+                && environments.is_empty()
+                && math_blocks.is_empty()
+            {
+                return Ok(None);
+            }
+            let text_bounds = self.usable_structure_text_bounds()?;
+            let (text_start, text_end) = text_bounds.as_ref().map_or_else(
+                || (start.clone(), end.clone()),
+                |(start_position, end_position, _, _)| {
+                    (
+                        DocumentRangeEndpoint::Text(start_position.clone()),
+                        DocumentRangeEndpoint::Text(end_position.clone()),
+                    )
+                },
+            );
+            let mut node_patches =
+                self.structure_node_deletion_patches(&environments, &math_blocks)?;
+            let mut document_after_nodes = self.document.clone();
+            for patch in &node_patches {
+                if !patch.redo(&mut document_after_nodes) {
+                    return Err(EditError::InvalidPosition);
+                }
+            }
+            let fallback_paragraph_id = build_paragraph_index(&document_after_nodes.body)
+                .is_empty()
+                .then(|| {
+                    let paragraph = Box::new(Paragraph::empty(NodeId::generate()));
+                    let sibling_index = document_after_nodes.body.len();
+                    document_after_nodes
+                        .body
+                        .push(Block::Paragraph((*paragraph).clone()));
+                    node_patches.push(DocumentPatch::ParagraphInsertion {
+                        parent_environment_ids: Vec::new(),
+                        sibling_index,
+                        paragraph: paragraph.clone(),
+                    });
+                    paragraph.id.clone()
+                });
+            document_after_nodes
+                .validate()
+                .map_err(|error| EditError::InvalidDocument(error.to_string()))?;
+            let after_nodes_index = build_paragraph_index(&document_after_nodes.body);
+            let StructureRangeTextPlan {
+                mut document,
+                before_ids,
+                surviving_ids,
+            } = self.plan_structure_range_text(
+                &text_start,
+                &text_end,
+                &text_bounds,
+                &environments,
+                &document_after_nodes,
+            )?;
+            let fallback_paragraph_id = if build_paragraph_index(&document.body).is_empty() {
+                let paragraph = Box::new(Paragraph::empty(NodeId::generate()));
+                let sibling_index = document_after_nodes.body.len();
+                document.body.push(Block::Paragraph((*paragraph).clone()));
+                document_after_nodes
+                    .body
+                    .push(Block::Paragraph((*paragraph).clone()));
+                node_patches.push(DocumentPatch::ParagraphInsertion {
+                    parent_environment_ids: Vec::new(),
+                    sibling_index,
+                    paragraph: paragraph.clone(),
+                });
+                Some(paragraph.id.clone())
+            } else {
+                fallback_paragraph_id
+            };
+            let mut before_ids = before_ids;
+            for (target, _) in parts.formula_ranges() {
+                let crate::MathEditTarget::Inline { paragraph_id, .. } = target else {
+                    return Err(EditError::InvalidPosition);
+                };
+                before_ids.push(paragraph_id.clone());
+            }
+            before_ids.sort();
+            before_ids.dedup();
+            for (target, range) in parts.formula_ranges() {
+                let crate::MathEditTarget::Inline { math_id, .. } = target else {
+                    return Err(EditError::InvalidPosition);
+                };
+                let formula = find_inline_math_in_blocks_mut(&mut document.body, math_id)
+                    .ok_or(EditError::InvalidPosition)?;
+                range.delete_from(&mut formula.math_tree)?;
+            }
+            document
+                .validate()
+                .map_err(|error| EditError::InvalidDocument(error.to_string()))?;
+            if node_patches.is_empty() && before_ids.is_empty() {
+                return Ok(None);
+            }
+            let before_paragraphs = history::paragraph_states_for_ids(
+                &document_after_nodes,
+                &after_nodes_index,
+                before_ids.clone(),
+            );
+            if before_paragraphs.len() != before_ids.len() {
+                return Err(EditError::InvalidPosition);
+            }
+            let after_index = build_paragraph_index(&document.body);
+            let mut surviving_ids = surviving_ids;
+            for (target, _) in parts.formula_ranges() {
+                let crate::MathEditTarget::Inline { math_id, .. } = target else {
+                    return Err(EditError::InvalidPosition);
+                };
+                surviving_ids.push(
+                    find_inline_math_paragraph_id(&document.body, math_id)
+                        .ok_or(EditError::InvalidPosition)?,
+                );
+            }
+            surviving_ids.sort();
+            surviving_ids.dedup();
+            let after_paragraphs =
+                history::paragraph_states_for_ids(&document, &after_index, surviving_ids.clone());
+            if after_paragraphs.len() != surviving_ids.len() {
+                return Err(EditError::InvalidPosition);
+            }
+            let caret = self.structure_range_caret(
+                &text_start,
+                &text_end,
+                &text_bounds,
+                &document,
+                &after_index,
+                &fallback_paragraph_id,
+            )?;
+            return Ok(Some(StructureRangeDeletion {
+                node_patches,
+                document_after_nodes,
+                document,
+                before_paragraphs,
+                after_paragraphs,
+                caret,
+            }));
+        }
         let Some((start, end)) = self.ordered_range_endpoints()? else {
             return Ok(None);
         };
@@ -569,13 +717,17 @@ impl Session {
             DocumentRangeEndpoint::Text(position) => {
                 Some((&position.paragraph_id, position.offset))
             }
-            DocumentRangeEndpoint::BlockEdge { .. } => None,
+            DocumentRangeEndpoint::BlockEdge { .. }
+            | DocumentRangeEndpoint::InlineMathTree { .. }
+            | DocumentRangeEndpoint::InlineMathText { .. } => None,
         };
         let end_paragraph = match end {
             DocumentRangeEndpoint::Text(position) => {
                 Some((&position.paragraph_id, position.offset))
             }
-            DocumentRangeEndpoint::BlockEdge { .. } => None,
+            DocumentRangeEndpoint::BlockEdge { .. }
+            | DocumentRangeEndpoint::InlineMathTree { .. }
+            | DocumentRangeEndpoint::InlineMathText { .. } => None,
         };
         let mut text_edits = Vec::new();
         let mut removed_ids = Vec::new();
@@ -717,7 +869,9 @@ impl Session {
         let mut candidates = Vec::new();
         match start {
             DocumentRangeEndpoint::Text(position) => candidates.push(position.clone()),
-            DocumentRangeEndpoint::BlockEdge { .. } => {
+            DocumentRangeEndpoint::BlockEdge { .. }
+            | DocumentRangeEndpoint::InlineMathTree { .. }
+            | DocumentRangeEndpoint::InlineMathText { .. } => {
                 if let Some(position) = self.text_endpoint_clamped(start) {
                     candidates.push(position);
                 }
@@ -868,6 +1022,69 @@ fn remove_range_paragraphs(
         siblings.remove(sibling_index);
     }
     Ok(())
+}
+
+/// 在范围删改后的文档中按稳定公式 ID 定位行内公式，允许其段落在合并中迁移。
+fn find_inline_math_in_blocks_mut<'a>(
+    blocks: &'a mut [Block],
+    math_id: &NodeId,
+) -> Option<&'a mut caret_doc::InlineMath> {
+    for block in blocks {
+        match block {
+            Block::Paragraph(paragraph) => {
+                if let Some(math) =
+                    super::super::math_edit::find_inline_math_mut(&mut paragraph.inlines, math_id)
+                {
+                    return Some(math);
+                }
+            }
+            Block::Environment(environment) => {
+                if let Some(title) = &mut environment.title
+                    && let Some(math) =
+                        super::super::math_edit::find_inline_math_mut(&mut title.inlines, math_id)
+                {
+                    return Some(math);
+                }
+                if let Some(math) =
+                    find_inline_math_in_blocks_mut(&mut environment.children, math_id)
+                {
+                    return Some(math);
+                }
+            }
+            Block::Equation(_) | Block::Align(_) | Block::ExplicitBreak(_) | Block::Opaque(_) => {}
+        }
+    }
+    None
+}
+
+/// 查找公式在规划后文档中的新宿主段落 ID。
+fn find_inline_math_paragraph_id(blocks: &[Block], math_id: &NodeId) -> Option<NodeId> {
+    for block in blocks {
+        match block {
+            Block::Paragraph(paragraph)
+                if super::super::math_edit::find_inline_math(&paragraph.inlines, math_id)
+                    .is_some() =>
+            {
+                return Some(paragraph.id.clone());
+            }
+            Block::Environment(environment) => {
+                if let Some(title) = &environment.title
+                    && super::super::math_edit::find_inline_math(&title.inlines, math_id).is_some()
+                {
+                    return Some(title.id.clone());
+                }
+                if let Some(id) = find_inline_math_paragraph_id(&environment.children, math_id) {
+                    return Some(id);
+                }
+            }
+            Block::Paragraph(_)
+            | Block::Equation(_)
+            | Block::Align(_)
+            | Block::ExplicitBreak(_)
+            | Block::Opaque(_) => {}
+        }
+    }
+    None
 }
 
 /// 在结果文档中校验并收紧落点偏移；段落已被删除时返回 `None`。

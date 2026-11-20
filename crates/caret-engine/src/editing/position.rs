@@ -42,9 +42,26 @@ pub struct Selection {
     pub focus: Pos,
 }
 
-/// 结构选区端点的文档位置；行内对象两侧仍用段落 U+FFFC 偏移表达。
+/// 结构选区端点保留文档内的真实落点，行内公式外侧使用段落文本位置。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DocumentRangeEndpoint {
+    /// 行内公式中的真实树序列边界，宿主身份与 082 的数学光标相同。
+    InlineMathTree {
+        paragraph_id: NodeId,
+        position: super::MathTreePosition,
+        /// 扩选进入公式时的物理按键方向；用于同向延伸与反向收缩。
+        entry_direction: Direction,
+        /// 进入时沿 MathTree 根序列前进还是后退；独立于正文 anchor 的所在侧。
+        entry_math_forward: bool,
+    },
+    /// 行内公式文本岛的字素边界，保留所属 TextFlow 的路径和 UTF-8 偏移。
+    InlineMathText {
+        paragraph_id: NodeId,
+        math_id: NodeId,
+        position: super::MathTextPosition,
+        entry_direction: Direction,
+        entry_math_forward: bool,
+    },
     /// Paragraph 或环境标题中的文本位置。
     Text(Pos),
     /// 结构范围落在复杂 Block 的外侧边界；相邻文本仅在 caret/几何投影时归一化。

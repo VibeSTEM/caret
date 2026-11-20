@@ -15,6 +15,8 @@ mod document_position;
 mod formatting;
 mod history;
 mod inline_content;
+mod inline_math_range;
+pub use inline_math_range::InlineMathRangeParts;
 mod keyboards;
 mod math_edit;
 pub use math_edit::{
@@ -471,6 +473,16 @@ impl Session {
     pub fn active_host_caret_position(
         &mut self,
     ) -> Option<HostCaretPosition<HostCaretLocalPosition>> {
+        if let Some((anchor, endpoint)) = self.structure_selection_range()
+            && (endpoint.is_inline_math()
+                || (anchor.is_inline_math()
+                    && matches!(endpoint, DocumentRangeEndpoint::BlockEdge { .. })))
+        {
+            let DocumentCaretPosition::Host(host) = endpoint.as_document_caret().ok()? else {
+                return None;
+            };
+            return Some(host);
+        }
         if let Some(position) = self.host_caret_position.clone() {
             match &position {
                 HostCaretPosition::Before {
@@ -693,7 +705,9 @@ impl Session {
     pub fn structure_selection_anchor(&self) -> Option<&Pos> {
         match &self.structure_selection.as_ref()?.anchor {
             DocumentRangeEndpoint::Text(anchor) => Some(anchor),
-            DocumentRangeEndpoint::BlockEdge { .. } => None,
+            DocumentRangeEndpoint::BlockEdge { .. }
+            | DocumentRangeEndpoint::InlineMathTree { .. }
+            | DocumentRangeEndpoint::InlineMathText { .. } => None,
         }
     }
 
@@ -727,13 +741,26 @@ impl Session {
     /// 安装结构选区，并从范围覆盖结果派生块环境与公式块列表。
     ///
     /// 这是结构选区派生状态的唯一写入入口：端点必须能在当前文档中排序，
-    /// 派生失败时不改变任何选区状态。空覆盖（既没有块环境也没有 Equation/Align）
-    /// 不是结构选区，必须在这里拒绝；否则会出现不可见、无法被删除消费且吞掉
-    /// 后续按键的伪结构范围。
+    /// 行内数学切口须包含可消费的根序列项；其余范围须覆盖块环境或显示公式。
+    /// 校验失败时保留已有选区。
     pub(super) fn install_structure_selection(
         &mut self,
         selection: StructureSelection,
     ) -> Result<(), EditError> {
+        if self.resolve_inline_math_parts(&selection)?.is_some() {
+            self.compare_range_endpoints(&selection.anchor, &selection.focus)?;
+            let (start, end) = if self
+                .compare_range_endpoints(&selection.anchor, &selection.focus)?
+                .is_gt()
+            {
+                (&selection.focus, &selection.anchor)
+            } else {
+                (&selection.anchor, &selection.focus)
+            };
+            let (environments, math_blocks) = self.covered_block_nodes(start, end)?;
+            self.assign_structure_selection_state(selection, environments, math_blocks);
+            return Ok(());
+        }
         let (start, end) =
             match self.compare_range_endpoints(&selection.anchor, &selection.focus)? {
                 std::cmp::Ordering::Greater => (&selection.focus, &selection.anchor),
@@ -1490,6 +1517,7 @@ impl Session {
             document_changed,
             math_edit: math_edit_position,
             host_caret_position,
+            inline_range,
             valid,
         } = history::restore_history_transition(transition);
         if !valid {
@@ -1594,7 +1622,33 @@ impl Session {
                 }
             }
         }
+        let restored_inline_coverage = if let Some(range) = inline_range.as_deref() {
+            // 历史切口按目标文档重建的 Session 验证，确保 Math/BlockEdge 与当前比较器同义。
+            let mut candidate = self.clone_preserving_identity();
+            candidate.document = next_document.clone();
+            candidate.paragraph_index = next_paragraph_index.clone();
+            candidate.structure_index = Arc::new(StructureIndex::build(&next_document));
+            let parts = candidate
+                .resolve_inline_math_parts(range)?
+                .ok_or(EditError::InvalidPosition)?;
+            candidate.compare_range_endpoints(&range.anchor, &range.focus)?;
+            if parts.body.focus != selection.focus || selection.anchor != selection.focus {
+                return Err(EditError::InvalidPosition);
+            }
+            let (start, end) = if candidate
+                .compare_range_endpoints(&range.anchor, &range.focus)?
+                .is_gt()
+            {
+                (&range.focus, &range.anchor)
+            } else {
+                (&range.anchor, &range.focus)
+            };
+            Some(candidate.covered_block_nodes(start, end)?)
+        } else {
+            None
+        };
         let selection_changed = self.selection != selection
+            || self.structure_selection.as_ref() != inline_range.as_deref()
             || self.selection_anchor_visual_affinity != anchor_visual_affinity
             || self.selection_visual_affinity != visual_affinity
             || previous_math_edit != restored_math_edit
@@ -1627,6 +1681,11 @@ impl Session {
                 self.session_id = NodeId::generate();
                 self.document_generation = 0;
             }
+        }
+        if let (Some(range), Some((environments, math_blocks))) =
+            (inline_range, restored_inline_coverage)
+        {
+            self.assign_structure_selection_state(*range, environments, math_blocks);
         }
         self.set_host_caret_position(host_caret_position);
         self.sync_math_edit_revision();

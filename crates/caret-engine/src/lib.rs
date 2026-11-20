@@ -20,18 +20,19 @@ pub use editing::{
     CommandLineMode, CommandLineWireField, CompositionRange, CompositionUpdateCandidate,
     CurrentEnvironmentView, Direction, DocumentCaretPosition, DocumentRangeEndpoint, EditError,
     EditorKey, Effect, EnvironmentEntry, EnvironmentKind, EnvironmentLevel, EnvironmentSource,
-    InlineEnvironmentRange, InlineSpan, InputComposition, MathEdit, MathEditBranch, MathEditTarget,
-    MathPositionAffinity, MathPositionHost, MathSequencePath, MathSequenceStep, MathTextFlowPath,
-    MathTextFlowPathStep, MathTextInputContext, MathTextPosition, MathTreePosition,
-    MathTreePositionError, NavigationCandidate, NavigationGeneration, NavigationIntent, Pos,
-    PositionMap, Selection, Session, SessionCaretSnapshot, SessionCheckpoint, StoryId,
-    StructureSelection, utf8_offset_to_utf16, utf16_offset_to_utf8,
+    InlineEnvironmentRange, InlineMathRangeParts, InlineSpan, InputComposition, MathEdit,
+    MathEditBranch, MathEditTarget, MathPositionAffinity, MathPositionHost, MathSequencePath,
+    MathSequenceStep, MathTextFlowPath, MathTextFlowPathStep, MathTextInputContext,
+    MathTextPosition, MathTreePosition, MathTreePositionError, NavigationCandidate,
+    NavigationGeneration, NavigationIntent, Pos, PositionMap, Selection, Session,
+    SessionCaretSnapshot, SessionCheckpoint, StoryId, StructureSelection, utf8_offset_to_utf16,
+    utf16_offset_to_utf8,
 };
 pub use layout::{
     DocumentLayoutError, DocumentLayoutRuntime, DocumentLayoutService, DocumentLayoutSnapshot,
     LaidOutParagraph, MathTextVerticalTarget, MathTreeVerticalTarget, PageCaretGeometry,
     PageEnvironmentRange, PageHit, PageLayoutSnapshot, PageMathStructureHit, PageMathTextDragStop,
-    PageMathTextHit, PageSelectionRect, TextLayoutDiagnostic,
+    PageMathTextHit, PageMathTreeDragStop, PageSelectionRect, TextLayoutDiagnostic,
 };
 pub use layout_view::{
     DocumentLayoutDeltaView, DocumentLayoutView, DocumentPositionView, EnvironmentRangeView,

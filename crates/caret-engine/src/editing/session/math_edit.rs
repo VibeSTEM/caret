@@ -18,12 +18,13 @@ use navigation::{
 mod demotion;
 mod entry_exit;
 pub(super) mod inline_root_split;
+pub(super) mod inline_selection_step;
 mod metadata;
 mod multiline;
 mod navigation;
 mod path;
 mod projection;
-mod selection_extension;
+pub(super) mod selection_extension;
 mod source_commit;
 mod source_draft;
 mod symbol_input;
@@ -64,6 +65,7 @@ pub use tree_position::{
 };
 pub(super) use tree_position::{MathTextFlowBoundary, compare_math_position_affinity};
 use tree_position::{MathTreeCaretMove, advance_math_tree_position, child_sequence_path};
+pub(super) use tree_position::{math_tree_order_key, resolve_sequence_mut};
 
 enum MathTextCaretStep {
     Local(usize),
@@ -304,7 +306,7 @@ pub(super) fn optional_placeholder_operand(
         })
 }
 
-fn math_content_has_unknown_metadata(content: &MathContent) -> bool {
+pub(super) fn math_content_has_unknown_metadata(content: &MathContent) -> bool {
     match content {
         MathContent::Text(text) => {
             !text.extra.is_empty() || text.runs.iter().any(|run| !run.extra.is_empty())
@@ -433,7 +435,7 @@ fn math_text_caret_step(
     ))
 }
 
-fn math_text_offsets_are_boundaries(
+pub(super) fn math_text_offsets_are_boundaries(
     tree: &caret_doc::MathTree,
     path: &MathTextFlowPath,
     offsets: &[usize],
@@ -1342,7 +1344,7 @@ impl Session {
 
     /// 原子应用公式文本拖选端点，保留当前会话的身份、代际与历史。
     ///
-    /// 两个端点先在同一候选状态中完成命中和字素边界校验；任一端点无效时，
+    /// 同一宿主与文本岛 token 内可跨 TextFlow 路径；两个端点在候选状态中校验字素边界。任一端点无效时，
     /// 原会话完全不变。候选副本保留身份，避免纯选区操作伪装成会话替换。
     pub fn set_math_text_selection_from_hits(
         &mut self,
@@ -1350,7 +1352,7 @@ impl Session {
         focus_hit: &crate::PageMathTextHit,
         current_font_generation: u64,
     ) -> Result<Effect, EditError> {
-        if anchor_hit.target != focus_hit.target {
+        if anchor_hit.target != focus_hit.target || anchor_hit.token != focus_hit.token {
             return Err(EditError::InvalidPosition);
         }
         let mut candidate = self.clone_preserving_identity();
@@ -1414,7 +1416,7 @@ pub(super) fn find_inline_math<'a>(
     })
 }
 
-fn find_inline_math_mut<'a>(
+pub(super) fn find_inline_math_mut<'a>(
     nodes: &'a mut [ParagraphContent],
     id: &NodeId,
 ) -> Option<&'a mut InlineMath> {

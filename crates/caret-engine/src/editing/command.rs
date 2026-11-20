@@ -85,6 +85,12 @@ pub enum EditorKey {
 /// app 从同代布局快照算出的单次导航候选；不持有页面布局模型。
 #[derive(Debug, Clone, PartialEq)]
 pub enum NavigationCandidate {
+    /// 布局中的真实块外侧停靠，保留宿主身份和方向。
+    BlockEdge {
+        block_id: NodeId,
+        side: Direction,
+        generation: NavigationGeneration,
+    },
     Document {
         focus: Pos,
         visual_affinity: VisualAffinity,
@@ -93,6 +99,12 @@ pub enum NavigationCandidate {
     MathText {
         focus: MathTextPosition,
         visual_affinity: VisualAffinity,
+        generation: NavigationGeneration,
+    },
+    InlineMathRangeEdge {
+        body_focus: Option<Pos>,
+        body_visual_affinity: Option<VisualAffinity>,
+        forward: bool,
         generation: NavigationGeneration,
     },
     MathTextHit {

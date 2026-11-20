@@ -39,10 +39,10 @@ pub use position::{
     PositionMap, Selection, SessionCaretSnapshot, StoryId, StructureSelection,
 };
 pub use session::{
-    CompositionRange, CompositionUpdateCandidate, MathEdit, MathEditBranch, MathEditTarget,
-    MathPositionAffinity, MathPositionHost, MathSequencePath, MathSequenceStep, MathTextFlowPath,
-    MathTextFlowPathStep, MathTextInputContext, MathTextPosition, MathTreePosition,
-    MathTreePositionError, Session, SessionCheckpoint,
+    CompositionRange, CompositionUpdateCandidate, InlineMathRangeParts, MathEdit, MathEditBranch,
+    MathEditTarget, MathPositionAffinity, MathPositionHost, MathSequencePath, MathSequenceStep,
+    MathTextFlowPath, MathTextFlowPathStep, MathTextInputContext, MathTextPosition,
+    MathTreePosition, MathTreePositionError, Session, SessionCheckpoint,
 };
 pub use text_map::{utf8_offset_to_utf16, utf16_offset_to_utf8};
 pub use types::{ClipboardAction, Effect, InputComposition};

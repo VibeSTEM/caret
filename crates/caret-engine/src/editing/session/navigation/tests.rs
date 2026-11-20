@@ -2274,3 +2274,882 @@ fn horizontal_candidate_direction_mismatch_does_not_park_at_equation() {
         Some((equation_id, Direction::Backward))
     );
 }
+
+#[test]
+fn shift_between_paragraph_and_inline_math_root_edits_only_the_selected_items()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (forward, start, copied, remaining) in [(true, 1, "bx", "+y"), (false, 6, "yc", "x+")] {
+        let mut session = Session::new(Document::blank())?;
+        session.run(Command::InsertText("ab".into()))?;
+        session.run(Command::InsertInlineMath("x+y".into()))?;
+        session.run(Command::InsertText("cd".into()))?;
+        let original = session.document().clone();
+        let mut anchor = session.selection().focus.clone();
+        anchor.offset = start;
+        let mut edge = anchor.clone();
+        edge.offset = if forward { 2 } else { 5 };
+        session.run(Command::SetSelection(Some(Selection {
+            anchor: anchor.clone(),
+            focus: edge.clone(),
+        })))?;
+        let key = |right: bool| {
+            Command::EditorKey(if right {
+                EditorKey::RightArrow {
+                    candidate: None,
+                    extend: true,
+                }
+            } else {
+                EditorKey::LeftArrow {
+                    candidate: None,
+                    extend: true,
+                }
+            })
+        };
+        session.run(key(forward))?;
+        assert_eq!(session.selected_text()?, copied);
+        let mut collapse = session.clone();
+        collapse.run(Command::EditorKey(if forward {
+            EditorKey::RightArrow {
+                candidate: None,
+                extend: false,
+            }
+        } else {
+            EditorKey::LeftArrow {
+                candidate: None,
+                extend: false,
+            }
+        }))?;
+        assert!(collapse.structure_selection_range().is_none());
+        assert_eq!(
+            collapse
+                .math_tree_input_context()
+                .ok_or("expected math focus after collapse")?
+                .1
+                .affinity,
+            if forward {
+                crate::editing::MathPositionAffinity::Upstream
+            } else {
+                crate::editing::MathPositionAffinity::Downstream
+            }
+        );
+        session.run(key(!forward))?;
+        assert_eq!(session.selection().anchor, anchor);
+        assert_eq!(session.selection().focus.offset, edge.offset);
+        session.run(key(forward))?;
+        let parts = session
+            .inline_math_range_parts()
+            .ok_or("expected mixed selection")?;
+        let stale = NavigationCandidate::Document {
+            focus: edge.clone(),
+            visual_affinity: caret_layout::VisualAffinity::Downstream,
+            generation: NavigationGeneration {
+                session_id: session.session_id().clone(),
+                document_generation: session.document_generation() + 1,
+                font_generation: 0,
+            },
+        };
+        let history = session.history_state_id();
+        assert!(
+            session
+                .run(Command::EditorKey(EditorKey::RightArrow {
+                    candidate: Some(stale),
+                    extend: true
+                }))
+                .is_err()
+        );
+        assert_eq!(session.history_state_id(), history);
+        assert_eq!(session.inline_math_range_parts().as_ref(), Some(&parts));
+        for replacement in [false, true] {
+            let mut edit = session.clone();
+            if replacement {
+                edit.run(Command::InsertText("Z".into()))?;
+            } else {
+                edit.run(Command::EditorKey(EditorKey::Delete))?;
+            }
+            let Block::Paragraph(p) = &edit.document().body[0] else {
+                return Err("expected paragraph".into());
+            };
+            let text = p
+                .inlines
+                .iter()
+                .map(|node| match node {
+                    ParagraphContent::Math(math) => {
+                        format!("<{}>", caret_math::serialize_tree(&math.math_tree))
+                    }
+                    ParagraphContent::Text(flow) => {
+                        flow.runs.iter().map(|run| run.text.as_str()).collect()
+                    }
+                    _ => String::new(),
+                })
+                .collect::<String>();
+            let insert = if replacement { "Z" } else { "" };
+            let expected = if forward {
+                format!("a{insert}<{remaining}>cd")
+            } else {
+                format!("ab<{remaining}>{insert}d")
+            };
+            assert_eq!(text, expected);
+            let result = edit.document().clone();
+            edit.run(Command::Undo)?;
+            assert_eq!(edit.document(), &original);
+            assert_eq!(edit.inline_math_range_parts().as_ref(), Some(&parts));
+            edit.run(Command::Redo)?;
+            assert_eq!(edit.document(), &result);
+            assert!(edit.structure_selection_range().is_none());
+        }
+    }
+    Ok(())
+}
+
+fn mixed_tree_focus_offset(session: &Session) -> Result<usize, &'static str> {
+    match session.structure_selection_range() {
+        Some((_, crate::DocumentRangeEndpoint::InlineMathTree { position, .. })) => {
+            Ok(position.offset)
+        }
+        _ => Err("expected mixed selection with tree focus"),
+    }
+}
+
+#[test]
+fn visual_candidate_crossing_rtl_inline_math_steps_from_the_near_root_edge()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (mut session, paragraph_id) = session_with_inline_math_in_the_middle("x+y");
+    let after = body_position(&paragraph_id, 5, Affinity::Upstream);
+    let anchor = body_position(&paragraph_id, 6, Affinity::Downstream);
+    let before = body_position(&paragraph_id, 2, Affinity::Downstream);
+    session.run(Command::SetSelection(Some(Selection {
+        anchor: anchor.clone(),
+        focus: after.clone(),
+    })))?;
+
+    // RTL 视觉右移可从 InlineMath 之后跨到逻辑上较早的正文偏移。
+    for expected_offset in [2, 1] {
+        let candidate = document_candidate_for(
+            &session,
+            before.clone(),
+            caret_layout::VisualAffinity::Downstream,
+        );
+        session.run(Command::EditorKey(EditorKey::RightArrow {
+            candidate: Some(candidate),
+            extend: true,
+        }))?;
+        let parts = session
+            .inline_math_range_parts()
+            .ok_or("visual crossing should retain an InlineMath range")?;
+        assert_eq!(mixed_tree_focus_offset(&session)?, expected_offset);
+        assert_eq!(parts.body.anchor.offset, 6);
+    }
+    assert_eq!(session.selected_text()?, "+yc");
+
+    // 视觉左移回到正文锚点时，候选不再跨公式，交给共享范围入口收缩。
+    let outside = document_candidate_for(
+        &session,
+        body_position(&paragraph_id, 6, Affinity::Downstream),
+        caret_layout::VisualAffinity::Downstream,
+    );
+    session.run(Command::EditorKey(EditorKey::LeftArrow {
+        candidate: Some(outside),
+        extend: true,
+    }))?;
+    assert_eq!(mixed_tree_focus_offset(&session)?, 2);
+    assert_eq!(session.selected_text()?, "yc");
+    Ok(())
+}
+
+#[test]
+fn inline_math_entry_direction_is_independent_of_the_body_selection_anchor()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (mut session, paragraph_id) = session_with_inline_math_in_the_middle("x+y");
+    let anchor = body_position(&paragraph_id, 1, Affinity::Downstream);
+    let focus = body_position(&paragraph_id, 5, Affinity::Upstream);
+    let entered_edge = body_position(&paragraph_id, 2, Affinity::Downstream);
+    session.run(Command::SetSelection(Some(Selection {
+        anchor: anchor.clone(),
+        focus,
+    })))?;
+
+    for expected_offset in [2, 1] {
+        let candidate = document_candidate_for(
+            &session,
+            entered_edge.clone(),
+            caret_layout::VisualAffinity::Downstream,
+        );
+        session.run(Command::EditorKey(EditorKey::LeftArrow {
+            candidate: Some(candidate),
+            extend: true,
+        }))?;
+        assert_eq!(mixed_tree_focus_offset(&session)?, expected_offset);
+    }
+    assert_eq!(session.selected_text()?, "bx");
+
+    let candidate = document_candidate_for(
+        &session,
+        body_position(&paragraph_id, 5, Affinity::Upstream),
+        caret_layout::VisualAffinity::Upstream,
+    );
+    session.run(Command::EditorKey(EditorKey::RightArrow {
+        candidate: Some(candidate),
+        extend: true,
+    }))?;
+    assert_eq!(mixed_tree_focus_offset(&session)?, 2);
+    assert_eq!(session.selected_text()?, "bx+");
+    let range = session
+        .structure_selection_range()
+        .ok_or("expected document-level InlineMath range")?;
+    assert_eq!(
+        range.0,
+        &crate::editing::DocumentRangeEndpoint::Text(anchor)
+    );
+    Ok(())
+}
+
+#[test]
+fn mixed_pointer_text_grapheme_preserves_nested_operands_and_history()
+-> Result<(), Box<dyn std::error::Error>> {
+    use crate::{
+        DocumentRangeEndpoint, MathPositionAffinity, MathTextFlowPath,
+        MathTextFlowPathStep as Step, MathTextPosition, StructureSelection, VisualAffinity,
+    };
+    let mut paragraph = paragraph_with_run_text("前");
+    let ParagraphContent::Math(mut formula) = inline_math_content(r"x+\frac{a}{b}+z") else {
+        return Err("expected formula".into());
+    };
+    let caret_doc::MathContent::Math(fraction) = &mut formula.math_tree.root.content[2] else {
+        return Err("expected fraction".into());
+    };
+    let ParagraphContent::Text(flow) = paragraph_with_run_text("e\u{301}猫").inlines.remove(0)
+    else {
+        return Err("expected text".into());
+    };
+    fraction.children[0].content = vec![caret_doc::MathContent::Text(flow)];
+    let math_id = formula.id.clone();
+    let paragraph_id = paragraph.id.clone();
+    paragraph.inlines.push(ParagraphContent::Math(formula));
+    paragraph
+        .inlines
+        .extend(paragraph_with_run_text("后").inlines);
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(paragraph)];
+    let path = MathTextFlowPath::from_interaction_path(
+        vec![Step::Content(2), Step::Operand(0), Step::Content(0)],
+        None,
+    );
+    let text = |offset| DocumentRangeEndpoint::InlineMathText {
+        paragraph_id: paragraph_id.clone(),
+        math_id: math_id.clone(),
+        position: MathTextPosition::new(path.clone(), offset, MathPositionAffinity::Downstream),
+        entry_direction: Direction::Forward,
+        entry_math_forward: true,
+    };
+    let end = "e\u{301}".len();
+    let body = DocumentRangeEndpoint::Text(body_position(&paragraph_id, 0, Affinity::Downstream));
+    for reversed in [false, true] {
+        let (anchor, focus) = if reversed {
+            (text(end), body.clone())
+        } else {
+            (body.clone(), text(end))
+        };
+        let range = StructureSelection { anchor, focus };
+        let mut session = Session::new(document.clone())?;
+        let visual = VisualAffinity::Downstream;
+        session.set_pointer_inline_math_selection(range, visual, visual)?;
+        let range = session
+            .structure_selection
+            .clone()
+            .ok_or("missing mixed selection")?;
+        assert_eq!(session.selected_text()?, "前x+e\u{301}");
+        let invalid = StructureSelection {
+            anchor: body.clone(),
+            focus: text(1),
+        };
+        assert!(
+            session
+                .set_pointer_inline_math_selection(invalid, visual, visual)
+                .is_err()
+        );
+        assert_eq!(
+            session.structure_selection_range(),
+            Some((&range.anchor, &range.focus))
+        );
+        for replacement in [false, true] {
+            let mut edit = session.clone();
+            edit.run(if replacement {
+                Command::InsertText("替".into())
+            } else {
+                Command::EditorKey(EditorKey::Delete)
+            })?;
+            let Block::Paragraph(p) = &edit.document().body[0] else {
+                return Err("expected paragraph".into());
+            };
+            let math = p
+                .inlines
+                .iter()
+                .find_map(|inline| {
+                    if let ParagraphContent::Math(math) = inline {
+                        Some(math)
+                    } else {
+                        None
+                    }
+                })
+                .ok_or("formula disappeared")?;
+            assert_eq!(math.id, math_id);
+            let caret_doc::MathContent::Math(fraction) = &math.math_tree.root.content[0] else {
+                return Err("fraction disappeared".into());
+            };
+            let [caret_doc::MathContent::Text(numerator)] = fraction.children[0].content.as_slice()
+            else {
+                return Err("missing numerator text".into());
+            };
+            assert_eq!(
+                numerator
+                    .runs
+                    .iter()
+                    .map(|run| run.text.as_str())
+                    .collect::<String>(),
+                "猫"
+            );
+            assert_eq!(caret_math::serialize_node(&fraction.children[1]), "b");
+            assert_eq!(math.math_tree.root.content.len(), 3);
+            assert_eq!(
+                p.inlines
+                    .iter()
+                    .filter_map(|inline| if let ParagraphContent::Text(t) = inline {
+                        Some(t.runs.iter().map(|r| r.text.as_str()).collect::<String>())
+                    } else {
+                        None
+                    })
+                    .collect::<String>(),
+                if replacement { "替后" } else { "后" }
+            );
+            let changed = edit.document().clone();
+            edit.run(Command::Undo)?;
+            assert_eq!(edit.document(), &document);
+            assert_eq!(
+                edit.structure_selection_range(),
+                Some((&range.anchor, &range.focus))
+            );
+            edit.run(Command::Redo)?;
+            assert_eq!(edit.document(), &changed);
+        }
+    }
+    let mut session = Session::new(document.clone())?;
+    session.set_pointer_inline_math_selection(
+        StructureSelection {
+            anchor: text(0),
+            focus: text(end),
+        },
+        VisualAffinity::Downstream,
+        VisualAffinity::Upstream,
+    )?;
+    assert_eq!(session.selected_text()?, "e\u{301}");
+    session.run(Command::EditorKey(EditorKey::RightArrow {
+        candidate: None,
+        extend: true,
+    }))?;
+    assert_eq!(session.selected_text()?, "e\u{301}猫");
+    session.run(Command::EditorKey(EditorKey::LeftArrow {
+        candidate: None,
+        extend: true,
+    }))?;
+    assert_eq!(session.selected_text()?, "e\u{301}");
+    session.run(Command::EditorKey(EditorKey::RightArrow {
+        candidate: None,
+        extend: false,
+    }))?;
+    assert_eq!(
+        session
+            .math_text_input_context()
+            .ok_or("missing math caret")?
+            .focus
+            .offset,
+        end
+    );
+    Ok(())
+}
+
+#[test]
+fn inline_math_text_copy_is_plain_across_text_and_tree_endpoints()
+-> Result<(), Box<dyn std::error::Error>> {
+    use crate::{
+        DocumentRangeEndpoint, MathPositionAffinity, MathPositionHost, MathSequencePath,
+        MathSequenceStep, MathTextFlowPath, MathTextFlowPathStep as Step, MathTextPosition,
+        StructureSelection, VisualAffinity,
+    };
+    let mut paragraph = paragraph_with_run_text("");
+    let ParagraphContent::Math(mut formula) = inline_math_content(r"\frac{a}{b}") else {
+        return Err("expected formula".into());
+    };
+    let caret_doc::MathContent::Math(fraction) = &mut formula.math_tree.root.content[0] else {
+        return Err("expected fraction".into());
+    };
+    let ParagraphContent::Text(text_flow) = paragraph_with_run_text("ab").inlines.remove(0) else {
+        return Err("expected text flow".into());
+    };
+    fraction.children[0].content = vec![caret_doc::MathContent::Text(text_flow)];
+    let math_id = formula.id.clone();
+    let paragraph_id = paragraph.id.clone();
+    paragraph.inlines.push(ParagraphContent::Math(formula));
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(paragraph)];
+    let text_path = MathTextFlowPath::from_interaction_path(
+        vec![Step::Content(0), Step::Operand(0), Step::Content(0)],
+        None,
+    );
+    let text_range = StructureSelection {
+        anchor: DocumentRangeEndpoint::InlineMathText {
+            paragraph_id: paragraph_id.clone(),
+            math_id: math_id.clone(),
+            position: MathTextPosition::new(text_path.clone(), 0, MathPositionAffinity::Downstream),
+            entry_direction: Direction::Forward,
+            entry_math_forward: true,
+        },
+        focus: DocumentRangeEndpoint::InlineMathText {
+            paragraph_id: paragraph_id.clone(),
+            math_id: math_id.clone(),
+            position: MathTextPosition::new(text_path, 2, MathPositionAffinity::Upstream),
+            entry_direction: Direction::Forward,
+            entry_math_forward: true,
+        },
+    };
+    let sequence_path = MathSequencePath::new(vec![MathSequenceStep::Operand {
+        content_index: 0,
+        operand_index: 0,
+    }]);
+    let tree_position = |offset| crate::MathTreePosition {
+        host: MathPositionHost::InlineMath {
+            owner_id: math_id.clone(),
+        },
+        path: sequence_path.clone(),
+        offset,
+        affinity: MathPositionAffinity::Downstream,
+    };
+    let tree_range = StructureSelection {
+        anchor: DocumentRangeEndpoint::InlineMathTree {
+            paragraph_id: paragraph_id.clone(),
+            position: tree_position(0),
+            entry_direction: Direction::Forward,
+            entry_math_forward: true,
+        },
+        focus: DocumentRangeEndpoint::InlineMathTree {
+            paragraph_id,
+            position: tree_position(1),
+            entry_direction: Direction::Forward,
+            entry_math_forward: true,
+        },
+    };
+    for range in [text_range, tree_range] {
+        let mut session = Session::new(document.clone())?;
+        session.set_pointer_inline_math_selection(
+            range,
+            VisualAffinity::Downstream,
+            VisualAffinity::Upstream,
+        )?;
+        assert_eq!(session.selected_text()?, "ab");
+    }
+    Ok(())
+}
+
+#[test]
+fn mixed_pointer_between_formulae_in_two_paragraphs_preserves_both_cuts()
+-> Result<(), Box<dyn std::error::Error>> {
+    use crate::{
+        DocumentRangeEndpoint, MathPositionAffinity, MathPositionHost, MathSequencePath,
+        MathTreePosition, StructureSelection, VisualAffinity,
+    };
+    let mut document = Document::blank();
+    document.body.clear();
+    let mut endpoints = Vec::new();
+    for (before, formula, after, offset) in [("前", "a+b", "甲", 1), ("乙", "c+d", "后", 2)] {
+        let mut paragraph = paragraph_with_run_text(before);
+        let ParagraphContent::Math(math) = inline_math_content(formula) else {
+            return Err("expected formula".into());
+        };
+        endpoints.push(DocumentRangeEndpoint::InlineMathTree {
+            paragraph_id: paragraph.id.clone(),
+            position: MathTreePosition {
+                host: MathPositionHost::InlineMath {
+                    owner_id: math.id.clone(),
+                },
+                path: MathSequencePath::root(),
+                offset,
+                affinity: MathPositionAffinity::Downstream,
+            },
+            entry_direction: Direction::Forward,
+            entry_math_forward: true,
+        });
+        paragraph.inlines.push(ParagraphContent::Math(math));
+        paragraph
+            .inlines
+            .extend(paragraph_with_run_text(after).inlines);
+        document.body.push(Block::Paragraph(paragraph));
+    }
+    for (anchor, focus) in [
+        (&endpoints[0], &endpoints[1]),
+        (&endpoints[1], &endpoints[0]),
+    ] {
+        let mut session = Session::new(document.clone())?;
+        session.set_pointer_inline_math_selection(
+            StructureSelection {
+                anchor: anchor.clone(),
+                focus: focus.clone(),
+            },
+            VisualAffinity::Downstream,
+            VisualAffinity::Upstream,
+        )?;
+        let installed = session
+            .structure_selection
+            .clone()
+            .ok_or("missing mixed selection")?;
+        assert_eq!(session.selected_text()?, "+b甲\n乙c+");
+        session.run(Command::InsertText("替".into()))?;
+        let [Block::Paragraph(remaining)] = session.document().body.as_slice() else {
+            return Err("paragraphs should merge".into());
+        };
+        // 跨宿主替换使用合并后的正文切口，保留左右两个公式及其未选中的内容。
+        let rendered: String = remaining
+            .inlines
+            .iter()
+            .map(|item| match item {
+                ParagraphContent::Text(t) => t.runs.iter().map(|r| r.text.as_str()).collect(),
+                ParagraphContent::Math(m) => {
+                    format!("<{}>", caret_math::serialize_tree(&m.math_tree))
+                }
+                _ => String::new(),
+            })
+            .collect();
+        assert_eq!(rendered, "前<a>替<d>后");
+        let after = session.document().clone();
+        session.run(Command::Undo)?;
+        assert_eq!(session.document(), &document);
+        assert_eq!(
+            session.structure_selection_range(),
+            Some((&installed.anchor, &installed.focus))
+        );
+        session.run(Command::Redo)?;
+        assert_eq!(session.document(), &after);
+    }
+    Ok(())
+}
+
+#[test]
+fn extending_a_math_anchor_over_the_next_block_preserves_the_formula_suffix()
+-> Result<(), Box<dyn std::error::Error>> {
+    use crate::{
+        DocumentRangeEndpoint, MathPositionAffinity, MathPositionHost, MathSequencePath,
+        MathTreePosition, StructureSelection, VisualAffinity,
+    };
+    let mut paragraph = paragraph_with_run_text("甲");
+    let ParagraphContent::Math(math) = inline_math_content("a+b") else {
+        return Err("expected formula".into());
+    };
+    let anchor = DocumentRangeEndpoint::InlineMathTree {
+        paragraph_id: paragraph.id.clone(),
+        position: MathTreePosition {
+            host: MathPositionHost::InlineMath {
+                owner_id: math.id.clone(),
+            },
+            path: MathSequencePath::root(),
+            offset: 1,
+            affinity: MathPositionAffinity::Downstream,
+        },
+        entry_direction: Direction::Forward,
+        entry_math_forward: true,
+    };
+    paragraph.inlines.push(ParagraphContent::Math(math));
+    let focus = DocumentRangeEndpoint::Text(body_position(
+        &paragraph.id,
+        "甲\u{fffc}".len(),
+        Affinity::Upstream,
+    ));
+    let (equation, id) = equation_block_for_unit_navigation();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(paragraph),
+        equation,
+        Block::Paragraph(paragraph_with_run_text("末")),
+    ];
+    let mut session = Session::new(document.clone())?;
+    session.set_pointer_inline_math_selection(
+        StructureSelection {
+            anchor: anchor.clone(),
+            focus,
+        },
+        VisualAffinity::Downstream,
+        VisualAffinity::Upstream,
+    )?;
+    session.run(Command::EditorKey(EditorKey::RightArrow {
+        candidate: None,
+        extend: true,
+    }))?;
+    assert_eq!(session.selected_text()?, "+b\n\u{fffc}");
+    let focus = DocumentRangeEndpoint::BlockEdge {
+        block_id: id,
+        side: Direction::Forward,
+    };
+    assert_eq!(session.structure_selection_range(), Some((&anchor, &focus)));
+    session.run(Command::EditorKey(EditorKey::Delete))?;
+    assert_eq!(session.document().body.len(), 2);
+    session.run(Command::Undo)?;
+    assert_eq!(session.document(), &document);
+    assert_eq!(session.structure_selection_range(), Some((&anchor, &focus)));
+    assert_eq!(session.selected_text()?, "+b\n\u{fffc}");
+    Ok(())
+}
+
+#[test]
+fn pointer_math_ranges_extend_in_gesture_direction_after_reverse_or_rtl_drag()
+-> Result<(), Box<dyn std::error::Error>> {
+    use crate::{
+        DocumentRangeEndpoint, MathPositionAffinity, MathPositionHost, MathSequencePath,
+        MathSequenceStep, MathTextFlowPath, MathTextFlowPathStep as Step, MathTextPosition,
+        MathTreePosition, StructureSelection, VisualAffinity,
+    };
+    let mut paragraph = paragraph_with_run_text("");
+    let ParagraphContent::Math(mut math) = inline_math_content(r"\frac{yzw}{b}") else {
+        return Err("missing formula".into());
+    };
+    let caret_doc::MathContent::Math(fraction) = &mut math.math_tree.root.content[0] else {
+        return Err("missing fraction".into());
+    };
+    let ParagraphContent::Text(flow) = paragraph_with_run_text("abcd").inlines.remove(0) else {
+        return Err("missing text flow".into());
+    };
+    fraction.children[0]
+        .content
+        .insert(0, caret_doc::MathContent::Text(flow));
+    fraction.children[1].content = vec![caret_doc::MathContent::Text(TextFlow {
+        runs: vec![Run {
+            text: "q".to_owned(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }],
+        extra: BTreeMap::new(),
+    })];
+    let paragraph_id = paragraph.id.clone();
+    let math_id = math.id.clone();
+    paragraph.inlines.push(ParagraphContent::Math(math));
+    let mut doc = Document::blank();
+    doc.body = vec![Block::Paragraph(paragraph)];
+    let text = |offset, direction, math_forward| DocumentRangeEndpoint::InlineMathText {
+        paragraph_id: paragraph_id.clone(),
+        math_id: math_id.clone(),
+        position: MathTextPosition::new(
+            MathTextFlowPath::from_interaction_path(
+                vec![Step::Content(0), Step::Operand(0), Step::Content(0)],
+                None,
+            ),
+            offset,
+            MathPositionAffinity::Downstream,
+        ),
+        entry_direction: direction,
+        entry_math_forward: math_forward,
+    };
+    let tree = |offset, direction, math_forward| DocumentRangeEndpoint::InlineMathTree {
+        paragraph_id: paragraph_id.clone(),
+        position: MathTreePosition {
+            host: MathPositionHost::InlineMath {
+                owner_id: math_id.clone(),
+            },
+            path: MathSequencePath::new(vec![MathSequenceStep::Operand {
+                content_index: 0,
+                operand_index: 0,
+            }]),
+            offset,
+            affinity: MathPositionAffinity::Downstream,
+        },
+        entry_direction: direction,
+        entry_math_forward: math_forward,
+    };
+    let right = Direction::Forward;
+    let left = Direction::Backward;
+    let key = |direction| {
+        Command::EditorKey(if direction == right {
+            EditorKey::RightArrow {
+                candidate: None,
+                extend: true,
+            }
+        } else {
+            EditorKey::LeftArrow {
+                candidate: None,
+                extend: true,
+            }
+        })
+    };
+    // 指针端点保存焦点所在数学局部方向；RTL 的正文锚点不决定公式内左右映射。
+    for (anchor, focus, direction, initial, extended) in [
+        (
+            tree(2, right, true),
+            text(3, right, false),
+            right,
+            "dy",
+            "cdy",
+        ),
+        (text(3, left, true), tree(2, left, true), left, "dy", "dyz"),
+        (
+            tree(3, right, true),
+            tree(2, right, false),
+            right,
+            "z",
+            "yz",
+        ),
+    ] {
+        let mut session = Session::new(doc.clone())?;
+        session.set_pointer_inline_math_selection(
+            StructureSelection { anchor, focus },
+            VisualAffinity::Downstream,
+            VisualAffinity::Upstream,
+        )?;
+        let original = session
+            .structure_selection
+            .clone()
+            .ok_or("missing pointer range")?;
+        assert_eq!(session.selected_text()?, initial);
+        session.run(key(direction))?;
+        assert_eq!(session.selected_text()?, extended);
+        assert_eq!(
+            session.structure_selection_range().map(|(a, _)| a),
+            Some(&original.anchor)
+        );
+        session.run(key(if direction == right { left } else { right }))?;
+        assert_eq!(session.selected_text()?, initial);
+    }
+
+    let mut session = Session::new(doc.clone())?;
+    let range = StructureSelection {
+        anchor: tree(2, right, true),
+        focus: text(3, right, true),
+    };
+    session.set_pointer_inline_math_selection(
+        range.clone(),
+        VisualAffinity::Downstream,
+        VisualAffinity::Upstream,
+    )?;
+    let other_island = MathTextPosition::new(
+        MathTextFlowPath::from_interaction_path(
+            vec![Step::Content(0), Step::Operand(1), Step::Content(0)],
+            None,
+        ),
+        1,
+        MathPositionAffinity::Downstream,
+    );
+    let generation = NavigationGeneration {
+        session_id: session.session_id().clone(),
+        document_generation: session.document_generation(),
+        font_generation: 0,
+    };
+    let selection_before = session
+        .structure_selection_range()
+        .map(|(a, f)| (a.clone(), f.clone()));
+    let document_before = session.document().clone();
+    let invalid_same_island = MathTextPosition::new(
+        MathTextFlowPath::from_interaction_path(
+            vec![Step::Content(0), Step::Operand(0), Step::Content(0)],
+            None,
+        ),
+        99,
+        MathPositionAffinity::Downstream,
+    );
+    for candidate_position in [other_island, invalid_same_island] {
+        let invalid_candidate = NavigationCandidate::MathText {
+            focus: candidate_position,
+            visual_affinity: VisualAffinity::Downstream,
+            generation: generation.clone(),
+        };
+        assert!(
+            session
+                .run(Command::EditorKey(EditorKey::RightArrow {
+                    candidate: Some(invalid_candidate),
+                    extend: true,
+                }))
+                .is_err()
+        );
+        assert_eq!(
+            session
+                .structure_selection_range()
+                .map(|(a, f)| (a.clone(), f.clone())),
+            selection_before
+        );
+    }
+    assert_eq!(session.document(), &document_before);
+    Ok(())
+}
+
+#[test]
+fn selected_math_symbols_and_text_keep_control_words_and_color_scope()
+-> Result<(), Box<dyn std::error::Error>> {
+    use crate::{
+        DocumentRangeEndpoint, MathPositionAffinity, MathPositionHost, MathSequencePath,
+        MathSequenceStep, MathTextFlowPath, MathTextFlowPathStep as Step, MathTextPosition,
+        MathTreePosition, StructureSelection, VisualAffinity,
+    };
+    for (source, expected) in [
+        (r"\frac{\alpha}{b}", r"\alpha "),
+        (r"\frac{\color{red}x}{b}", r"\textcolor{red}{x}"),
+    ] {
+        let mut paragraph = paragraph_with_run_text("");
+        let ParagraphContent::Math(mut math) = inline_math_content(source) else {
+            return Err("missing formula".into());
+        };
+        let caret_doc::MathContent::Math(fraction) = &mut math.math_tree.root.content[0] else {
+            return Err("missing fraction".into());
+        };
+        for text in ["a", "bc"] {
+            let ParagraphContent::Text(flow) = paragraph_with_run_text(text).inlines.remove(0)
+            else {
+                return Err("missing text flow".into());
+            };
+            fraction.children[0]
+                .content
+                .push(caret_doc::MathContent::Text(flow));
+        }
+        let math_id = math.id.clone();
+        let paragraph_id = paragraph.id.clone();
+        paragraph.inlines.push(ParagraphContent::Math(math));
+        let mut document = Document::blank();
+        document.body = vec![Block::Paragraph(paragraph)];
+        let tree = |offset| DocumentRangeEndpoint::InlineMathTree {
+            paragraph_id: paragraph_id.clone(),
+            position: MathTreePosition {
+                host: MathPositionHost::InlineMath {
+                    owner_id: math_id.clone(),
+                },
+                path: MathSequencePath::new(vec![MathSequenceStep::Operand {
+                    content_index: 0,
+                    operand_index: 0,
+                }]),
+                offset,
+                affinity: MathPositionAffinity::Downstream,
+            },
+            entry_direction: Direction::Forward,
+            entry_math_forward: true,
+        };
+        let partial = DocumentRangeEndpoint::InlineMathText {
+            paragraph_id: paragraph_id.clone(),
+            math_id: math_id.clone(),
+            position: MathTextPosition::new(
+                MathTextFlowPath::from_interaction_path(
+                    vec![Step::Content(0), Step::Operand(0), Step::Content(2)],
+                    None,
+                ),
+                1,
+                MathPositionAffinity::Downstream,
+            ),
+            entry_direction: Direction::Forward,
+            entry_math_forward: true,
+        };
+        for (focus, suffix) in [(tree(3), "abc"), (partial, "ab")] {
+            let mut session = Session::new(document.clone())?;
+            session.set_pointer_inline_math_selection(
+                StructureSelection {
+                    anchor: tree(0),
+                    focus,
+                },
+                VisualAffinity::Downstream,
+                VisualAffinity::Upstream,
+            )?;
+            assert_eq!(session.selected_text()?, format!("{expected}{suffix}"));
+        }
+    }
+    Ok(())
+}

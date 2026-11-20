@@ -208,6 +208,7 @@ impl Session {
                 &merged_math_focus.paragraph_id,
                 &merged_math_focus.math_id,
                 merged_math_focus.root_offset,
+                crate::MathPositionAffinity::Downstream,
             )?;
             return Ok(Effect {
                 document_changed: true,

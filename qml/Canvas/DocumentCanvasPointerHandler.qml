@@ -27,6 +27,13 @@ Item {
         })
     property int dragAnchorPage: -1
     property bool selectionDragActive: false
+    property bool dragSelectionCommitInProgress: false
+    property bool dragLayoutRefreshDuringCommit: false
+    property bool dragRebasePending: false
+    property bool dragPreeditCancelInProgress: false
+    property var dragRebaseIdentity: null
+    property var dragRebasePressPosition: null
+    property var dragRebaseCurrentPosition: null
     // 正文拖选直接把焦点变化提交给 Rust 会话，由同一选区投影绘制；公式文本岛仍用片段预览。
     property bool previewOnly: false
 
@@ -36,8 +43,20 @@ Item {
         target: LayoutViewModel
 
         function onLayoutChanged() {
-            if (inputHandler.selectionDragActive && !inputHandler.dragSnapshotIsCurrent())
+            if (inputHandler.selectionDragActive && !inputHandler.dragSnapshotIsCurrent()) {
+                if (inputHandler.dragRebasePending && inputHandler.dragPreeditCancelInProgress)
+                    return;
+                if (inputHandler.dragRebasePending) {
+                    if (!inputHandler.dragRebaseIdentityIsCurrent())
+                        inputHandler.resetDragPreview();
+                    return;
+                }
+                if (inputHandler.dragSelectionCommitInProgress) {
+                    inputHandler.dragLayoutRefreshDuringCommit = true;
+                    return;
+                }
                 inputHandler.resetDragPreview();
+            }
         }
     }
 
@@ -74,14 +93,16 @@ Item {
                 inputHandler.canvas.forceActiveFocus(Qt.MouseFocusReason);
                 inputHandler.selectionDragActive = true;
                 inputHandler.resetDragPreview();
-                inputHandler.dragSnapshot = ({
-                        documentGeneration: LayoutViewModel.documentGeneration,
-                        fontGeneration: LayoutViewModel.fontGeneration,
-                        layoutRevision: String(LayoutViewModel.layoutRevision)
-                    });
+                inputHandler.dragSnapshot = inputHandler.currentDragIdentity();
                 inputHandler.updateDragPreview(centroid.pressPosition, true);
                 inputHandler.updateDragPreview(centroid.position, false);
             } else {
+                if (inputHandler.dragRebasePending) {
+                    if (inputHandler.dragRebaseIdentityIsCurrent())
+                        inputHandler.rebaseDragPreview(centroid.pressPosition, centroid.position, true);
+                    else
+                        inputHandler.resetDragPreview();
+                }
                 if (inputHandler.dragSnapshotIsCurrent() && inputHandler.dragAnchor !== null && inputHandler.dragFocus !== null) {
                     const result = LayoutViewModel.setSelection(inputHandler.dragAnchor, inputHandler.dragFocus);
                     if (!result.valid)
@@ -115,10 +136,28 @@ Item {
     }
 
     function dragSnapshotIsCurrent() {
-        return dragSnapshot !== null && dragSnapshot.documentGeneration === LayoutViewModel.documentGeneration && dragSnapshot.fontGeneration === LayoutViewModel.fontGeneration && dragSnapshot.layoutRevision === String(LayoutViewModel.layoutRevision);
+        return dragSnapshot !== null && dragSnapshot.documentGeneration === LayoutViewModel.documentGeneration && dragSnapshot.fontGeneration === LayoutViewModel.fontGeneration && dragSnapshot.sessionId === LayoutViewModel.sessionId && dragSnapshot.layoutRevision === String(LayoutViewModel.layoutRevision);
+    }
+
+    function currentDragIdentity() {
+        return ({
+                documentGeneration: LayoutViewModel.documentGeneration,
+                fontGeneration: LayoutViewModel.fontGeneration,
+                sessionId: LayoutViewModel.sessionId,
+                layoutRevision: String(LayoutViewModel.layoutRevision)
+            });
+    }
+
+    function dragRebaseIdentityIsCurrent() {
+        return dragRebaseIdentity !== null && dragRebaseIdentity.documentGeneration === LayoutViewModel.documentGeneration && dragRebaseIdentity.fontGeneration === LayoutViewModel.fontGeneration && dragRebaseIdentity.sessionId === LayoutViewModel.sessionId && dragRebaseIdentity.layoutRevision === String(LayoutViewModel.layoutRevision);
     }
 
     function resetDragPreview() {
+        dragRebasePending = false;
+        dragPreeditCancelInProgress = false;
+        dragRebaseIdentity = null;
+        dragRebasePressPosition = null;
+        dragRebaseCurrentPosition = null;
         dragSnapshot = null;
         dragMaps = ({});
         dragAnchor = null;
@@ -128,7 +167,24 @@ Item {
         canvas.selectionPreviewRects = [];
     }
 
+    function rebaseDragPreview(pressPosition, currentPosition, allowInactive) {
+        if (!selectionDrag.active && allowInactive !== true)
+            return;
+        if (dragRebasePending && !dragRebaseIdentityIsCurrent()) {
+            resetDragPreview();
+            return;
+        }
+        resetDragPreview();
+        dragSnapshot = currentDragIdentity();
+        updateDragPreview(pressPosition, true);
+        updateDragPreview(currentPosition, false);
+    }
+
     function updateDragPreview(point, start) {
+        if (dragRebasePending) {
+            dragRebaseCurrentPosition = point;
+            return;
+        }
         if (!dragSnapshotIsCurrent()) {
             resetDragPreview();
             return;
@@ -213,13 +269,35 @@ Item {
     }
 
     function commitDragSelection() {
+        dragSelectionCommitInProgress = true;
+        dragLayoutRefreshDuringCommit = false;
         const result = LayoutViewModel.setSelection(dragAnchor, dragFocus);
+        dragSelectionCommitInProgress = false;
+        const refreshed = dragLayoutRefreshDuringCommit || !dragSnapshotIsCurrent();
+        dragLayoutRefreshDuringCommit = false;
         if (!result.valid) {
             console.warn("Document drag selection failed:", result.error);
+            if (refreshed)
+                resetDragPreview();
             return;
         }
-        if (result.compositionCancelled === true)
+        if (result.compositionCancelled === true) {
+            dragRebasePending = true;
+            dragRebasePressPosition = selectionDrag.centroid.pressPosition;
+            dragRebaseCurrentPosition = selectionDrag.centroid.position;
+            dragPreeditCancelInProgress = true;
             canvas.cancelPreedit();
+            dragPreeditCancelInProgress = false;
+            dragRebaseIdentity = currentDragIdentity();
+            Qt.callLater(function () {
+                if (inputHandler.dragRebasePending && inputHandler.dragRebaseIdentityIsCurrent())
+                    inputHandler.rebaseDragPreview(inputHandler.dragRebasePressPosition, inputHandler.dragRebaseCurrentPosition, false);
+                else if (inputHandler.dragRebasePending)
+                    inputHandler.resetDragPreview();
+            });
+        } else if (refreshed) {
+            resetDragPreview();
+        }
     }
 
     function distanceToLine(stop, yPt) {

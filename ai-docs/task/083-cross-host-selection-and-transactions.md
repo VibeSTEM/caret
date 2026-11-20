@@ -3,7 +3,7 @@
 - 状态：done
 - 依赖：071、074、077、081、082
 - 优先级：P1
-- 创建 / 更新：2026-11-09 / 2026-11-11
+- 创建 / 更新：2026-11-09 / 2026-11-18
 
 ## 目标与背景
 
@@ -22,6 +22,7 @@
 
 - 让 Paragraph、Section/Custom、Equation/Align、InlineMath、InlineEnvironment 与数学文本流共用 anchor/focus 范围、方向、替换/删除目标和位置映射；局部坐标由 adapter 映射。
 - Shift+四方向键构造同一文档顺序下的选区；数学树/源码/文本岛内部按本地语义移动，跨宿主边界转换为可操作的结构范围。
+- InlineMath 从正文外部进入扩选时保留正文 anchor，并可把 focus 映射到公式内部 MathTree/MathText 局部位置；可见范围、顺序比较、几何、复制/删除/替换及 Undo/Redo 消费同一个跨宿主范围，U+FFFC 仅作为正文布局投影，不替代公式内部端点。
 - 选区删除、替换、复制、Undo/Redo 与失败原子性消费相同范围，不泄漏 U+FFFC、不静默丢失节点或恢复过期视觉选择。
 - 修复连续 Equation/Align 删除落点、Section 标题/首段邻接 Backspace 失效及块/Inline 选区无法表达等 080 原始问题。
 - 完整快照、交互刷新与 Qt 几何组合复用共享 Environment/selection projection；允许 Rust/Qt API 经评估调整，不预设具体 rect 数组结构。
@@ -51,6 +52,9 @@
 ## 验收标准
 
 - [x] Shift 四向键可在 Paragraph、复杂 Block 和 InlineMath 两侧扩选，anchor/focus 方向和文档范围一致；内部 MathTree/MathText 位置可正确映射。
+- [x] 同段正文的 Shift+Left/Right 可从公式两侧进入 InlineMath 根 MathTree 序列并逐项扩选；LTR/RTL 均按布局候选确定进入侧，保留正文锚点和进入方向，以支持同向延伸、反向收缩；可见几何、复制/删除/替换及 Undo/Redo 消费同一范围。
+- [x] 鼠标混合域拖选、MathText 字素及嵌套 Math 序列沿用 Inline 跨宿主范围；指针端点、焦点顺序、几何、复制/删除/替换及历史恢复一致。
+- [x] 鼠标实现保留原始 anchor/focus，不只把 MathTree 根停靠点并入 `body` 域；覆盖正文↔公式、公式内部拖动及跨段正文拖入公式。后续 Shift+水平键按焦点处局部停靠点映射左右方向，不套用远端端点坐标或固定键盘进入方向。
 - [x] 显示选中的范围可被删除/替换/复制，U+FFFC 和节点数据不丢失；成功、失败、Undo、Redo 后 caret、selection、历史状态有效。
 - [x] 连续 Equation/Align 删除只移除目标宿主并落到最近有效边界；Section 邻接 Backspace 不产生 InvalidPosition，拒绝时无副作用。
 - [x] Escape 离开块级公式时进入当前宿主外后停靠；连续 Escape 不跳过相邻 Block，方向键才继续按文档顺序移动。删除单个公式仅删除目标且采用独立的最近有效位置恢复。
@@ -59,7 +63,7 @@
 - [x] Block 环境单值/多值选择状态及 Math projection identity 的消费者和历史语义已审计；无丢失空块删除、失败回滚或 Undo/Redo 行为。
 - [x] 不存在可见选择但空文档范围、隐藏 selection、相邻数学块被跳过或旧 generation 高亮覆盖新状态。
 - [x] 081/082 的定位和三态协议无重复权威；新 Block 通过 adapter 接入而不复制键盘/选区仲裁。
-- [x] 相关行为测试、格式/lint 和独立评审通过；覆盖率门槛由 nightly CI 承担、本地未执行，Qt/平台手工验收与覆盖率均已在验证表明确记录为未验证项。
+- [x] 新增范围的相关行为测试、格式/lint、分域检查及独立最终评审通过；覆盖率门槛由 nightly CI 承担，Qt/平台手工验收与覆盖率如未执行则明确记录。
 
 ## 验证计划与结果
 
@@ -78,6 +82,10 @@
 | 2026-11-12 | 桌面测试补漏：`cargo test --locked -p caret-engine`、`-p caret-app` | 公式内 Shift 高亮与 InlineMath 上下键回归 | 通过：Engine 837 passed、App 308 passed，0 failed；`cargo test --workspace --locked` exit 0；clippy/fmt 通过 |
 | 2026-11-12 | 复查反馈修复：`cargo test --locked -p caret-engine`、`-p caret-app` | 文本岛边缘 Shift 转整公式、Align 首/末 cell 与多文本岛回归 | 通过：Engine 846 passed、App 314 passed，0 failed；`cargo test --workspace --locked` exit 0；clippy/fmt 通过 |
 | — | nightly `cargo coverage` 85% 门槛、Qt 桌面手工/平台验收 | 覆盖率与真实绘制/输入 | 未执行：本地未运行 nightly 覆盖率与 Qt 手工交互；记录为未验证项 |
+| 2026-11-18 | `cargo test --locked -p caret-engine`、`cargo test --locked -q -p caret-app` | InlineMath 局部扩选与 Block 垂直选区回归 | 通过：Engine 879 passed、App 339 passed；覆盖 LTR MathTree 根序列两侧逐项扩选、范围几何/复制/删除/替换/Undo/Redo，以及 Equation/Align/Section 两侧 Up/Down、Shift 反向收缩；双向段落方向映射仍待验证 |
+| 2026-11-18 | `cargo clippy --locked -p caret-engine -p caret-app --all-targets -- -D warnings`、`cargo fmt --all -- --check`、`git diff --cached --check` | 无警告、格式或空白错误 | 通过；Qt 窗口手工验收和 nightly 覆盖率未执行 |
+| 2026-11-19 | `cargo test --locked -p caret-engine`、`cargo test --locked -q -p caret-app`、`cargo clippy --locked -p caret-engine -p caret-app --all-targets -- -D warnings`、`cargo fmt --all -- --check`、`git diff --check HEAD` | Engine/App InlineMath 根序列扩选、RTL 视觉方向、同向继续与反向收缩回归 | 通过：Engine 881 项、App 340 项；LTR/RTL 真实布局覆盖两侧逐项扩选；RTL 回归另验证反向退回原正文边界、同向越过公式并进入对侧相邻字素；Clippy、格式和 diff 检查通过 |
+| 2026-11-20 | `cargo test --locked -p caret-engine`、`cargo test --locked -p caret-app`、`cargo clippy --locked -p caret-engine -p caret-app --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check`、`cmake --build target/native/debug --parallel 4`、`ctest --test-dir target/native/debug -R '^Qml\.(ShellLoad|MathTextDrag)$' --output-on-failure` | 跨宿主导航、删除原子性、几何和鼠标锚点回归 | 通过：Engine 890 项、App 352 项；新增混合 Equation/InlineMath 删除撤销、未知数学元数据拒删、空 TextFlow 岛边界、块边界连续 Shift+Down、跨段正文拖入 MathText；Clippy/fmt/diff、CMake 构建及 ShellLoad/MathTextDrag 通过；Terra 分域检查与 Sol 最终检查通过。Qt/平台手工验收与 nightly 覆盖率未执行 |
 
 ## 风险与回退
 
@@ -124,6 +132,9 @@
 - PR #136 修复轮 brooks-review（PR 门禁，只读，balanced）：Health Score **83/100**（完整 PR diff 抽样：未提交修复全部生产代码 + 基线高风险模块）；2 条 Warning、2 条 Suggestion。Warning 1「块外侧边界锚点的结构选区在 Shift+Home/End/Down 带候选时丢失覆盖对象」已修复：新增 `structure_selection_text_anchor` 按边界侧向投影文本锚点，横向/纵向/Home/End 候选共用，补垂直与 Home/End 覆盖回归；Warning 2「MathText 文本岛边界转换文档与实现不一致」按实现语义收敛文档（同侧无其它文本岛即转整公式对象）并补正向转换测试；Warning 3「正向转换/纵向扩展缺行为测试」已补 4 组测试；Suggestion R4（锚点解析重复）随共享 helper 消除。R1（删除计划函数偏长、补位段落逻辑重复）保留为后续重构项。
 - 2026-11-12：桌面测试补漏（083）：公式内部 Shift+方向键扩选没有蓝色选区高亮。新增 engine `DocumentLayoutSnapshot::math_tree_selection_geometry`（同 host/path、逐被选 item 取 child 盒、caret 行带、Align `clip_range_for_row`、嵌套结构原子；空范围空矩形、跨 path/越界 None）与 `Session::math_tree_selection_context`（暴露 anchor/focus，revision 过期 None）；app snapshot 新增 `math_tree_selection_json` 替换 full/interaction 两处空数组并按页 clamp。补 Equation/InlineMath/Align/嵌套环境与 app full-vs-interaction 几何回归。
 - 2026-11-12：桌面测试补漏（083）：InlineMath 内 Up/Down（含 Shift）在无内部垂直候选时静默 no-op。engine `exit_vertical_math_block` 允许 Inline 目标复用 `exit_math_edit_for_navigation`（落 U+FFFC 前/后侧），Block 非扩展保持、Block Shift 保持 no-op、pending source draft 仍 `InvalidMath` 且状态不变；app `move_vertical_caret_json` 记录 Inline 目标并在本次按键退出后同按键续派发普通文档纵向导航（保留 preferred x，无递归回路）。补 engine 8 + app 8 行为测试并更新旧 no-op 断言；同步 structure-navigation.md/math.md。
+- 2026-11-18：维护者要求扩展 Math/Section 交互一致性：显示公式块外侧 Up/Down 使用共享视觉行候选，不沿用水平块停靠的同向重入；InlineMath 从正文 Shift/鼠标选区进入时允许保留正文 anchor 并扩到公式内部，不再只选 U+FFFC 整体。回归覆盖共享位置、几何、范围消费和历史恢复。
+- 2026-11-20：复核修复补充：混合结构删除跳过未变化段落的空历史补丁，确保 Equation Undo 可用；选区几何合并块对象矩形与 MathText 矩形；InlineMath 局部删除保留对未知字段/opaque 内容的原子拒绝。RTL/连续 TextFlow 边缘沿用布局侧向和真实首尾路径；垂直导航只按当前 BlockEdge focus 求目标，连续扩选时保留原锚点，并在本次按键抵达块边界后停止二次派发。
+- 2026-11-20：补齐鼠标跨段正文到 MathText 的选择回归，确认正文 anchor、公式字素 focus、共享 body 域和选中文本投影一致；同段拖动、公式内部拖动和反向范围已有覆盖。
 - 2026-11-12：桌面测试补漏的增量独立只读评审结论 mergeable；按建议补 `canvas-highlighting.md` 的公式树内部选区矩形权威说明（同代布局、逐 item 盒 × caret 行带、Align 行裁切、空范围不发布）。S2 中 app 层 InlineMath Source 分支入口在公共命令下不可构造（空 InlineMath 默认进入 Tree 分支），由 engine Source 退出测试 + app 通用 Inline 分支覆盖，记录为测试入口限制；Text 文本岛 Shift 垂直扩展与 clamp 分支仍属推理覆盖，留待 069 平台验收补充。S3（几何 None 导致整份快照发布失败）在不变量下不可达，按既有文本岛投影同一约定处理，不改降级策略。
 - 2026-11-12：桌面测试其余两项分流，不并入 #136：行内对象边界选区/高亮覆盖相邻 InlineMath 的根因在 Parley 0.12 inline box advance 与 caret-layout 对象插入点，main 已存在，由 [086](086-inline-box-selection-geometry.md) 跟踪；空 InlineMath 隐藏宿主盒宽进入正文 advance、聚焦高亮按 U+FFFC 跨度而非插入槽，由 [087](087-empty-inline-math-advance-and-highlight.md) 跟踪（072 契约补充）。两项均需独立修复与桌面验收，不属于跨宿主选区/事务范围。
 - 本环境没有 gpt-6.1-terra / gpt-6.1-sol，使用 deepseek-v4.1-flash 的独立只读 subagent 承担相同分域与最终评审角色。
@@ -131,4 +142,4 @@
 
 ## 完成摘要
 
-083 完成。结构选区现在以统一的文档范围端点（文本位置或块外侧边界）表达，Paragraph、Section/Custom、Equation/Align 与 InlineMath 共用同一 anchor/focus 顺序、覆盖派生、删除/替换/复制与历史事务；块公式作为原子对象进入范围，公式内部仍保留 MathTree/MathText 本地扩选。新增单一安装/清除入口和单一写路径，`selected_block_environment` 从多选列表派生，Math projection identity 比较收敛。结构范围删除/替换使用一个原子事务并在失败时完整回滚（含 history state/epoch/generation/pending style），相邻 Equation/Align 链、Section 邻接 Backspace、Escape 停靠与对象复制均有行为测试。完整快照、增量刷新与交互投影使用同代布局；选中公式对象的整栏矩形进入选区层，缺失公式几何或旧 generation 结果整体拒绝而不是静默清空。架构文档同步了端点、环境提升、纵向扩选、Escape 优先级、几何层与实现文件边界。未执行项：nightly 覆盖率门槛与 Qt 桌面手工/平台验收；Source 分支无本地选区、Table/Figure 仍需按 adapter 清单接入、端点扫描未做性能基准，均已在任务卡与文档中记录。
+原 083 范围已完成；2026-11-18 因维护者新增的 InlineMath 外部逐项扩选要求重新打开。结构选区以统一文档范围端点表达；InlineMath 根序列、MathText 与 Section/Equation/Align 共用扩展入口和文档级范围事务。已验证 LTR/RTL 内外逐项扩选、同向延伸、反向收缩、跨段鼠标拖选、几何投影、复制/删除/替换与 Undo/Redo；本轮额外修复历史空步、未知公式元数据删除、连续文本岛空流边缘及纵向块边界的焦点/锚点路由。Qt `ShellLoad`/`MathTextDrag` 自动化通过，Terra 分域评审与 Sol 最终评审通过。Qt/平台手工验收和 nightly 覆盖率未执行，已记录；未来 Table/Figure adapter 按任务范围不实现。
