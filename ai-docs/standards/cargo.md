@@ -1,6 +1,6 @@
 # Cargo workspace 与原生调度
 
-更新日期：2026-10-30。语言规则见 [Rust](rust.md)。native 图见 [CMake](cmake.md)。
+更新日期：2026-11-20。语言规则见 [Rust](rust.md)。native 图见 [CMake](cmake.md)。
 
 ## 项目规则
 
@@ -11,7 +11,9 @@
 - build script 只把生成物写到 `OUT_DIR`。native 源文件、QML、资源和影响配置的环境变量都要进入重建追踪。
 - 交叉编译没有验证时给出不支持的诊断，不用主机探测结果冒充目标平台配置。
 
-根目录 `.cargo/config.toml` 中的质量与开发别名由 `caret-tests` 提供，避免再用 shell 或 Node 做一套入口。命令清单与执行语义集中维护在[测试规范](testing.md#命令)。
+根目录 `.cargo/config.toml` 中的质量与开发别名由 `caret-tests` 提供，避免再用 shell 或 Node 做一套入口。命令清单与执行语义集中维护在[测试规范](testing.md#命令)。同一文件设置 `[registry] global-min-publish-age = "3 days"`：新发布的依赖版本满 3 天才参与版本解析，与 deny/audit 互补；它只影响 `cargo update`、`cargo add` 和新 lock 解析，`--locked` 构建不受影响。
+
+根 `Cargo.toml` 的 `[workspace.lints.cargo] unused_dependencies = "allow"` 只关闭 Cargo 内置的未使用依赖提示：launcher 的 `caret-ffi` 边用于 links metadata 和构建顺序，不是目标代码引用；Cargo 1.100 不允许包级覆盖 workspace lints，所以只能在 workspace 层关闭。未使用依赖仍由 `cargo lint` 的 cargo-machete 步骤负责；machete 不区分依赖所在表，Cargo 内置检查能发现的表归属问题不再兜底，移动依赖时仍需按实际使用目标核对。
 
 `ub-check` 不命名为 `miri`，以免别名挡住真正的 `cargo-miri`。裸 `cargo test` 在默认成员只有 launcher 时不等于完整聚合测试。native 聚合使用 `--no-tests=error`，避免零个测试被看成全部通过。
 

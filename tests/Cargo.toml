@@ -16,11 +16,16 @@ path = "integration/native.rs"
 name = "document"
 path = "rust/document.rs"
 
+[build-dependencies]
+caret-build.workspace = true
+
 [dependencies]
-caret-app.workspace = true
 caret-build.workspace = true
 caret-doc.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+caret-app.workspace = true
 
 [lints]
 workspace = true

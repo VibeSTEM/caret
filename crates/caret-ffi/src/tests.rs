@@ -26,18 +26,6 @@ fn ffi_version_matches_package_metadata() {
 
 #[test]
 fn ffi_crash_handler_reports_an_unusable_log_directory() -> std::io::Result<()> {
-    struct RemoveOnDrop {
-        path: std::path::PathBuf,
-        file: Option<std::fs::File>,
-    }
-
-    impl Drop for RemoveOnDrop {
-        fn drop(&mut self) {
-            drop(self.file.take());
-            let _ = std::fs::remove_file(&self.path);
-        }
-    }
-
     let parent = std::env::temp_dir().join(format!(
         "caret-ffi-crash-handler-parent-is-file-{}-{}",
         std::process::id(),
@@ -46,20 +34,18 @@ fn ffi_crash_handler_reports_an_unusable_log_directory() -> std::io::Result<()> 
             .unwrap_or_default()
             .as_nanos()
     ));
-    let file = std::fs::OpenOptions::new()
+    let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&parent)?;
-    let mut cleanup = RemoveOnDrop {
-        path: parent.clone(),
-        file: Some(file),
-    };
-    let file = cleanup
-        .file
-        .as_mut()
-        .ok_or_else(|| std::io::Error::other("temporary file guard is empty"))?;
-    std::io::Write::write_all(file, b"not a directory")?;
-    drop(cleanup.file.take());
+    // 守卫在写入前创建，写入失败时同样删除临时文件；任何返回路径都先关闭文件
+    // 句柄再由守卫删除，避免 Windows 上删除仍打开的文件。
+    let _cleanup = core::mem::DropGuard::new(parent.clone(), |path| {
+        let _ = std::fs::remove_file(path);
+    });
+    let write_result = std::io::Write::write_all(&mut file, b"not a directory");
+    drop(file);
+    write_result?;
     let log_directory = parent.join("log");
     let log_directory = log_directory.to_str().ok_or_else(|| {
         std::io::Error::new(

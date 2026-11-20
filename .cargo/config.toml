@@ -20,3 +20,7 @@ sanitize = "run -q --locked --package caret-tests -- sanitize"
 # 不叫 miri：别名会遮蔽真正的 cargo-miri 外部子命令（cargo #10049，
 # runner 内部 `cargo +nightly miri test` 需要解析到真身）。
 ub-check = "run -q --locked --package caret-tests -- ub-check"
+
+[registry]
+# Rust 1.100 稳定的依赖冷却期：新发布版本需满 3 天才参与解析，与 deny/audit 互补。
+global-min-publish-age = "3 days"

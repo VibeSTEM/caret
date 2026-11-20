@@ -3,7 +3,7 @@
 - 状态：done
 - 依赖：093、095
 - 优先级：P2
-- 创建 / 更新：2026-11-17 / 2026-11-18
+- 创建 / 更新：2026-11-17 / 2026-11-20
 
 ## 目标与背景
 
@@ -69,6 +69,7 @@ Brooks sweep 的独立复核在已修复项之外给出若干"同族未收敛"�
 - 2026-11-18：`inline_content.rs` 的构造点在本分支开始前已收敛；分领域 Terra 检查已完成。最终独立评审发现的嵌套未来节点、槽位映射及 id 校验问题均已修复，最终完整 diff 独立评审通过。
 - 2026-11-18：再补 TextFlow Run 与行内环境的已知字段校验，并在 future opaque 回退前拒绝同一可见公式树内重复 ID。全局文档不变量仍由 typed model validation 负责；未知 kind 的载荷不递归解释。
 - 2026-11-18：修复中 CI 链接的失败不是代码检查失败：`cargo lint (machete, ubuntu)` 在 Linux apt 前置步骤被 `packages.microsoft.com` 的 HTTP 429 限流阻断。apt 更新使用 90 秒单次上限，包下载使用 180 秒单次上限，均最多三次并采用 30/60 秒指数退避及 0–15 秒抖动；changes、dependency-audit 与 format job 超时统一为 30 分钟。Linux 实际安装与重试行为由 PR CI 验证。
+- 2026-11-20：维护者确认 #150 把更高 `MathTree.schemaVersion` 保留为 `FutureOpaque` 违反「不做向前兼容、只有未知节点类型才进 Opaque」；已在 #152 / 任务 103 清理为格式错误（更高及任何不匹配版本都不再进入 Opaque 或安全预览），未知节点类型的 Opaque 行为保留。本任务状态与验收表不变。
 
 ## 完成摘要
 

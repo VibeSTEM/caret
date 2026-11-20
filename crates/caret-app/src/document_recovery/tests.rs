@@ -2,6 +2,7 @@
 
 use super::{DocumentRecoveryStorage, RecoveryKind};
 use crate::document_session::DocumentSessionService;
+use core::mem::DropGuard;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -10,36 +11,33 @@ use std::time::{Duration, Instant};
 
 static NEXT_FIXTURE_ID: AtomicU64 = AtomicU64::new(0);
 
-struct RecoveryFixture(PathBuf);
+/// 恢复目录夹具的清理守卫。
+type RecoveryGuard = DropGuard<PathBuf, fn(PathBuf)>;
 
-impl RecoveryFixture {
-    fn new() -> Result<Self, std::io::Error> {
-        let path = std::env::temp_dir().join(format!(
-            "caret-recovery-{}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos(),
-            NEXT_FIXTURE_ID.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir_all(&path)?;
-        Ok(Self(path))
-    }
-}
-
-impl Drop for RecoveryFixture {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
+/// 创建带唯一后缀的恢复目录夹具；守卫在作用域结束时递归删除该目录。
+fn recovery_fixture() -> Result<(PathBuf, RecoveryGuard), std::io::Error> {
+    let path = std::env::temp_dir().join(format!(
+        "caret-recovery-{}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos(),
+        NEXT_FIXTURE_ID.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir_all(&path)?;
+    let guard: RecoveryGuard = DropGuard::new(path.clone(), |path| {
+        let _ = fs::remove_dir_all(path);
+    });
+    Ok((path, guard))
 }
 
 #[test]
 fn releasing_recovery_lock_allows_access_while_a_duplicate_handle_is_alive()
 -> Result<(), Box<dyn std::error::Error>> {
-    let fixture = RecoveryFixture::new()?;
+    let (root, _cleanup) = recovery_fixture()?;
     for shared in [false, true] {
-        let path = fixture.0.join(if shared {
+        let path = root.join(if shared {
             "shared.lock"
         } else {
             "exclusive.lock"
@@ -75,8 +73,8 @@ fn releasing_recovery_lock_allows_access_while_a_duplicate_handle_is_alive()
 #[test]
 fn stores_local_snapshot_and_external_binary_in_one_atomic_envelope()
 -> Result<(), Box<dyn std::error::Error>> {
-    let fixture = RecoveryFixture::new()?;
-    let storage = DocumentRecoveryStorage::new(fixture.0.join("recovery"));
+    let (root, _cleanup) = recovery_fixture()?;
+    let storage = DocumentRecoveryStorage::new(root.join("recovery"));
     let source = PathBuf::from("/documents/draft.cdoc");
     let id = storage.store(
         RecoveryKind::LocalDocument,
@@ -88,7 +86,7 @@ fn stores_local_snapshot_and_external_binary_in_one_atomic_envelope()
     assert_eq!(envelope.original_path, source.to_string_lossy());
     assert_eq!(payload, b"cdoc");
     let entries = storage.list_entries()?;
-    assert_eq!(entries.len(), 1, "fixture={} id={id}", fixture.0.display());
+    assert_eq!(entries.len(), 1, "fixture={} id={id}", root.display());
     assert_eq!(entries[0].id, id);
     assert_eq!(entries[0].original_path, source.to_string_lossy());
     assert_eq!(entries[0].baseline_digest.as_deref(), Some("abc"));
@@ -96,7 +94,7 @@ fn stores_local_snapshot_and_external_binary_in_one_atomic_envelope()
     let external = storage.store(RecoveryKind::ExternalVersion, &source, None, &raw)?;
     assert_eq!(storage.load(&external)?.1, raw);
     assert_eq!(storage.list()?.len(), 2);
-    let exported = fixture.0.join("external-backup.txt");
+    let exported = root.join("external-backup.txt");
     storage.export_external(&external, &exported)?;
     assert_eq!(fs::read(&exported)?, raw);
     assert!(storage.export_external(&id, &exported).is_err());
@@ -118,8 +116,8 @@ fn stores_local_snapshot_and_external_binary_in_one_atomic_envelope()
 #[test]
 fn recovery_refresh_rejects_a_snapshot_from_an_old_binding_identity()
 -> Result<(), Box<dyn std::error::Error>> {
-    let fixture = RecoveryFixture::new()?;
-    let storage = DocumentRecoveryStorage::new(fixture.0.join("recovery"));
+    let (root, _cleanup) = recovery_fixture()?;
+    let storage = DocumentRecoveryStorage::new(root.join("recovery"));
     let source = PathBuf::from("/documents/current.cdoc");
     let id = storage.store(
         RecoveryKind::LocalDocument,
@@ -168,8 +166,8 @@ fn recovery_refresh_rejects_a_snapshot_from_an_old_binding_identity()
 #[test]
 fn late_recovery_write_cannot_overwrite_a_newer_binding_generation()
 -> Result<(), Box<dyn std::error::Error>> {
-    let fixture = RecoveryFixture::new()?;
-    let storage = DocumentRecoveryStorage::new(fixture.0.join("recovery"));
+    let (root, _cleanup) = recovery_fixture()?;
+    let storage = DocumentRecoveryStorage::new(root.join("recovery"));
     let source = PathBuf::from("/documents/current.cdoc");
     let id = storage.store(
         RecoveryKind::LocalDocument,
@@ -212,8 +210,8 @@ fn late_recovery_write_cannot_overwrite_a_newer_binding_generation()
 
 #[test]
 fn invalid_id_cannot_escape_recovery_directory() -> Result<(), Box<dyn std::error::Error>> {
-    let fixture = RecoveryFixture::new()?;
-    let storage = DocumentRecoveryStorage::new(fixture.0.join("recovery"));
+    let (root, _cleanup) = recovery_fixture()?;
+    let storage = DocumentRecoveryStorage::new(root.join("recovery"));
     assert!(storage.load("../outside").is_err());
     assert!(storage.remove("../outside").is_err());
     Ok(())
@@ -222,8 +220,8 @@ fn invalid_id_cannot_escape_recovery_directory() -> Result<(), Box<dyn std::erro
 #[test]
 fn restoring_a_recovery_item_keeps_source_until_session_fork_succeeds()
 -> Result<(), Box<dyn std::error::Error>> {
-    let fixture = RecoveryFixture::new()?;
-    let storage = DocumentRecoveryStorage::new(fixture.0.join("recovery"));
+    let (root, _cleanup) = recovery_fixture()?;
+    let storage = DocumentRecoveryStorage::new(root.join("recovery"));
     let original_path = PathBuf::from("/documents/draft.cdoc");
     let id = storage.store(
         RecoveryKind::LocalDocument,
@@ -274,8 +272,8 @@ fn restoring_a_recovery_item_keeps_source_until_session_fork_succeeds()
 #[test]
 fn failed_restore_preparation_leaves_original_recovery_item_available()
 -> Result<(), Box<dyn std::error::Error>> {
-    let fixture = RecoveryFixture::new()?;
-    let storage = DocumentRecoveryStorage::new(fixture.0.join("recovery"));
+    let (root, _cleanup) = recovery_fixture()?;
+    let storage = DocumentRecoveryStorage::new(root.join("recovery"));
     let id = storage.store(
         RecoveryKind::LocalDocument,
         &PathBuf::from("/documents/draft.cdoc"),
@@ -315,9 +313,9 @@ fn failed_restore_preparation_leaves_original_recovery_item_available()
 #[test]
 fn session_recovery_snapshot_is_hidden_until_its_lease_is_released()
 -> Result<(), Box<dyn std::error::Error>> {
-    let fixture = RecoveryFixture::new()?;
-    let storage = DocumentRecoveryStorage::new(fixture.0.join("recovery"));
-    let other_instance = DocumentRecoveryStorage::new(fixture.0.join("recovery"));
+    let (root, _cleanup) = recovery_fixture()?;
+    let storage = DocumentRecoveryStorage::new(root.join("recovery"));
+    let other_instance = DocumentRecoveryStorage::new(root.join("recovery"));
     let (id, lease) = storage.store_for_session(
         &PathBuf::from("/documents/draft.cdoc"),
         Some("baseline".to_owned()),
@@ -364,8 +362,8 @@ fn cross_process_lease_child() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg_attr(miri, ignore = "Miri 不支持启动该用例所需的子进程")]
 fn cross_process_lease_hides_and_protects_an_active_recovery_item()
 -> Result<(), Box<dyn std::error::Error>> {
-    let fixture = RecoveryFixture::new()?;
-    let directory = fixture.0.join("recovery");
+    let (root, _cleanup) = recovery_fixture()?;
+    let directory = root.join("recovery");
     let storage = DocumentRecoveryStorage::new(directory.clone());
     let id = storage.store(
         RecoveryKind::LocalDocument,
@@ -373,7 +371,7 @@ fn cross_process_lease_hides_and_protects_an_active_recovery_item()
         None,
         b"cross-process snapshot",
     )?;
-    let handshake_path = fixture.0.join("lease-handshake");
+    let handshake_path = root.join("lease-handshake");
     let ready_path = handshake_path.with_extension("ready");
     let mut child = Command::new(std::env::current_exe()?)
         .args([
@@ -419,8 +417,8 @@ fn cross_process_lease_hides_and_protects_an_active_recovery_item()
 #[test]
 fn recovery_operation_lock_rejects_concurrent_load_update_and_remove()
 -> Result<(), Box<dyn std::error::Error>> {
-    let fixture = RecoveryFixture::new()?;
-    let storage = DocumentRecoveryStorage::new(fixture.0.join("recovery"));
+    let (root, _cleanup) = recovery_fixture()?;
+    let storage = DocumentRecoveryStorage::new(root.join("recovery"));
     let id = storage.store(
         RecoveryKind::LocalDocument,
         &PathBuf::from("/documents/draft.cdoc"),
@@ -450,15 +448,15 @@ fn recovery_operation_lock_rejects_concurrent_load_update_and_remove()
 #[test]
 fn expiry_cleanup_skips_entries_while_any_process_holds_the_recovery_lease()
 -> Result<(), Box<dyn std::error::Error>> {
-    let fixture = RecoveryFixture::new()?;
-    let storage = DocumentRecoveryStorage::new(fixture.0.join("recovery"));
+    let (root, _cleanup) = recovery_fixture()?;
+    let storage = DocumentRecoveryStorage::new(root.join("recovery"));
     let id = storage.store(
         RecoveryKind::LocalDocument,
         &PathBuf::from("/documents/draft.cdoc"),
         None,
         b"cdoc",
     )?;
-    let envelope_path = fixture.0.join("recovery").join(format!("{id}.json"));
+    let envelope_path = root.join("recovery").join(format!("{id}.json"));
     let mut envelope: serde_json::Value = serde_json::from_slice(&fs::read(&envelope_path)?)?;
     envelope["created_unix_seconds"] = serde_json::json!(1);
     envelope["updated_unix_seconds"] = serde_json::json!(1);

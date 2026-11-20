@@ -96,13 +96,17 @@ fn sanitize_profile(profile: SanitizerProfile) -> Result<(), Box<dyn Error>> {
     )
 }
 
-/// Qt 6.12.0 / Ubuntu 26 的 TSan 在这些测试报告 QQmlThread/主线程分配冲突，
-/// 冲突访问帧位于未插桩的 libQt6Core，真实竞态或工具误报尚未确认。Nightly
-/// #42735297514 的 MathTextDrag 与此前排除的启动测试呈现同类冲突；仅跳过 Linux
-/// TSan 中的这些测试，其余检查仍运行。Qt 更新或启用带 TSan 插桩的 Qt 后复查。
+/// Qt 6.12.0 / Ubuntu 26 的 TSan 在 QML 测试中报告 QQmlThread/主线程分配冲突，
+/// 冲突访问帧位于未插桩的 libQt6Core，真实竞态或工具误报尚未确认。早期 #109 的
+/// Nightly run 42735297514 是 Qml.MathTextDrag 的证据。issue #152 记录：#142
+/// 新增的 9 个 Qml.Close* 复用同一个 caret_shell_load_test（qml/CMakeLists.txt），
+/// 同样会初始化 QML 引擎，因此与既有启动测试同类；run 44426253052 的 job
+/// 135231750091 是首次 ubuntu TSan 失败，run 44646139582 再次失败，run
+/// 44665955367 的 job 136055176276 报 9 个 Qml.Close 失败 / 17 个测试。只跳过
+/// Linux TSan 中的这些测试，其余检查仍运行；Qt 更新或启用带 TSan 插桩的 Qt 后复查。
 fn ctest_exclusion(profile: SanitizerProfile, platform: SanitizerPlatform) -> Option<&'static str> {
     (profile == SanitizerProfile::Thread && platform == SanitizerPlatform::Linux)
-        .then_some(r"^(Qml\.ShellLoad|Qml\.MathTextDrag|App\.HeadlessWindowLoads)$")
+        .then_some(r"^(Qml\.ShellLoad|Qml\.MathTextDrag|Qml\.Close.*|App\.HeadlessWindowLoads)$")
 }
 
 /// 确认 Windows 动态 ASan 在 Qt 模块之前初始化，避免未插桩 DLL 的启动期分配被误报。

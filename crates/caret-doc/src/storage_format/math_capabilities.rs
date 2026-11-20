@@ -4,7 +4,7 @@
 // 署名：Yuki Lu
 
 use super::{DocumentError, is_known_inline_environment};
-use crate::{Document, MathNodeKind, MathTree};
+use crate::{Document, MathNodeKind};
 use serde_json::Value;
 use std::collections::{BTreeSet, HashSet};
 
@@ -17,6 +17,8 @@ pub(super) fn missing_math_capability(feature: &str) -> DocumentError {
 ///
 /// 类型解码器可能因未知子节点把整个载体保留为不透明数据，此时仍须从 envelope 校验
 /// 当前数学 schema 的能力声明，因此不能复用 `Document::required_features` 的类型推导。
+/// `open` 已由 `validate_current_math_encoding` 拒绝不匹配的 `MathTree.schemaVersion`，
+/// 所以这里沿已知结构遍历到的树都是当前版本，不再按版本过滤。
 pub(super) fn raw_math_capabilities(raw: &Value) -> BTreeSet<&'static str> {
     fn add_carrier(kind: &'static str, required: &mut BTreeSet<&'static str>) {
         required.insert(Document::MATH_FEATURE_CONTENT_FLOW_V2);
@@ -91,9 +93,7 @@ pub(super) fn raw_math_capabilities(raw: &Value) -> BTreeSet<&'static str> {
             }
         }
 
-        if MathTree::storage_schema_is_current(tree)
-            && let Some(root) = tree.get("root")
-        {
+        if let Some(root) = tree.get("root") {
             visit_flow(root, None, required);
         }
     }
@@ -107,11 +107,7 @@ pub(super) fn raw_math_capabilities(raw: &Value) -> BTreeSet<&'static str> {
                 continue;
             };
             match object.get("type").and_then(Value::as_str) {
-                Some("inlineMath")
-                    if object
-                        .get("mathTree")
-                        .is_some_and(MathTree::storage_schema_is_current) =>
-                {
+                Some("inlineMath") => {
                     add_carrier("inlineMath", required);
                     if let Some(tree) = object.get("mathTree") {
                         collect_tree_syntax(tree, required);
@@ -137,11 +133,7 @@ pub(super) fn raw_math_capabilities(raw: &Value) -> BTreeSet<&'static str> {
             return;
         };
         match object.get("type").and_then(Value::as_str) {
-            Some("inlineMath")
-                if object
-                    .get("mathTree")
-                    .is_some_and(MathTree::storage_schema_is_current) =>
-            {
+            Some("inlineMath") => {
                 add_carrier("inlineMath", required);
                 if let Some(tree) = object.get("mathTree") {
                     collect_tree_syntax(tree, required);
@@ -167,41 +159,21 @@ pub(super) fn raw_math_capabilities(raw: &Value) -> BTreeSet<&'static str> {
         };
         match object.get("type").and_then(Value::as_str) {
             Some("paragraph") => visit_paragraph(block, required),
-            Some("equation")
-                if object
-                    .get("mathTree")
-                    .is_some_and(MathTree::storage_schema_is_current) =>
-            {
+            Some("equation") => {
                 add_carrier("equation", required);
                 if let Some(tree) = object.get("mathTree") {
                     collect_tree_syntax(tree, required);
                 }
             }
             Some("align") => {
-                let has_current_cell =
-                    object
-                        .get("rows")
-                        .and_then(Value::as_array)
-                        .is_some_and(|rows| {
-                            rows.iter().any(|row| {
-                                row.get("cells")
-                                    .and_then(Value::as_array)
-                                    .is_some_and(|cells| {
-                                        cells.iter().any(MathTree::storage_schema_is_current)
-                                    })
-                            })
-                        });
-                if has_current_cell {
-                    add_carrier("align", required);
-                    if let Some(rows) = object.get("rows").and_then(Value::as_array) {
-                        for cell in rows
-                            .iter()
-                            .filter_map(|row| row.get("cells").and_then(Value::as_array))
-                            .flatten()
-                            .filter(|cell| MathTree::storage_schema_is_current(cell))
-                        {
-                            collect_tree_syntax(cell, required);
-                        }
+                add_carrier("align", required);
+                if let Some(rows) = object.get("rows").and_then(Value::as_array) {
+                    for cell in rows
+                        .iter()
+                        .filter_map(|row| row.get("cells").and_then(Value::as_array))
+                        .flatten()
+                    {
+                        collect_tree_syntax(cell, required);
                     }
                 }
             }

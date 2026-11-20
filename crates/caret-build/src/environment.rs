@@ -165,22 +165,65 @@ pub fn macos_sdk() -> Result<Option<PathBuf>, String> {
     Ok(Some(path))
 }
 
-/// OUT_DIR 可能包含显式 --target 的 triple 层；拒绝未验证的跨目标构建。
+/// 从 build script 的 `OUT_DIR` 解析 Cargo target 根。build-dir 布局由 Cargo
+/// 决定，不按 `OUT_DIR` 的固定层数推算；沿祖先目录查找 Cargo 写入的
+/// `CACHEDIR.TAG`，显式 `--target` 时跳过 triple 子层。
+///
+/// 该搜索假设 build-dir 位于 target 根内。若将来启用 `build.build-dir` 把
+/// build-dir 重定位到独立目录，最近带 tag 的祖先会是 build-dir 根而非 target
+/// 根，需要同步改造；当前仓库与 CI 未使用该配置。
 pub fn target_root(out: &Path) -> Result<PathBuf, String> {
     let host = std::env::var("HOST").map_err(|e| e.to_string())?;
     let target = std::env::var("TARGET").map_err(|e| e.to_string())?;
     output_root(out, &host, &target)
 }
 
+/// Cargo 最终产物目录 `<target>/[<triple>/]<profile>`。构建脚本常用它定位已
+/// uplift 的静态库等产物；`OUT_DIR` 的层数随 build-dir 布局变化，因此只用
+/// target 根与 `TARGET`/`PROFILE` 拼接。
+///
+/// 未 uplift 的依赖单元产物不在本目录，而在
+/// `<target>/[<triple>/]<profile>/build/<package>/<hash>/out`；需要这些产物时
+/// 按 build-dir 结构自行扫描。
+pub fn artifact_dir(out: &Path) -> Result<PathBuf, String> {
+    let host = std::env::var("HOST").map_err(|e| e.to_string())?;
+    let target = std::env::var("TARGET").map_err(|e| e.to_string())?;
+    let profile = std::env::var("PROFILE").map_err(|e| e.to_string())?;
+    artifact_root(out, &host, &target, &profile)
+}
+
 fn output_root(out: &Path, host: &str, target: &str) -> Result<PathBuf, String> {
     if host != target {
         return Err(format!("尚未支持交叉编译：{host} -> {target}"));
     }
-    let mut root = out.ancestors().nth(4).ok_or("无法解析 OUT_DIR")?;
-    if root.file_name().is_some_and(|name| name == target) {
+    let mut root = out
+        .ancestors()
+        .find(|directory| directory.join("CACHEDIR.TAG").is_file())
+        .ok_or_else(|| {
+            format!(
+                "无法从 OUT_DIR 后的祖先目录找到 CACHEDIR.TAG：{}",
+                out.display()
+            )
+        })?;
+    if root.file_name().is_some_and(|name| name == target)
+        && root
+            .parent()
+            .is_some_and(|parent| parent.join("CACHEDIR.TAG").is_file())
+    {
         root = root.parent().ok_or("target 根缺失")?;
     }
     Ok(root.to_path_buf())
+}
+
+fn artifact_root(out: &Path, host: &str, target: &str, profile: &str) -> Result<PathBuf, String> {
+    let root = output_root(out, host, target)?;
+    let triple_root = root.join(target);
+    let base = if out.starts_with(&triple_root) {
+        triple_root
+    } else {
+        root
+    };
+    Ok(base.join(profile))
 }
 
 #[cfg(test)]
@@ -250,23 +293,76 @@ mod tests {
     }
 
     #[test]
-    fn cargo_output_root_handles_explicit_target_and_rejects_cross_builds() -> Result<(), String> {
-        let root = PathBuf::from("workspace").join("target");
+    fn cargo_output_roots_follow_cachedir_tags_and_reject_cross_builds() -> Result<(), String> {
+        let root = std::env::temp_dir().join(format!("caret-output-root-{}", std::process::id()));
         let host = "fixture-host";
-        for out in [
-            root.join("debug/build/hash/out"),
-            root.join(host).join("release/build/hash/out"),
+        let tag = "Signature: 8a477f597d28d172789f06886806bc55\n";
+        // build-dir 新布局在 OUT_DIR 祖先中多一层；显式 --target 时 triple 层也带 tag。
+        for (path, tag_path) in [
+            (
+                root.join("debug/build/pkg/hash/out"),
+                root.join("CACHEDIR.TAG"),
+            ),
+            (
+                root.join(host).join("release/build/pkg/hash/out"),
+                root.join(host).join("CACHEDIR.TAG"),
+            ),
         ] {
-            assert_eq!(output_root(&out, host, host)?, root);
+            fs::create_dir_all(&path).map_err(|error| error.to_string())?;
+            fs::write(tag_path, tag).map_err(|error| error.to_string())?;
         }
+
+        let plain = root.join("debug/build/pkg/hash/out");
+        assert_eq!(output_root(&plain, host, host)?, root);
         assert_eq!(
-            output_root(Path::new("out"), host, host),
-            Err("无法解析 OUT_DIR".to_owned())
+            artifact_root(&plain, host, host, "debug")?,
+            root.join("debug")
         );
+        let explicit = root.join(host).join("release/build/pkg/hash/out");
+        assert_eq!(output_root(&explicit, host, host)?, root);
         assert_eq!(
-            output_root(Path::new("out"), host, "other"),
+            artifact_root(&explicit, host, host, "release")?,
+            root.join(host).join("release")
+        );
+        let cross = output_root(Path::new("out"), host, "other");
+        assert_eq!(
+            cross,
             Err("尚未支持交叉编译：fixture-host -> other".to_owned())
         );
+        let untagged =
+            std::env::temp_dir().join(format!("caret-output-root-untagged-{}", std::process::id()));
+        let missing = output_root(&untagged.join("debug/build/pkg/hash/out"), host, host);
+        assert_eq!(
+            missing,
+            Err(format!(
+                "无法从 OUT_DIR 后的祖先目录找到 CACHEDIR.TAG：{}",
+                untagged.join("debug/build/pkg/hash/out").display()
+            ))
+        );
+        fs::remove_dir_all(&root).map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    #[test]
+    fn target_root_keeps_triple_named_directory_when_parent_is_not_a_target_root()
+    -> Result<(), String> {
+        // CARGO_TARGET_DIR 恰好以 triple 命名且父目录没有 tag 时，不能把 target 根 pop 掉。
+        let parent =
+            std::env::temp_dir().join(format!("caret-output-triple-root-{}", std::process::id()));
+        let root = parent.join("fixture-host");
+        let out = root.join("debug/build/pkg/hash/out");
+        fs::create_dir_all(&out).map_err(|error| error.to_string())?;
+        fs::write(
+            root.join("CACHEDIR.TAG"),
+            "Signature: 8a477f597d28d172789f06886806bc55\n",
+        )
+        .map_err(|error| error.to_string())?;
+        assert_eq!(output_root(&out, "fixture-host", "fixture-host")?, root);
+        assert_eq!(
+            artifact_root(&out, "fixture-host", "fixture-host", "debug")?,
+            root.join("debug")
+        );
+        fs::remove_dir_all(&parent).map_err(|error| error.to_string())?;
         Ok(())
     }
 }

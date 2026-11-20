@@ -3,8 +3,9 @@
 // 测试统一以 ? 传播错误：避免永不执行的错误闭包（会被计为未覆盖行），
 // 同时不使用 unwrap/expect（工作区 lint 与 011 决策）。
 use super::{MAX_SOURCE_BYTES, required_path, run, usage, write_atomically};
+use core::mem::DropGuard;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // canonical 形态经 formatter 实测（cn 别名归一为 zh-CN、补唯一末尾换行）；
 // dirty 夹具利用解析器容忍的差异（cn 别名、缺末尾换行），4 空格缩进会
@@ -16,33 +17,27 @@ const VARIABLES: &str = "version: 1\nkind: variables\n\nvalues:\n  spacing-small
 const FSM_CANONICAL: &str = "version: 1\nkind: fsm\nname: demo-fsm\ninitial: Idle\n\nstates:\n  Idle: active\n  Done: terminal\ntransitions:\n  go:\n    from: Idle\n    on: advance\n    to: Done\n";
 const FSM_NEEDS_FORMAT: &str = "version: 1\nkind: fsm\nname: demo-fsm\ninitial: Idle\n\nstates:\n  Idle: active\n  Done: terminal\ntransitions:\n  go:\n    to: Done\n    from: Idle\n    on: advance\n";
 
-/// 隔离临时目录：测试结束整体清理，避免触碰仓库工作区。
-struct TempDir {
-    path: PathBuf,
+/// 临时目录的清理守卫。
+type TempDirGuard = DropGuard<PathBuf, fn(PathBuf)>;
+
+/// 隔离临时目录夹具：测试结束整体清理，避免触碰仓库工作区。
+fn temp_dir(label: &str) -> std::io::Result<(PathBuf, TempDirGuard)> {
+    let path = std::env::temp_dir().join(format!("caret-dslc-{}-{label}", std::process::id()));
+    fs::create_dir_all(&path)?;
+    let guard: TempDirGuard = DropGuard::new(path.clone(), |path| {
+        let _ = fs::remove_dir_all(path);
+    });
+    Ok((path, guard))
 }
 
-impl TempDir {
-    fn new(label: &str) -> std::io::Result<Self> {
-        let path = std::env::temp_dir().join(format!("caret-dslc-{}-{label}", std::process::id()));
-        fs::create_dir_all(&path)?;
-        Ok(Self { path })
-    }
-
-    fn write(&self, name: &str, contents: &str) -> std::io::Result<PathBuf> {
-        let file = self.path.join(name);
-        fs::write(&file, contents)?;
-        Ok(file)
-    }
-
-    fn read(&self, name: &str) -> std::io::Result<String> {
-        fs::read_to_string(self.path.join(name))
-    }
+fn write(dir: &Path, name: &str, contents: &str) -> std::io::Result<PathBuf> {
+    let file = dir.join(name);
+    fs::write(&file, contents)?;
+    Ok(file)
 }
 
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.path);
-    }
+fn read(dir: &Path, name: &str) -> std::io::Result<String> {
+    fs::read_to_string(dir.join(name))
 }
 
 #[test]
@@ -60,8 +55,8 @@ fn missing_or_unknown_command_reports_usage() {
 
 #[test]
 fn check_and_validate_accept_canonical_dictionary() -> Result<(), Box<dyn std::error::Error>> {
-    let dir = TempDir::new("check")?;
-    let input = dir.write("ok.pa", LANGUAGE_CANONICAL)?;
+    let (dir, _cleanup) = temp_dir("check")?;
+    let input = write(&dir, "ok.pa", LANGUAGE_CANONICAL)?;
     for command in ["check", "validate"] {
         run(vec![command.to_owned(), input.display().to_string()])?;
     }
@@ -70,8 +65,8 @@ fn check_and_validate_accept_canonical_dictionary() -> Result<(), Box<dyn std::e
 
 #[test]
 fn check_reports_parse_diagnostics() -> Result<(), Box<dyn std::error::Error>> {
-    let dir = TempDir::new("check-bad")?;
-    let input = dir.write("bad.pa", "version: 1\nkind: language\nlanguage: en\n")?;
+    let (dir, _cleanup) = temp_dir("check-bad")?;
+    let input = write(&dir, "bad.pa", "version: 1\nkind: language\nlanguage: en\n")?;
     assert!(
         matches!(
             run(vec!["check".to_owned(), input.display().to_string()]),
@@ -85,15 +80,16 @@ fn check_reports_parse_diagnostics() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn check_accepts_fsm_documents_and_reports_fsm_diagnostics()
 -> Result<(), Box<dyn std::error::Error>> {
-    let dir = TempDir::new("check-fsm")?;
-    let input = dir.write("fsm.pa", FSM_CANONICAL)?;
+    let (dir, _cleanup) = temp_dir("check-fsm")?;
+    let input = write(&dir, "fsm.pa", FSM_CANONICAL)?;
     run(vec!["check".to_owned(), input.display().to_string()])?;
     run(vec!["validate".to_owned(), input.display().to_string()])?;
 
-    let broken = dir.write(
-            "fsm-broken.pa",
-            "version: 1\nkind: fsm\nname: broken\ninitial: A\n\nstates:\n  A: active\n  B: terminal\n\ntransitions:\n  go:\n    from: A\n    on: advance\n    to: Nowhere\n",
-        )?;
+    let broken = write(
+        &dir,
+        "fsm-broken.pa",
+        "version: 1\nkind: fsm\nname: broken\ninitial: A\n\nstates:\n  A: active\n  B: terminal\n\ntransitions:\n  go:\n    from: A\n    on: advance\n    to: Nowhere\n",
+    )?;
     assert!(
         matches!(
             run(vec!["check".to_owned(), broken.display().to_string()]),
@@ -108,7 +104,7 @@ fn check_accepts_fsm_documents_and_reports_fsm_diagnostics()
             run(vec![
                 "emit-ts".to_owned(),
                 input.display().to_string(),
-                dir.path.join("out.ts").display().to_string(),
+                dir.join("out.ts").display().to_string(),
             ]),
             Err(ref error) if error.to_string() == "emit-ts requires kind: language"
         ),
@@ -119,14 +115,14 @@ fn check_accepts_fsm_documents_and_reports_fsm_diagnostics()
 
 #[test]
 fn format_normalizes_fsm_field_order() -> Result<(), Box<dyn std::error::Error>> {
-    let dir = TempDir::new("format-fsm")?;
-    let dirty = dir.write("fsm-dirty.pa", FSM_NEEDS_FORMAT)?;
+    let (dir, _cleanup) = temp_dir("format-fsm")?;
+    let dirty = write(&dir, "fsm-dirty.pa", FSM_NEEDS_FORMAT)?;
     run(vec!["format".to_owned(), dirty.display().to_string()])?;
-    assert_eq!(dir.read("fsm-dirty.pa")?, FSM_CANONICAL);
+    assert_eq!(read(&dir, "fsm-dirty.pa")?, FSM_CANONICAL);
 
-    let clean = dir.write("fsm-clean.pa", FSM_CANONICAL)?;
+    let clean = write(&dir, "fsm-clean.pa", FSM_CANONICAL)?;
     run(vec!["format".to_owned(), clean.display().to_string()])?;
-    assert_eq!(dir.read("fsm-clean.pa")?, FSM_CANONICAL);
+    assert_eq!(read(&dir, "fsm-clean.pa")?, FSM_CANONICAL);
 
     let check_clean = vec![
         "format".to_owned(),
@@ -139,7 +135,7 @@ fn format_normalizes_fsm_field_order() -> Result<(), Box<dyn std::error::Error>>
             run(vec![
                 "format".to_owned(),
                 "--check".to_owned(),
-                dir.write("fsm-dirty2.pa", FSM_NEEDS_FORMAT)?.display().to_string(),
+                write(&dir, "fsm-dirty2.pa", FSM_NEEDS_FORMAT)?.display().to_string(),
             ]),
             Err(ref error) if error.to_string().contains("requires formatting")
         ),
@@ -151,9 +147,9 @@ fn format_normalizes_fsm_field_order() -> Result<(), Box<dyn std::error::Error>>
 #[test]
 fn emit_ts_writes_requested_locale_and_cleans_temporary() -> Result<(), Box<dyn std::error::Error>>
 {
-    let dir = TempDir::new("emit")?;
-    let input = dir.write("cn.pa", LANGUAGE_CANONICAL)?;
-    let output = dir.path.join("out.ts");
+    let (dir, _cleanup) = temp_dir("emit")?;
+    let input = write(&dir, "cn.pa", LANGUAGE_CANONICAL)?;
+    let output = dir.join("out.ts");
     let arguments = vec![
         "emit-ts".to_owned(),
         input.display().to_string(),
@@ -161,20 +157,17 @@ fn emit_ts_writes_requested_locale_and_cleans_temporary() -> Result<(), Box<dyn 
         "zh_CN".to_owned(),
     ];
     run(arguments)?;
-    let ts = dir.read("out.ts")?;
+    let ts = read(&dir, "out.ts")?;
     assert!(ts.contains("zh_CN"), "locale 应写入 TS");
-    assert!(
-        !dir.path.join("out.ts.tmp").exists(),
-        "临时文件应被 rename 消费"
-    );
+    assert!(!dir.join("out.ts.tmp").exists(), "临时文件应被 rename 消费");
     Ok(())
 }
 
 #[test]
 fn emit_ts_falls_back_to_document_locale() -> Result<(), Box<dyn std::error::Error>> {
-    let dir = TempDir::new("emit-doc-locale")?;
-    let input = dir.write("en.pa", LANGUAGE_CANONICAL)?;
-    let output = dir.path.join("out.ts");
+    let (dir, _cleanup) = temp_dir("emit-doc-locale")?;
+    let input = write(&dir, "en.pa", LANGUAGE_CANONICAL)?;
+    let output = dir.join("out.ts");
     let arguments = vec![
         "emit-ts".to_owned(),
         input.display().to_string(),
@@ -188,14 +181,14 @@ fn emit_ts_falls_back_to_document_locale() -> Result<(), Box<dyn std::error::Err
 #[test]
 fn emit_ts_rejects_non_language_kind_and_missing_output() -> Result<(), Box<dyn std::error::Error>>
 {
-    let dir = TempDir::new("emit-bad")?;
-    let input = dir.write("vars.pa", VARIABLES)?;
+    let (dir, _cleanup) = temp_dir("emit-bad")?;
+    let input = write(&dir, "vars.pa", VARIABLES)?;
     assert!(
         matches!(
             run(vec![
                 "emit-ts".to_owned(),
                 input.display().to_string(),
-                dir.path.join("out.ts").display().to_string(),
+                dir.join("out.ts").display().to_string(),
             ]),
             Err(ref error) if error.to_string() == "emit-ts requires kind: language"
         ),
@@ -213,21 +206,21 @@ fn emit_ts_rejects_non_language_kind_and_missing_output() -> Result<(), Box<dyn 
 
 #[test]
 fn format_writes_only_when_needed() -> Result<(), Box<dyn std::error::Error>> {
-    let dir = TempDir::new("format")?;
-    let dirty = dir.write("dirty.pa", LANGUAGE_NEEDS_FORMAT)?;
+    let (dir, _cleanup) = temp_dir("format")?;
+    let dirty = write(&dir, "dirty.pa", LANGUAGE_NEEDS_FORMAT)?;
     run(vec!["format".to_owned(), dirty.display().to_string()])?;
-    assert_eq!(dir.read("dirty.pa")?, LANGUAGE_CANONICAL);
+    assert_eq!(read(&dir, "dirty.pa")?, LANGUAGE_CANONICAL);
 
-    let clean = dir.write("clean.pa", LANGUAGE_CANONICAL)?;
+    let clean = write(&dir, "clean.pa", LANGUAGE_CANONICAL)?;
     run(vec!["format".to_owned(), clean.display().to_string()])?;
-    assert_eq!(dir.read("clean.pa")?, LANGUAGE_CANONICAL);
+    assert_eq!(read(&dir, "clean.pa")?, LANGUAGE_CANONICAL);
     Ok(())
 }
 
 #[test]
 fn format_check_distinguishes_clean_and_dirty() -> Result<(), Box<dyn std::error::Error>> {
-    let dir = TempDir::new("format-check")?;
-    let clean = dir.write("clean.pa", LANGUAGE_CANONICAL)?;
+    let (dir, _cleanup) = temp_dir("format-check")?;
+    let clean = write(&dir, "clean.pa", LANGUAGE_CANONICAL)?;
     let arguments = vec![
         "format".to_owned(),
         "--check".to_owned(),
@@ -235,7 +228,7 @@ fn format_check_distinguishes_clean_and_dirty() -> Result<(), Box<dyn std::error
     ];
     run(arguments)?;
 
-    let dirty = dir.write("dirty.pa", LANGUAGE_NEEDS_FORMAT)?;
+    let dirty = write(&dir, "dirty.pa", LANGUAGE_NEEDS_FORMAT)?;
     assert!(
         matches!(
             run(vec![
@@ -253,19 +246,19 @@ fn format_check_distinguishes_clean_and_dirty() -> Result<(), Box<dyn std::error
 #[test]
 fn read_source_reports_missing_invalid_utf8_and_oversized_files()
 -> Result<(), Box<dyn std::error::Error>> {
-    let dir = TempDir::new("read")?;
+    let (dir, _cleanup) = temp_dir("read")?;
     assert!(
         matches!(
             run(vec![
                 "check".to_owned(),
-                dir.path.join("absent.pa").display().to_string(),
+                dir.join("absent.pa").display().to_string(),
             ]),
             Err(ref error) if error.to_string().starts_with("read ")
         ),
         "缺失文件必须报 read 诊断"
     );
 
-    let invalid = dir.path.join("invalid.pa");
+    let invalid = dir.join("invalid.pa");
     fs::write(&invalid, [0xffu8, 0xfe])?;
     assert!(
         matches!(
@@ -275,7 +268,7 @@ fn read_source_reports_missing_invalid_utf8_and_oversized_files()
         "非法 UTF-8 必须带字节位置"
     );
 
-    let oversized = dir.path.join("oversized.pa");
+    let oversized = dir.join("oversized.pa");
     fs::write(&oversized, vec![b'x'; MAX_SOURCE_BYTES + 1])?;
     assert!(matches!(
         run(vec!["check".to_owned(), oversized.display().to_string()]),
@@ -298,32 +291,32 @@ fn required_path_reports_usage_without_argument() {
 #[test]
 fn write_atomically_replaces_content_and_covers_extensionless_target()
 -> Result<(), Box<dyn std::error::Error>> {
-    let dir = TempDir::new("write")?;
-    let target = dir.write("a.ts", "old")?;
+    let (dir, _cleanup) = temp_dir("write")?;
+    let target = write(&dir, "a.ts", "old")?;
     write_atomically(&target, b"new")?;
-    assert_eq!(dir.read("a.ts")?, "new");
-    assert!(!dir.path.join("a.ts.tmp").exists());
+    assert_eq!(read(&dir, "a.ts")?, "new");
+    assert!(!dir.join("a.ts.tmp").exists());
 
-    let extensionless = dir.path.join("plain");
+    let extensionless = dir.join("plain");
     write_atomically(&extensionless, b"x")?;
-    assert_eq!(dir.read("plain")?, "x");
+    assert_eq!(read(&dir, "plain")?, "x");
     Ok(())
 }
 
 #[test]
 fn write_atomically_reports_create_and_replace_failures() -> Result<(), Box<dyn std::error::Error>>
 {
-    let dir = TempDir::new("write-fail")?;
+    let (dir, _cleanup) = temp_dir("write-fail")?;
     assert!(
         matches!(
-            write_atomically(&dir.path.join("absent-dir").join("a.ts"), b"x"),
+            write_atomically(&dir.join("absent-dir").join("a.ts"), b"x"),
             Err(ref error) if error.to_string().starts_with("write ")
         ),
         "不存在目录必须报 write 诊断"
     );
 
     // 目标是目录时 rename 失败：覆盖 replace 错误面。
-    let as_directory = dir.path.join("as-dir.ts");
+    let as_directory = dir.join("as-dir.ts");
     fs::create_dir_all(&as_directory)?;
     assert!(
         matches!(

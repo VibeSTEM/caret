@@ -24,9 +24,9 @@ default-members = ["crates/launcher"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-# 支持下限由当前使用的标准库 / 依赖 API 决定（MSRV 与锁定工具链统一为 1.99）。
+# 支持下限由当前使用的标准库 / 依赖 API 决定（MSRV 与锁定工具链统一为 1.100）。
 # 日常工具链由 rust-toolchain.toml 锁定；resolver 3 按此下限解析依赖。
-rust-version = "1.99"
+rust-version = "1.100"
 license = "Apache-2.0"
 repository = "https://github.com/VibeSTEM/caret"
 
@@ -80,6 +80,12 @@ all = { level = "deny", priority = -1 }
 # 测试和 build script 也必须显式处理失败。
 unwrap_used = "deny"
 expect_used = "deny"
+
+[workspace.lints.cargo]
+# 未使用依赖由 cargo lint 的 cargo-machete 步骤负责。Cargo 内置检查只按目标
+# 引用判断，无法识别经 DEP_CARET_FFI_* metadata 或构建顺序消费的依赖边
+# （launcher 的 caret-ffi），在这些合法边上是误报。
+unused_dependencies = "allow"
 
 # Debug GUI 仍保留符号，但关键排版路径使用优化代码，避免百万字符文档在本地开发构建中卡顿。
 [profile.dev.package.caret-app]

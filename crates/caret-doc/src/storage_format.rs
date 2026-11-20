@@ -427,23 +427,7 @@ fn inspect_block_math_encoding(block: &Value) -> Result<(), DocumentError> {
     match object.get("type").and_then(Value::as_str) {
         Some("equation") => inspect_math_tree_encoding(object.get("mathTree")),
         Some("align") => {
-            let contains_future_math_schema = object
-                .get("rows")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(|row| row.get("cells").and_then(Value::as_array))
-                .flatten()
-                .any(|cell| {
-                    cell.get("schemaVersion")
-                        .and_then(Value::as_u64)
-                        .is_some_and(|version| {
-                            version > crate::model::MATH_TREE_SCHEMA_VERSION as u64
-                        })
-                });
-            if object.contains_key("source") && !contains_future_math_schema {
-                return Err(retired_math_field("align.source"));
-            }
+            // 与 equation/inlineMath 一致：先按单元格检查 schema 版本与编码，再报退役字段。
             if let Some(rows) = object.get("rows").and_then(Value::as_array) {
                 for cell in rows
                     .iter()
@@ -452,6 +436,9 @@ fn inspect_block_math_encoding(block: &Value) -> Result<(), DocumentError> {
                 {
                     inspect_math_tree_encoding(Some(cell))?;
                 }
+            }
+            if object.contains_key("source") {
+                return Err(retired_math_field("align.source"));
             }
             Ok(())
         }
@@ -502,19 +489,26 @@ fn inspect_math_tree_encoding(value: Option<&Value>) -> Result<(), DocumentError
     let Some(tree) = value.and_then(Value::as_object) else {
         return Ok(());
     };
-    let version = tree.get("schemaVersion").and_then(Value::as_u64);
-    if version.is_some_and(|version| version < crate::model::MATH_TREE_SCHEMA_VERSION as u64) {
+    let current_version = crate::model::MATH_TREE_SCHEMA_VERSION as u64;
+    let Some(version) = tree.get("schemaVersion").and_then(Value::as_u64) else {
+        return Err(DocumentError::InvalidDocument(
+            "math tree schema version is missing or not an integer".to_owned(),
+        ));
+    };
+    if version < current_version {
         return Err(DocumentError::InvalidDocument(
             "retired math tree schema is not supported".to_owned(),
         ));
     }
-    if version.is_none_or(|version| version <= crate::model::MATH_TREE_SCHEMA_VERSION as u64)
-        && tree.contains_key("source")
-    {
-        return Err(retired_math_field("mathTree.source"));
+    if version > current_version {
+        // 更高版本不做向前兼容，也不作为 Opaque 保留或进入只读安全预览。
+        return Err(DocumentError::InvalidDocument(format!(
+            "future math tree schema {version} is not supported"
+        )));
     }
-    if version.is_some_and(|version| version > crate::model::MATH_TREE_SCHEMA_VERSION as u64) {
-        return Ok(());
+    // 只有当前 schema 才继续检查退役字段与已知节点编码。
+    if tree.contains_key("source") {
+        return Err(retired_math_field("mathTree.source"));
     }
     if crate::model::supported_math_tree(value) == crate::model::MathTreeSupport::Invalid {
         return Err(DocumentError::InvalidDocument(

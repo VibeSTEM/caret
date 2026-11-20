@@ -2,28 +2,24 @@
 
 use super::{RuntimeCommitError, RuntimeContext, RuntimeValue};
 use crate::path::{PathService, ResourceRef, RootCategory};
+use core::mem::DropGuard;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
-struct TempRoot {
-    root: PathBuf,
-}
+/// 临时根目录的清理守卫。
+type TempRootGuard = DropGuard<PathBuf, fn(PathBuf)>;
 
-impl TempRoot {
-    fn new(label: &str) -> std::io::Result<Self> {
-        let base = fs::canonicalize(std::env::temp_dir()).unwrap_or_else(|_| std::env::temp_dir());
-        let root = base.join(format!("caret-runtime-{}-{label}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root)?;
-        Ok(Self { root })
-    }
-}
-
-impl Drop for TempRoot {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.root);
-    }
+/// 创建隔离的临时根目录；守卫在作用域结束时递归删除该目录。
+fn temp_root(label: &str) -> std::io::Result<(PathBuf, TempRootGuard)> {
+    let base = fs::canonicalize(std::env::temp_dir()).unwrap_or_else(|_| std::env::temp_dir());
+    let root = base.join(format!("caret-runtime-{}-{label}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root)?;
+    let guard: TempRootGuard = DropGuard::new(root.clone(), |root| {
+        let _ = fs::remove_dir_all(root);
+    });
+    Ok((root, guard))
 }
 
 fn values(name: &str, value: i64) -> BTreeMap<String, RuntimeValue> {
@@ -144,9 +140,9 @@ fn dropping_context_cancels_captured_scopes() {
 #[test]
 fn runtime_context_resolves_only_existing_resources_under_project_root()
 -> Result<(), Box<dyn std::error::Error>> {
-    let fixture = TempRoot::new("existing")?;
-    std::fs::write(fixture.root.join("note.txt"), b"note")?;
-    let context = RuntimeContext::for_project(4, &fixture.root)?;
+    let (root, _cleanup) = temp_root("existing")?;
+    std::fs::write(root.join("note.txt"), b"note")?;
+    let context = RuntimeContext::for_project(4, &root)?;
     let reference = ResourceRef {
         category: RootCategory::Project,
         relative: "note.txt".to_owned(),
@@ -154,7 +150,7 @@ fn runtime_context_resolves_only_existing_resources_under_project_root()
 
     assert_eq!(
         context.resolve_existing(&reference)?,
-        fs::canonicalize(fixture.root.join("note.txt"))?
+        fs::canonicalize(root.join("note.txt"))?
     );
     assert!(
         context
@@ -170,14 +166,14 @@ fn runtime_context_resolves_only_existing_resources_under_project_root()
 #[test]
 fn closed_context_and_cancelled_scope_cannot_resolve_resources()
 -> Result<(), Box<dyn std::error::Error>> {
-    let fixture = TempRoot::new("closed")?;
-    let resource_path = fixture.root.join("note.txt");
+    let (root, _cleanup) = temp_root("closed")?;
+    let resource_path = root.join("note.txt");
     std::fs::write(&resource_path, b"note")?;
     let reference = ResourceRef {
         category: RootCategory::Project,
         relative: "note.txt".to_owned(),
     };
-    let mut context = RuntimeContext::for_project(4, &fixture.root)?;
+    let mut context = RuntimeContext::for_project(4, &root)?;
     let scope = context.capture_task_scope();
 
     context.close();
@@ -236,9 +232,9 @@ fn snapshot_iteration_is_sorted_and_remains_fixed_after_a_later_commit()
 #[test]
 fn task_scope_validates_uncreated_resources_until_its_context_closes()
 -> Result<(), Box<dyn std::error::Error>> {
-    let fixture = TempRoot::new("scope-reference")?;
-    fs::write(fixture.root.join("note.txt"), b"note")?;
-    let mut context = RuntimeContext::for_project(9, &fixture.root)?;
+    let (root, _cleanup) = temp_root("scope-reference")?;
+    fs::write(root.join("note.txt"), b"note")?;
+    let mut context = RuntimeContext::for_project(9, &root)?;
     let scope = context.capture_task_scope();
     let reference = ResourceRef {
         category: RootCategory::Project,
@@ -251,7 +247,7 @@ fn task_scope_validates_uncreated_resources_until_its_context_closes()
             category: RootCategory::Project,
             relative: "note.txt".to_owned(),
         })?,
-        fs::canonicalize(fixture.root.join("note.txt"))?
+        fs::canonicalize(root.join("note.txt"))?
     );
     assert!(
         scope

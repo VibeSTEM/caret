@@ -145,6 +145,11 @@ fn parse_text_flow(value: Value) -> Result<TextFlow, ModelError> {
     })
 }
 
+/// 数学载体解码结果。
+///
+/// `FutureOpaque` 只用于当前 schema 内的未知节点类型/结构变体，载体出现这类节点时
+/// 保留为不透明数据；`schemaVersion` 不匹配（含更高版本）一律返回 `Invalid`，
+/// 不做向前兼容，也不降级为 Opaque。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MathTreeSupport {
     Known,
@@ -174,11 +179,21 @@ fn valid_node_id(object: &Map<String, Value>) -> bool {
         .is_some()
 }
 
-/// 判定当前数学树的编码：当前节点严格校验，未来节点只允许作为不透明数据保留。
+/// 判定当前数学树的编码。
+///
+/// 只接受当前 `schemaVersion`，更高或更低的版本都按格式错误拒绝，不做向前兼容；
+/// 当前 schema 内的已知节点严格校验，未知节点类型仍保留为不透明数据。
 pub(crate) fn supported_math_tree(value: Option<&Value>) -> MathTreeSupport {
     supported_math_tree_with_ids(value, &mut BTreeSet::new())
 }
 
+/// 判定整棵原始数学树，并把其中已知节点的 ID 收集到 `ids`。
+///
+/// `ids` 由 equation/inlineMath 载体检查传入（先放入载体 ID），用于发现整块转为
+/// Opaque 前载体与树之间的重复 ID；Align 的块/行/单元格 ID 由 `supported_align`
+/// 单独收集。
+/// 版本判定与 [`supported_math_tree`] 一致：任何不匹配的 `schemaVersion` 都是
+/// `Invalid`，未知节点类型才返回 `FutureOpaque`。
 fn supported_math_tree_with_ids(
     value: Option<&Value>,
     ids: &mut BTreeSet<String>,
@@ -189,9 +204,6 @@ fn supported_math_tree_with_ids(
     let Some(version) = tree.get("schemaVersion").and_then(Value::as_u64) else {
         return MathTreeSupport::Invalid;
     };
-    if version > super::MATH_TREE_SCHEMA_VERSION as u64 {
-        return MathTreeSupport::FutureOpaque;
-    }
     if version != super::MATH_TREE_SCHEMA_VERSION as u64 {
         return MathTreeSupport::Invalid;
     }
@@ -395,25 +407,22 @@ fn supported_align(object: &Map<String, Value>) -> MathTreeSupport {
         };
         cells.iter().fold(result, |state, cell| {
             let tree_support = supported_math_tree(Some(cell));
-            let unique = !super::MathTree::storage_schema_is_current(cell)
-                || cell
-                    .get("root")
-                    .is_none_or(|root| known_math_ids_are_unique(root, &mut ids));
-            state.combine(if unique {
+            if tree_support == MathTreeSupport::Invalid {
+                return state.combine(tree_support);
+            }
+            // 只有当前 schema 的树才继续检查已知 ID 唯一性：更高版本已在
+            // `supported_math_tree` 中返回 Invalid，不再进入这里的已知节点检查。
+            // 未知节点导致整格转为 Opaque 时，本检查仍可发现已知兄弟间的重复 ID。
+            let ids_are_unique = cell
+                .get("root")
+                .is_none_or(|root| known_math_ids_are_unique(root, &mut ids));
+            state.combine(if ids_are_unique {
                 tree_support
             } else {
                 MathTreeSupport::Invalid
             })
         })
     })
-}
-
-impl super::MathTree {
-    /// 判定原始 JSON 的数学树 schema 版本是否与当前解码器一致。
-    pub(crate) fn storage_schema_is_current(tree: &Value) -> bool {
-        tree.get("schemaVersion").and_then(Value::as_u64)
-            == Some(super::MATH_TREE_SCHEMA_VERSION as u64)
-    }
 }
 
 /// raw 扫描历史边界策略。
@@ -452,7 +461,7 @@ impl super::MathNodeKind {
     /// 判定单个原始数学节点是否为类型解码器可解释的形态。
     ///
     /// 返回值是该节点的类别；`None` 表示当前 schema 的节点字段或结构无效。未知 kind
-    /// 在此调用前由 raw JSON 边界识别为未来格式。与 raw 扫描共用属性/结构实现，
+    /// 在此调用前由 raw JSON 边界识别为未知节点类型。与 raw 扫描共用属性/结构实现，
     /// 但保留类型解码器的既有输入边界（见 `MathNodeSupportPolicy`）。
     pub(crate) fn supported_from_storage(
         object: &Map<String, Value>,

@@ -116,6 +116,7 @@ fn unique_sibling(parent: &Path, directory_name: &str, role: &str) -> PathBuf {
 mod tests {
     #![allow(clippy::expect_used)]
 
+    use core::mem::DropGuard;
     use std::collections::BTreeMap;
     use std::error::Error;
     use std::fs;
@@ -126,35 +127,34 @@ mod tests {
 
     static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
-    struct TestDirectory(PathBuf);
+    /// 测试目录的清理守卫。
+    type TestDirectoryGuard = DropGuard<PathBuf, fn(PathBuf)>;
 
-    impl TestDirectory {
-        fn create() -> Result<Self, std::io::Error> {
-            loop {
-                let sequence = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-                let path = std::env::temp_dir().join(format!(
-                    "caret-build-publish-{}-{sequence}",
-                    std::process::id()
-                ));
-                match fs::create_dir(&path) {
-                    Ok(()) => return Ok(Self(path)),
-                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                    Err(error) => return Err(error),
+    /// 创建唯一的测试目录；守卫在作用域结束时递归删除该目录。
+    fn test_directory() -> Result<(PathBuf, TestDirectoryGuard), std::io::Error> {
+        loop {
+            let sequence = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "caret-build-publish-{}-{sequence}",
+                std::process::id()
+            ));
+            match fs::create_dir(&path) {
+                Ok(()) => {
+                    let guard: TestDirectoryGuard = DropGuard::new(path.clone(), |path| {
+                        let _ = fs::remove_dir_all(path);
+                    });
+                    return Ok((path, guard));
                 }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error),
             }
-        }
-    }
-
-    impl Drop for TestDirectory {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
         }
     }
 
     #[test]
     fn replaces_a_complete_file_set_and_removes_stale_files() -> Result<(), Box<dyn Error>> {
-        let temporary = TestDirectory::create()?;
-        let target = temporary.0.join("i18n");
+        let (root, _cleanup) = test_directory()?;
+        let target = root.join("i18n");
         fs::create_dir(&target)?;
         fs::write(target.join("stale.ts"), b"old")?;
         let files = BTreeMap::from([
@@ -173,15 +173,15 @@ mod tests {
     #[test]
     fn rejects_invalid_file_names_without_touching_the_previous_directory()
     -> Result<(), Box<dyn Error>> {
-        let temporary = TestDirectory::create()?;
-        let target = temporary.0.join("i18n");
+        let (root, _cleanup) = test_directory()?;
+        let target = root.join("i18n");
         fs::create_dir(&target)?;
         fs::write(target.join("existing.ts"), b"previous")?;
         let files = BTreeMap::from([("../outside.ts".to_owned(), b"invalid".to_vec())]);
 
         assert!(replace_directory_with_files(&target, &files).is_err());
         assert_eq!(fs::read(target.join("existing.ts"))?, b"previous");
-        assert!(!temporary.0.join("outside.ts").exists());
+        assert!(!root.join("outside.ts").exists());
         Ok(())
     }
 }
