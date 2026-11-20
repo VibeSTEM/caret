@@ -1,9 +1,9 @@
 # 092 — 共享数学片段转换接口
 
-- 状态：implemented
+- 状态：done
 - 依赖：043
 - 优先级：P1
-- 创建 / 更新：2026-11-16 / 2026-11-21
+- 创建 / 更新：2026-11-16 / 2026-11-21（2026-11-21 合并）
 
 ## 目标与背景
 
@@ -74,7 +74,8 @@
 | 2026-11-21 | `cargo test --locked -p caret-doc -p caret-engine` | 现有解析/序列化消费方无回归 | 通过：90 / 890 项 |
 | 2026-11-21 | 行为覆盖 | 有效输入、边界、超限、不可表达字段 | 覆盖：三类宿主与环境属性 roundtrip 不动点；语法/超长/过深/编号命令/宿主不匹配；extra（含 SoftBreak/嵌套环境 child）、Opaque、Run 元数据、零 Run TextFlow、环境模板/属性/缺字体/字体族、尺寸精度与 i128 极值、未约分超预算 mu 尺寸、空 cell；损失路径精确到 content/operand/environmentChild/textRun/row/cell；透明包装/空 Group/空根 flow/空 Align 归一化；常规 em/mu 尺寸正例；失败不修改模型 |
 | 2026-11-21 | 两轮分域评审（数学序列化域、集成/文档域）+ 两轮未参与实现的最终评审 | 发现项闭环 | 完成：SoftBreak.extra、检查阶段尺寸 panic/静默溢出、mu 回退分叉、SPDX 署名、记录提前宣称、文档绝对化等均已修复复验 |
-| — | PR CI 与覆盖率 | 通过 | PR 建立后补记；覆盖率由 Nightly 覆盖流程验证 |
+| 2026-11-21 | PR [#158](https://github.com/VibeSTEM/caret/pull/158) / Actions run [44811751605](https://github.com/VibeSTEM/caret/actions/runs/44811751605) | PR CI 通过 | 全部通过：check/build、format、clippy、machete、math-backend；其余按路径跳过；分域/最终评审已完成 |
+| — | 覆盖率门槛 | 通过 | 待 Nightly 覆盖流程验证（本机未跑覆盖率） |
 
 ## 风险与回退
 
@@ -90,6 +91,7 @@
 - 2026-11-21：分域评审发现 `SoftBreak.extra` 与超精度尺寸会被静默写出/panic，已修复并补测试；评审同时指出记录中提前引用 PR CI 与最终评审，已改为待建/待完成，补齐环境信息、实现步骤口径与残留接口边界。
 - 2026-11-21：最终评审发现检查阶段自身仍可因 i128 极值在未受保护的 `format_dimension` 中 panic/溢出；新增 `dimension::format_dimension_checked`（全 checked、18 位精度预算）供 checked 片段判定，Strut 深度取负也改为 checked，并补 i128 极值、正常 em/mu 正例、缺 `fontFamily` Font 环境、空 Group/空 Align/空 cell 等回归；文档的“解析器产生的标准模型可再读取”限定为“尺寸在精度预算内”。
 - 2026-11-21：最终评审第二轮发现 checked formatter 的 mu 分支在候选不可回读时会 fallthrough 到 em 候选，导致检查通过但实际 serializer 写出超预算 mu；已改为早返回并补“checked Some ⇒ 与 format_dimension 一致且可回读”的不变式测试与未约分 hspace 拒绝用例。最终评审确认闭环：尺寸检查三项极值 + 未约分 mu 均返回 Loss 且不 panic，空 cell/空 Align 归一化测试成立，任务记录数字与最终工作树一致。
+- 2026-11-21：PR #158 通过 CI 并合并；任务关闭。091 的依赖（083、092）已满足，随本文档提交转为 `ready`；080 的阻塞条件更新为“091 完成 → 整链验收”。
 
 ## 完成摘要
 
