@@ -1,6 +1,6 @@
 # 103 — Rust 1.100 工具链升级与 Nightly sanitizer 恢复
 
-- 状态：implemented
+- 状态：done
 - 依赖：001、006、070
 - 优先级：P0
 - 创建 / 更新：2026-11-20 / 2026-11-20
@@ -110,10 +110,10 @@
 
 ## 完成摘要
 
-工具链升级、Cargo 1.100 build-dir 适配、Nightly sanitizer 修复、`MathTree` 解码向前兼容清理和可选优化已实现；`str::trim_prefix` 在确认固定 Miri nightly 尚未稳定后回退。仓库内验证通过：`cargo fmt --all -- --check`、`cargo format --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo test --workspace --locked`（1914 项 + native CTest 20/20）、`cargo lint --check`、`cargo test -p caret-tests sanitize`、干净 target 与显式 `--target` 的 launcher 构建、Miri 固定 nightly 的 `caret-app` `--lib`/`--tests` 编译检查。分领域评审与未参与实现的只读 final review 均完成，发现项（显式 target 的 staticlib 位置、测试断言、文档同步、trim_prefix 与 Miri nightly 冲突）已处理并复验。
+工具链升级、Cargo 1.100 build-dir 适配、Nightly sanitizer 修复、`MathTree` 解码向前兼容清理和可选优化已实现，PR [#153](https://github.com/VibeSTEM/caret/pull/153) 通过 CI；`str::trim_prefix` 在确认固定 Miri nightly 尚未稳定后回退。仓库内验证通过：`cargo fmt --all -- --check`、`cargo format --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo test --workspace --locked`（1914 项 + native CTest 20/20）、`cargo lint --check`、`cargo test -p caret-tests sanitize`、干净 target 与显式 `--target` 的 launcher 构建、Miri 固定 nightly 的 `caret-app` `--lib`/`--tests` 编译检查。分领域评审与未参与实现的只读 final review 均完成，发现项（显式 target 的 staticlib 位置、测试断言、文档同步、trim_prefix 与 Miri nightly 冲突）已处理并复验。
 
 未完成 / 外部待补：
-- PR #153 CI 已通过；合并后下一轮 Nightly `sanitizer matrix`（Linux TSan、macOS ASan/LSan）尚未运行，Nightly「恢复绿色」不能以本机结果代替。
+- PR #153 CI 已通过并按维护者指示合并；下一轮 Nightly `sanitizer matrix`（Linux TSan、macOS ASan/LSan）尚待运行观察，Nightly「恢复绿色」不能以本机结果代替，失败时按本任务复查入口继续收敛。
 - 本机 macOS 27.2.1 的 ASan+UBSan 仍报告 3 个纯系统帧泄漏（libobjc/CoreGraphics），未扩大抑制范围；若 CI runner 出现同类栈需要新的证据再决策。
 - `cargo ub-check`（Miri 解释执行）未完整运行；只验证了固定 nightly 下 `caret-app` 可编译。
 - #149/#145 的「顺带清理（Low）」不在本任务范围。
