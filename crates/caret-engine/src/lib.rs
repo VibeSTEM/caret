@@ -32,7 +32,7 @@ pub use layout::{
     DocumentLayoutError, DocumentLayoutRuntime, DocumentLayoutService, DocumentLayoutSnapshot,
     LaidOutParagraph, MathTextVerticalTarget, MathTreeVerticalTarget, PageCaretGeometry,
     PageEnvironmentRange, PageHit, PageLayoutSnapshot, PageMathStructureHit, PageMathTextDragStop,
-    PageMathTextHit, PageSelectionRect, TextLayoutDiagnostic,
+    PageMathTextHit, PageMathTreeDragStop, PageSelectionRect, TextLayoutDiagnostic,
 };
 pub use layout_view::{
     DocumentLayoutDeltaView, DocumentLayoutView, DocumentPositionView, EnvironmentRangeView,

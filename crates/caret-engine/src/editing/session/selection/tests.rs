@@ -2,6 +2,9 @@
 
 use super::super::{Command, Direction, Pos, Selection, Session, StoryId};
 use crate::VisualAffinity;
+use crate::editing::session::math_edit::{
+    MathPositionAffinity, MathPositionHost, MathSequencePath, MathTreePosition,
+};
 use crate::editing::{Affinity, DocumentRangeEndpoint, EditorKey, StructureSelection};
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, Equation, MathContent, MathFlow,
@@ -208,6 +211,190 @@ fn pointer_range_across_equation_promotes_and_delete_removes_it_atomically() {
             .iter()
             .any(|block| matches!(block, Block::Equation(equation) if equation.id == equation_id))
     );
+}
+
+#[test]
+fn mixed_inline_math_range_deletes_block_covered_only_by_structure_projection() {
+    let equation_block = equation("x");
+    let equation_id = match &equation_block {
+        Block::Equation(equation) => equation.id.clone(),
+        _ => unreachable!(),
+    };
+    let math_id = NodeId::generate();
+    let text_path = crate::MathTextFlowPath::from_interaction_path(
+        vec![
+            caret_doc::MathPathStep::Content(0),
+            caret_doc::MathPathStep::Operand(0),
+            caret_doc::MathPathStep::Content(0),
+        ],
+        None,
+    );
+    let mut paragraph = paragraph_with_text("");
+    paragraph
+        .inlines
+        .push(ParagraphContent::Math(caret_doc::InlineMath {
+            id: math_id.clone(),
+            math_tree: MathTree {
+                schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+                root: MathFlow {
+                    id: NodeId::generate(),
+                    content: vec![MathContent::Math(MathNode {
+                        id: NodeId::generate(),
+                        kind: MathNodeKind::Group,
+                        text: None,
+                        attributes: BTreeMap::new(),
+                        children: vec![MathFlow {
+                            id: NodeId::generate(),
+                            content: vec![MathContent::Text(caret_doc::TextFlow {
+                                runs: vec![Run {
+                                    text: "ab".to_owned(),
+                                    language: None,
+                                    props: BTreeMap::new(),
+                                    extra: BTreeMap::new(),
+                                }],
+                                extra: Default::default(),
+                            })],
+                            extra: BTreeMap::new(),
+                        }],
+                        extra: BTreeMap::new(),
+                    })],
+                    extra: BTreeMap::new(),
+                },
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        }));
+    let paragraph_id = paragraph.id.clone();
+    let mut session = Session::new(Document {
+        body: vec![equation_block, Block::Paragraph(paragraph)],
+        ..Document::blank()
+    })
+    .unwrap_or_else(|error| panic!("session creation failed: {error}"));
+    let selection = StructureSelection {
+        anchor: DocumentRangeEndpoint::BlockEdge {
+            block_id: equation_id.clone(),
+            side: Direction::Backward,
+        },
+        focus: DocumentRangeEndpoint::InlineMathText {
+            paragraph_id: paragraph_id.clone(),
+            math_id: math_id.clone(),
+            position: crate::MathTextPosition::new(
+                text_path,
+                0,
+                crate::MathPositionAffinity::Downstream,
+            ),
+            entry_direction: Direction::Forward,
+            entry_math_forward: true,
+        },
+    };
+    session
+        .set_pointer_inline_math_selection(
+            selection,
+            VisualAffinity::Upstream,
+            VisualAffinity::Downstream,
+        )
+        .unwrap_or_else(|error| panic!("mixed selection setup failed: {error}"));
+    assert_eq!(
+        session.selected_math_blocks(),
+        std::slice::from_ref(&equation_id)
+    );
+
+    let effect = session
+        .run(Command::Delete(Direction::Forward))
+        .unwrap_or_else(|error| panic!("mixed range delete failed: {error}"));
+
+    assert!(effect.document_changed);
+    assert!(session.document().body.iter().all(|block| {
+        !matches!(block, Block::Equation(equation) if equation.id == equation_id)
+    }));
+    assert!(session.document().body.iter().any(|block| {
+        matches!(block, Block::Paragraph(paragraph) if paragraph.id == paragraph_id
+            && paragraph.inlines.iter().any(|inline| matches!(inline, ParagraphContent::Math(math) if math.id == math_id)))
+    }));
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("mixed delete undo failed: {error}"));
+    assert!(
+        session.document().body.iter().any(|block| {
+            matches!(block, Block::Equation(equation) if equation.id == equation_id)
+        })
+    );
+}
+
+#[test]
+fn mixed_inline_math_delete_rejects_unknown_math_metadata_atomically() {
+    let math_id = NodeId::generate();
+    let paragraph = Paragraph {
+        id: NodeId::generate(),
+        inlines: vec![ParagraphContent::Math(caret_doc::InlineMath {
+            id: math_id.clone(),
+            math_tree: MathTree {
+                schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+                root: MathFlow {
+                    id: NodeId::generate(),
+                    content: vec![MathContent::Math(MathNode {
+                        id: NodeId::generate(),
+                        kind: MathNodeKind::Symbol,
+                        text: Some("x".to_owned()),
+                        attributes: BTreeMap::new(),
+                        children: Vec::new(),
+                        extra: BTreeMap::from([(
+                            "future-field".to_owned(),
+                            serde_json::json!("preserve"),
+                        )]),
+                    })],
+                    extra: BTreeMap::new(),
+                },
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        })],
+        ..Paragraph::empty(NodeId::generate())
+    };
+    let paragraph_id = paragraph.id.clone();
+    let mut session = Session::new(Document {
+        body: vec![Block::Paragraph(paragraph)],
+        ..Document::blank()
+    })
+    .unwrap_or_else(|error| panic!("session creation failed: {error}"));
+    let endpoint = |offset| DocumentRangeEndpoint::InlineMathTree {
+        paragraph_id: paragraph_id.clone(),
+        position: MathTreePosition {
+            host: MathPositionHost::InlineMath {
+                owner_id: math_id.clone(),
+            },
+            path: MathSequencePath::root(),
+            offset,
+            affinity: MathPositionAffinity::Downstream,
+        },
+        entry_direction: Direction::Forward,
+        entry_math_forward: true,
+    };
+    let selection = StructureSelection {
+        anchor: endpoint(0),
+        focus: endpoint(1),
+    };
+    session
+        .set_pointer_inline_math_selection(
+            selection.clone(),
+            VisualAffinity::Upstream,
+            VisualAffinity::Downstream,
+        )
+        .unwrap_or_else(|error| panic!("selection setup failed: {error}"));
+    let before_document = session.document().clone();
+    let before_generation = session.document_generation();
+
+    assert!(matches!(
+        session.run(Command::Delete(Direction::Forward)),
+        Err(crate::editing::EditError::UnsupportedOpaqueContent)
+    ));
+    assert_eq!(session.document(), &before_document);
+    assert_eq!(session.document_generation(), before_generation);
+    assert_eq!(
+        session.structure_selection_range(),
+        Some((&selection.anchor, &selection.focus))
+    );
+    assert!(!session.can_undo());
 }
 
 fn section(title: &str, children: Vec<Block>) -> Block {

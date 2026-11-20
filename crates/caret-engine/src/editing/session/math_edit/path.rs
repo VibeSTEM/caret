@@ -89,14 +89,17 @@ impl MathTextFlowPath {
     }
 
     /// 按类型化树路径解析 TextFlow，不要求临时源码范围仍与旧投影一致。
-    pub(super) fn resolve_structurally<'a>(&self, tree: &'a MathTree) -> Option<&'a TextFlow> {
+    pub(in crate::editing::session) fn resolve_structurally<'a>(
+        &self,
+        tree: &'a MathTree,
+    ) -> Option<&'a TextFlow> {
         let MathContent::Text(text) = resolve_content_path(&tree.root, &self.steps)? else {
             return None;
         };
         Some(text)
     }
 
-    pub(super) fn resolve_structurally_mut<'a>(
+    pub(in crate::editing::session) fn resolve_structurally_mut<'a>(
         &self,
         tree: &'a mut MathTree,
     ) -> Option<&'a mut TextFlow> {
@@ -179,7 +182,10 @@ impl MathTextPosition {
         )
     }
 
-    fn position_order_key(&self, tree: &MathTree) -> Option<Vec<usize>> {
+    pub(in crate::editing::session) fn position_order_key(
+        &self,
+        tree: &MathTree,
+    ) -> Option<Vec<usize>> {
         let (sequence, content_index) =
             super::MathTreePosition::sequence_boundary_from_text_path(self.path.steps()).ok()?;
         let text = self.path.resolve_structurally(tree)?;

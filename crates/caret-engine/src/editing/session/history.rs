@@ -1753,28 +1753,37 @@ fn json_value_bytes(value: &serde_json::Value) -> usize {
     }
 }
 
-/// 历史只保存根序列的混合选区；计入堆上的范围本体和端点持有的稳定 ID。
+/// 数学选区可从任一端进入历史；计入两个端点各自持有的宿主标识与嵌套路径。
 fn inline_range_bytes(range: &super::StructureSelection) -> usize {
-    let (
-        super::DocumentRangeEndpoint::Text(anchor),
-        super::DocumentRangeEndpoint::InlineMathTree {
+    use super::DocumentRangeEndpoint::*;
+    let retained = |endpoint: &super::DocumentRangeEndpoint| match endpoint {
+        Text(pos) => node_id_bytes(&pos.paragraph_id) + story_id_bytes(&pos.story),
+        BlockEdge { block_id, .. } => node_id_bytes(block_id),
+        InlineMathTree {
             paragraph_id,
             position,
             ..
-        },
-    ) = (&range.anchor, &range.focus)
-    else {
-        return size_of_val(range);
+        } => {
+            node_id_bytes(paragraph_id)
+                + position
+                    .estimated_bytes()
+                    .saturating_sub(size_of_val(position))
+        }
+        InlineMathText {
+            paragraph_id,
+            math_id,
+            position,
+            ..
+        } => {
+            node_id_bytes(paragraph_id)
+                + node_id_bytes(math_id)
+                + position
+                    .path
+                    .estimated_bytes()
+                    .saturating_sub(size_of_val(&position.path))
+        }
     };
-    let owner_bytes = match &position.host {
-        super::MathPositionHost::InlineMath { owner_id } => node_id_bytes(owner_id),
-        _ => 0,
-    };
-    size_of_val(range)
-        + node_id_bytes(&anchor.paragraph_id)
-        + story_id_bytes(&anchor.story)
-        + node_id_bytes(paragraph_id)
-        + owner_bytes
+    size_of_val(range) + retained(&range.anchor) + retained(&range.focus)
 }
 
 fn selection_id_bytes(selection: &Selection) -> usize {

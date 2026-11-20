@@ -473,8 +473,10 @@ impl Session {
     pub fn active_host_caret_position(
         &mut self,
     ) -> Option<HostCaretPosition<HostCaretLocalPosition>> {
-        if let Some((_, endpoint @ DocumentRangeEndpoint::InlineMathTree { .. })) =
-            self.structure_selection_range()
+        if let Some((anchor, endpoint)) = self.structure_selection_range()
+            && (endpoint.is_inline_math()
+                || (anchor.is_inline_math()
+                    && matches!(endpoint, DocumentRangeEndpoint::BlockEdge { .. })))
         {
             let DocumentCaretPosition::Host(host) = endpoint.as_document_caret().ok()? else {
                 return None;
@@ -704,7 +706,8 @@ impl Session {
         match &self.structure_selection.as_ref()?.anchor {
             DocumentRangeEndpoint::Text(anchor) => Some(anchor),
             DocumentRangeEndpoint::BlockEdge { .. }
-            | DocumentRangeEndpoint::InlineMathTree { .. } => None,
+            | DocumentRangeEndpoint::InlineMathTree { .. }
+            | DocumentRangeEndpoint::InlineMathText { .. } => None,
         }
     }
 
@@ -746,7 +749,16 @@ impl Session {
     ) -> Result<(), EditError> {
         if self.resolve_inline_math_parts(&selection)?.is_some() {
             self.compare_range_endpoints(&selection.anchor, &selection.focus)?;
-            self.assign_structure_selection_state(selection, Vec::new(), Vec::new());
+            let (start, end) = if self
+                .compare_range_endpoints(&selection.anchor, &selection.focus)?
+                .is_gt()
+            {
+                (&selection.focus, &selection.anchor)
+            } else {
+                (&selection.anchor, &selection.focus)
+            };
+            let (environments, math_blocks) = self.covered_block_nodes(start, end)?;
+            self.assign_structure_selection_state(selection, environments, math_blocks);
             return Ok(());
         }
         let (start, end) =
@@ -1610,18 +1622,31 @@ impl Session {
                 }
             }
         }
-        if let Some(range) = inline_range.as_deref() {
-            // 历史切口按稳定宿主和树路径在目标文档重验，再移动撤销栈或写会话。
-            let parts = inline_math_range::resolve_inline_math_parts(
-                &next_document,
-                &next_paragraph_index,
-                range,
-            )?
-            .ok_or(EditError::InvalidPosition)?;
+        let restored_inline_coverage = if let Some(range) = inline_range.as_deref() {
+            // 历史切口按目标文档重建的 Session 验证，确保 Math/BlockEdge 与当前比较器同义。
+            let mut candidate = self.clone_preserving_identity();
+            candidate.document = next_document.clone();
+            candidate.paragraph_index = next_paragraph_index.clone();
+            candidate.structure_index = Arc::new(StructureIndex::build(&next_document));
+            let parts = candidate
+                .resolve_inline_math_parts(range)?
+                .ok_or(EditError::InvalidPosition)?;
+            candidate.compare_range_endpoints(&range.anchor, &range.focus)?;
             if parts.body.focus != selection.focus || selection.anchor != selection.focus {
                 return Err(EditError::InvalidPosition);
             }
-        }
+            let (start, end) = if candidate
+                .compare_range_endpoints(&range.anchor, &range.focus)?
+                .is_gt()
+            {
+                (&range.focus, &range.anchor)
+            } else {
+                (&range.anchor, &range.focus)
+            };
+            Some(candidate.covered_block_nodes(start, end)?)
+        } else {
+            None
+        };
         let selection_changed = self.selection != selection
             || self.structure_selection.as_ref() != inline_range.as_deref()
             || self.selection_anchor_visual_affinity != anchor_visual_affinity
@@ -1644,9 +1669,6 @@ impl Session {
         self.pending_inline_style = pending_style;
         self.set_math_edit(restored_math_edit);
         self.clear_structure_selection_state();
-        if let Some(range) = inline_range {
-            self.assign_structure_selection_state(*range, Vec::new(), Vec::new());
-        }
         self.history_state_id = state_id;
         self.advance_history_merge_epoch();
         if document_changed {
@@ -1659,6 +1681,11 @@ impl Session {
                 self.session_id = NodeId::generate();
                 self.document_generation = 0;
             }
+        }
+        if let (Some(range), Some((environments, math_blocks))) =
+            (inline_range, restored_inline_coverage)
+        {
+            self.assign_structure_selection_state(*range, environments, math_blocks);
         }
         self.set_host_caret_position(host_caret_position);
         self.sync_math_edit_revision();

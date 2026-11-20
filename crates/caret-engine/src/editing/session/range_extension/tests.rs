@@ -231,7 +231,9 @@ fn shift_left(session: &mut Session) {
 fn text_endpoint(endpoint: &DocumentRangeEndpoint) -> &Pos {
     match endpoint {
         DocumentRangeEndpoint::Text(position) => position,
-        DocumentRangeEndpoint::BlockEdge { .. } | DocumentRangeEndpoint::InlineMathTree { .. } => {
+        DocumentRangeEndpoint::BlockEdge { .. }
+        | DocumentRangeEndpoint::InlineMathTree { .. }
+        | DocumentRangeEndpoint::InlineMathText { .. } => {
             panic!("expected text endpoint: {endpoint:?}")
         }
     }

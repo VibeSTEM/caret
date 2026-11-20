@@ -312,6 +312,15 @@ pub struct PageMathTextDragStop {
     pub caret: PageCaretGeometry,
 }
 
+/// 公式树序列在页面上的插入点，供公式内部和跨宿主拖选共用。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PageMathTreeDragStop {
+    pub target: MathEditTarget,
+    pub position: MathTreePosition,
+    pub visual_affinity: VisualAffinity,
+    pub caret: PageCaretGeometry,
+}
+
 /// 数学文本竖直导航结果；跨文本岛时携带可由 Session 校验的页面命中。
 #[derive(Debug, Clone, PartialEq)]
 pub enum MathTextVerticalTarget {

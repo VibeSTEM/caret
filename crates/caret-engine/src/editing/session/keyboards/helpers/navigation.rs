@@ -40,7 +40,7 @@ impl Session {
     }
 
     /// 验证候选所属的 Session 和文档代际；字体代际由 app 布局服务先行校验。
-    pub(in crate::editing::session::keyboards) fn validate_navigation_generation(
+    pub(in crate::editing::session) fn validate_navigation_generation(
         &self,
         generation: &NavigationGeneration,
     ) -> Result<(), EditError> {
@@ -311,7 +311,10 @@ impl Session {
             return Ok(Effect::default());
         }
         // 块外侧端点（例如选中公式后的焦点）按共享文档单元继续移动。
-        if self.has_structure_selection() && self.structure_selection_anchor().is_none() {
+        if self
+            .structure_selection_range()
+            .is_some_and(|(_, focus)| matches!(focus, DocumentRangeEndpoint::BlockEdge { .. }))
+        {
             return self.extend_structure_selection(direction);
         }
         // 没有视觉行候选时，只有焦点已停在段落边界且相邻块是显示公式，才按文档

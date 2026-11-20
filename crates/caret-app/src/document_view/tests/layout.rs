@@ -2815,6 +2815,116 @@ fn dragging_across_display_math_previews_the_math_block_rect_before_release()
     Ok(())
 }
 
+#[test]
+fn mixed_inline_math_selection_keeps_block_and_math_geometry_in_both_snapshots()
+-> Result<(), Box<dyn std::error::Error>> {
+    let equation = equation_block(&NodeId::generate(), "x+y");
+    let equation_id = match &equation {
+        Block::Equation(equation) => equation.id.clone(),
+        _ => unreachable!(),
+    };
+    let math_id = NodeId::generate();
+    let paragraph_id = NodeId::generate();
+    let paragraph = Paragraph {
+        id: paragraph_id.clone(),
+        inlines: vec![ParagraphContent::Math(InlineMath {
+            id: math_id.clone(),
+            math_tree: MathTree {
+                schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+                root: MathFlow {
+                    id: NodeId::generate(),
+                    content: vec![MathContent::Math(caret_doc::MathNode {
+                        id: NodeId::generate(),
+                        kind: caret_doc::MathNodeKind::Group,
+                        text: None,
+                        attributes: BTreeMap::new(),
+                        children: vec![MathFlow {
+                            id: NodeId::generate(),
+                            content: vec![MathContent::Text(TextFlow {
+                                runs: vec![Run {
+                                    text: "ab".to_owned(),
+                                    language: None,
+                                    props: BTreeMap::new(),
+                                    extra: BTreeMap::new(),
+                                }],
+                                extra: BTreeMap::new(),
+                            })],
+                            extra: BTreeMap::new(),
+                        }],
+                        extra: BTreeMap::new(),
+                    })],
+                    extra: BTreeMap::new(),
+                },
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        })],
+        ..Paragraph::empty(paragraph_id.clone())
+    };
+    let mut document = Document::blank();
+    document.body = vec![equation, Block::Paragraph(paragraph)];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let equation_rect = runtime
+        .current_snapshot()?
+        .math_block_geometry(std::slice::from_ref(&equation_id))
+        .and_then(|rectangles| rectangles.first().copied())
+        .ok_or_else(|| std::io::Error::other("equation rectangle is missing"))?;
+    let equation_tuple = (
+        i64::try_from(equation_rect.page_index)?,
+        equation_rect.x0_pt,
+        equation_rect.y0_pt,
+        equation_rect.x1_pt,
+        equation_rect.y1_pt,
+    );
+    let path = caret_engine::MathTextFlowPath::from_interaction_path(
+        vec![
+            caret_doc::MathPathStep::Content(0),
+            caret_doc::MathPathStep::Operand(0),
+            caret_doc::MathPathStep::Content(0),
+        ],
+        None,
+    );
+    runtime.session.set_pointer_inline_math_selection(
+        caret_engine::StructureSelection {
+            anchor: caret_engine::DocumentRangeEndpoint::BlockEdge {
+                block_id: equation_id.clone(),
+                side: caret_engine::Direction::Backward,
+            },
+            focus: caret_engine::DocumentRangeEndpoint::InlineMathText {
+                paragraph_id,
+                math_id,
+                position: caret_engine::MathTextPosition::new(
+                    path,
+                    1,
+                    caret_engine::MathPositionAffinity::Downstream,
+                ),
+                entry_direction: caret_engine::Direction::Forward,
+                entry_math_forward: true,
+            },
+        },
+        caret_engine::VisualAffinity::Upstream,
+        caret_engine::VisualAffinity::Downstream,
+    )?;
+    assert_eq!(runtime.session.selected_math_blocks(), &[equation_id]);
+
+    let full: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)?;
+    let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+    let rectangles = rectangle_tuples(&interaction["selectionRects"]);
+    assert!(
+        rectangles
+            .iter()
+            .any(|rectangle| rectangle_close(rectangle, equation_tuple)),
+        "mixed selection must retain the selected equation rectangle"
+    );
+    assert!(
+        rectangles.len() >= 2,
+        "mixed selection must include both block and inline math geometry"
+    );
+    assert_eq!(full["selectionRects"], interaction["selectionRects"]);
+    Ok(())
+}
+
 fn tuple_from_rect(value: &Value) -> (i64, f64, f64, f64, f64) {
     (
         value["pageIndex"].as_i64().unwrap_or_default(),

@@ -101,6 +101,12 @@ pub enum NavigationCandidate {
         visual_affinity: VisualAffinity,
         generation: NavigationGeneration,
     },
+    InlineMathRangeEdge {
+        body_focus: Option<Pos>,
+        body_visual_affinity: Option<VisualAffinity>,
+        forward: bool,
+        generation: NavigationGeneration,
+    },
     MathTextHit {
         hit: crate::PageMathTextHit,
         generation: NavigationGeneration,

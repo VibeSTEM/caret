@@ -151,6 +151,7 @@ fn inline_subsup_document(superscript: Option<&str>) -> (Document, NodeId, NodeI
             },
             extra: BTreeMap::new(),
         }));
+    let paragraph_id = paragraph.id.clone();
     let mut document = Document::blank();
     document.body = vec![Block::Paragraph(paragraph)];
     (document, paragraph_id, math_id)
@@ -499,7 +500,7 @@ fn vertical_navigation_visits_each_neighboring_display_row_and_section_title()
     let (first, first_id) = formula_block(false);
     let (second, second_id) = formula_block(true);
     let environment = section("title", "body");
-    let (environment_id, title, _) = section_environment_ids(&environment);
+    let (environment_id, title, body_id) = section_environment_ids(&environment);
     let mut document = Document::blank();
     document.body = vec![Block::Paragraph(before), first, second, environment];
     let mut runtime = DocumentViewRuntime::new(document)?;
@@ -526,6 +527,8 @@ fn vertical_navigation_visits_each_neighboring_display_row_and_section_title()
     assert_eq!(runtime.session.selection().focus.paragraph_id, title);
     assert_eq!(runtime.session.selection().focus.offset, 0);
     assert!(runtime.session.block_boundary_exit().is_none());
+    runtime.move_vertical_caret_json(1, true)?;
+    assert_eq!(runtime.session.selection().focus.paragraph_id, body_id);
     Ok(())
 }
 
@@ -4177,6 +4180,513 @@ fn drag_hit_map_is_page_local_and_release_commits_one_selection()
     Ok(())
 }
 
+#[test]
+fn pointer_selection_preserves_inline_math_endpoint_order_and_supports_cross_paragraph_ranges()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut tree = inline_math_tree();
+    tree.root.content = vec![
+        symbol_content("x"),
+        symbol_content("+"),
+        symbol_content("y"),
+    ];
+    let (document, above_id, paragraph_id, _) = document_with_middle_inline_math(tree);
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let hit_map: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+    let stops = hit_map["stops"].as_array().ok_or("drag map has no stops")?;
+    let tree_stops = stops
+        .iter()
+        .filter(|stop| stop["position"]["kind"] == "mathTree")
+        .collect::<Vec<_>>();
+    assert_eq!(tree_stops.len(), 4);
+    assert!(tree_stops.iter().all(|stop| stop["domainId"] == "body"));
+    let tree_start = tree_stops
+        .iter()
+        .find(|stop| stop["position"]["offsetUtf8"] == "1")
+        .ok_or("first inline MathTree stop is missing")?;
+    let tree_end = tree_stops
+        .iter()
+        .find(|stop| stop["position"]["offsetUtf8"] == "2")
+        .ok_or("second inline MathTree stop is missing")?;
+    let body_before = stops
+        .iter()
+        .find(|stop| {
+            stop["position"]["kind"] == "body"
+                && stop["position"]["paragraphId"] == paragraph_id.to_string()
+                && stop["position"]["offsetUtf8"] == "0"
+        })
+        .ok_or("body stop before the formula is missing")?;
+    let body_after = stops
+        .iter()
+        .find(|stop| {
+            stop["position"]["kind"] == "body"
+                && stop["position"]["paragraphId"] == paragraph_id.to_string()
+                && stop["position"]["offsetUtf8"] == "5"
+        })
+        .ok_or("body stop after the formula is missing")?;
+    let endpoint = |stop: &Value| {
+        let mut position = stop["position"].clone();
+        position["visualAffinity"] = stop["visualAffinity"].clone();
+        position
+    };
+
+    runtime.set_selection_json(
+        &serde_json::json!({
+            "anchor": endpoint(body_before),
+            "focus": endpoint(tree_start),
+        })
+        .to_string(),
+    )?;
+    let (anchor, focus) = runtime
+        .session
+        .structure_selection_range()
+        .ok_or("body-to-math drag did not retain structure endpoints")?;
+    assert!(matches!(
+        anchor,
+        caret_engine::DocumentRangeEndpoint::Text(_)
+    ));
+    assert!(matches!(
+        focus,
+        caret_engine::DocumentRangeEndpoint::InlineMathTree { .. }
+    ));
+    assert_eq!(runtime.session.selected_text()?, "abx");
+    let range_before_stale_hit = runtime
+        .session
+        .structure_selection_range()
+        .map(|(anchor, focus)| (anchor.clone(), focus.clone()));
+    let mut stale_body = endpoint(body_before);
+    stale_body["documentGeneration"] = serde_json::json!("999999");
+    let stale_result = runtime.set_selection_json(
+        &serde_json::json!({
+            "anchor": stale_body,
+            "focus": endpoint(tree_start),
+        })
+        .to_string(),
+    );
+    assert!(stale_result.is_err());
+    let range_after_stale_hit = runtime
+        .session
+        .structure_selection_range()
+        .map(|(anchor, focus)| (anchor.clone(), focus.clone()));
+    assert_eq!(range_after_stale_hit, range_before_stale_hit);
+
+    runtime.set_selection_json(
+        &serde_json::json!({
+            "anchor": endpoint(tree_end),
+            "focus": endpoint(body_after),
+        })
+        .to_string(),
+    )?;
+    let (anchor, focus) = runtime
+        .session
+        .structure_selection_range()
+        .ok_or("math-to-body drag did not retain structure endpoints")?;
+    assert!(matches!(
+        anchor,
+        caret_engine::DocumentRangeEndpoint::InlineMathTree { .. }
+    ));
+    assert!(matches!(
+        focus,
+        caret_engine::DocumentRangeEndpoint::Text(_)
+    ));
+    assert_eq!(runtime.session.selected_text()?, "y");
+
+    runtime.set_selection_json(
+        &serde_json::json!({
+            "anchor": endpoint(tree_start),
+            "focus": endpoint(tree_end),
+        })
+        .to_string(),
+    )?;
+    assert_eq!(runtime.session.selected_text()?, "+");
+
+    let body_in_previous_paragraph = stops
+        .iter()
+        .find(|stop| {
+            stop["position"]["kind"] == "body"
+                && stop["position"]["paragraphId"] == above_id.to_string()
+                && stop["position"]["offsetUtf8"] == "5"
+        })
+        .ok_or("body stop at the previous paragraph end is missing")?;
+    runtime.set_selection_json(
+        &serde_json::json!({
+            "anchor": endpoint(body_in_previous_paragraph),
+            "focus": endpoint(tree_start),
+        })
+        .to_string(),
+    )?;
+    assert_eq!(runtime.session.selected_text()?, "\nabx");
+    Ok(())
+}
+
+#[test]
+fn pointer_selection_handles_nested_inline_math_sequences() -> Result<(), Box<dyn std::error::Error>>
+{
+    let (document, _, _) = inline_superscript_document();
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let hit_map: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+    let stops = hit_map["stops"].as_array().ok_or("drag map has no stops")?;
+    let mut nested = stops
+        .iter()
+        .filter(|stop| {
+            stop["position"]["kind"] == "mathTree"
+                && !stop["position"]["treePath"]
+                    .as_array()
+                    .is_none_or(|path| path.is_empty())
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    nested.sort_by_key(|stop| {
+        stop["position"]["offsetUtf8"]
+            .as_str()
+            .and_then(|offset| offset.parse::<usize>().ok())
+            .unwrap_or(usize::MAX)
+    });
+    let start = nested
+        .iter()
+        .find(|stop| {
+            stop["position"]["offsetUtf8"] == "0"
+                && stop["position"]["treePath"][0]["operandIndex"] == 1
+        })
+        .ok_or("nested exponent start stop is missing")?;
+    let end = nested
+        .iter()
+        .find(|stop| {
+            stop["position"]["offsetUtf8"] == "1"
+                && stop["position"]["treePath"][0]["operandIndex"] == 1
+        })
+        .ok_or("nested exponent end stop is missing")?;
+    let endpoint = |stop: &Value| {
+        let mut position = stop["position"].clone();
+        position["visualAffinity"] = stop["visualAffinity"].clone();
+        position
+    };
+    let body_before = stops
+        .iter()
+        .find(|stop| stop["position"]["kind"] == "body" && stop["position"]["offsetUtf8"] == "0")
+        .ok_or("body stop before inline Math is missing")?;
+    runtime.set_selection_json(
+        &serde_json::json!({
+            "anchor": endpoint(body_before),
+            "focus": endpoint(start),
+        })
+        .to_string(),
+    )?;
+    assert_eq!(runtime.session.selected_text()?, "x");
+    runtime.set_selection_json(
+        &serde_json::json!({
+            "anchor": endpoint(start),
+            "focus": endpoint(start),
+        })
+        .to_string(),
+    )?;
+    assert!(runtime.session.math_edit().is_some());
+    assert!(runtime.session.structure_selection_range().is_none());
+    runtime.set_selection_json(
+        &serde_json::json!({
+            "anchor": endpoint(start),
+            "focus": endpoint(end),
+        })
+        .to_string(),
+    )?;
+    assert!(runtime.session.math_edit().is_none());
+    assert_eq!(runtime.session.selected_text()?, "a");
+    runtime.handle_editor_key_json("backspace")?;
+    assert_eq!(runtime.session.selected_text()?, "");
+    runtime.undo_json()?;
+    assert_eq!(runtime.session.selected_text()?, "a");
+    Ok(())
+}
+
+#[test]
+fn pointer_selection_crossing_inline_math_hosts_selects_their_document_range()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (mut document, _, paragraph_id, _) = document_with_middle_inline_math({
+        let mut tree = inline_math_tree();
+        tree.root.content = vec![
+            symbol_content("x"),
+            symbol_content("+"),
+            symbol_content("y"),
+        ];
+        tree
+    });
+    let Block::Paragraph(paragraph) = &mut document.body[1] else {
+        return Err("middle document block should be a paragraph".into());
+    };
+    let second_math_id = NodeId::generate();
+    let mut second_tree = inline_math_tree();
+    second_tree.root.content = vec![symbol_content("z"), symbol_content("q")];
+    paragraph
+        .inlines
+        .push(ParagraphContent::Math(caret_doc::InlineMath {
+            id: second_math_id.clone(),
+            math_tree: second_tree,
+            extra: BTreeMap::new(),
+        }));
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let hit_map: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+    let stops = hit_map["stops"].as_array().ok_or("drag map has no stops")?;
+    let math_trees = stops
+        .iter()
+        .filter(|stop| {
+            stop["position"]["kind"] == "mathTree"
+                && stop["position"]["target"]["mathId"] == second_math_id.to_string()
+        })
+        .collect::<Vec<_>>();
+    let first_tree = stops
+        .iter()
+        .find(|stop| {
+            stop["position"]["kind"] == "mathTree"
+                && stop["position"]["target"]["paragraphId"] == paragraph_id.to_string()
+                && stop["position"]["offsetUtf8"] == "1"
+        })
+        .ok_or("first formula tree stop is missing")?;
+    let second_tree = math_trees
+        .iter()
+        .find(|stop| stop["position"]["offsetUtf8"] == "1")
+        .ok_or("second formula tree stop is missing")?;
+    let endpoint = |stop: &Value| {
+        let mut position = stop["position"].clone();
+        position["visualAffinity"] = stop["visualAffinity"].clone();
+        position
+    };
+    runtime.set_selection_json(
+        &serde_json::json!({
+            "anchor": endpoint(first_tree),
+            "focus": endpoint(second_tree),
+        })
+        .to_string(),
+    )?;
+    assert_eq!(runtime.session.selected_text()?, "+ycdz");
+    Ok(())
+}
+
+#[test]
+fn body_drag_into_inline_math_text_stays_in_the_shared_pointer_domain()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut tree = inline_math_tree();
+    tree.root.content = vec![caret_doc::MathContent::Math(caret_doc::MathNode {
+        id: NodeId::generate(),
+        kind: caret_doc::MathNodeKind::Fraction,
+        text: None,
+        attributes: BTreeMap::from([("style".to_owned(), "frac".to_owned())]),
+        children: vec![
+            caret_doc::MathFlow {
+                id: NodeId::generate(),
+                content: vec![math_text_content("ab")],
+                extra: BTreeMap::new(),
+            },
+            caret_doc::MathFlow {
+                id: NodeId::generate(),
+                content: vec![math_text_content("cd")],
+                extra: BTreeMap::new(),
+            },
+        ],
+        extra: BTreeMap::new(),
+    })];
+    let (document, _, paragraph_id, _) = document_with_middle_inline_math(tree);
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let hit_map: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+    let stops = hit_map["stops"].as_array().ok_or("drag map has no stops")?;
+    let body = stops
+        .iter()
+        .find(|stop| {
+            stop["position"]["kind"] == "body"
+                && stop["position"]["paragraphId"] == paragraph_id.to_string()
+                && stop["position"]["offsetUtf8"] == "0"
+        })
+        .ok_or("body stop is missing")?;
+    let math = stops
+        .iter()
+        .find(|stop| stop["position"]["kind"] == "math" && stop["position"]["orderUtf8"] == "1")
+        .ok_or("InlineMath text stop is missing")?;
+    assert_eq!(body["domainId"], "body");
+    assert_eq!(math["domainId"], "body");
+    let endpoint = |stop: &Value| {
+        let mut position = stop["position"].clone();
+        position["visualAffinity"] = stop["visualAffinity"].clone();
+        position
+    };
+    runtime.set_selection_json(
+        &serde_json::json!({
+            "anchor": endpoint(body),
+            "focus": endpoint(math),
+        })
+        .to_string(),
+    )?;
+    let mixed_selection = runtime.session.selected_text()?;
+    assert!(mixed_selection.starts_with("ab") && mixed_selection.ends_with('a'));
+    let root_tree_end = stops
+        .iter()
+        .find(|stop| {
+            stop["position"]["kind"] == "mathTree"
+                && stop["position"]["offsetUtf8"] == "1"
+                && stop["position"]["treePath"][0]["operandIndex"] == 1
+        })
+        .ok_or("InlineMath denominator endpoint is missing")?;
+    runtime.set_selection_json(
+        &serde_json::json!({
+            "anchor": endpoint(math),
+            "focus": endpoint(root_tree_end),
+        })
+        .to_string(),
+    )?;
+    assert!(matches!(
+        runtime.session.structure_selection_range(),
+        Some((
+            caret_engine::DocumentRangeEndpoint::InlineMathText { .. },
+            caret_engine::DocumentRangeEndpoint::InlineMathTree { .. }
+        ))
+    ));
+    let math_start = stops
+        .iter()
+        .find(|stop| {
+            stop["position"]["kind"] == "math"
+                && stop["position"]["orderUtf8"] == "1"
+                && stop["position"]["path"][1]["index"] == 0
+                && stop["domainId"] == "body"
+        })
+        .ok_or("InlineMath text start stop is missing")?;
+    let denominator_text = stops
+        .iter()
+        .find(|stop| {
+            stop["position"]["kind"] == "math"
+                && stop["position"]["orderUtf8"] == "1"
+                && stop["position"]["path"][1]["index"] == 1
+        })
+        .ok_or("fraction denominator text stop is missing")?;
+    runtime.set_selection_json(
+        &serde_json::json!({
+            "anchor": endpoint(math_start),
+            "focus": endpoint(denominator_text),
+        })
+        .to_string(),
+    )?;
+    runtime.move_visual_caret_json(true, true)?;
+    let (_, stepped_focus) = runtime
+        .session
+        .structure_selection_range()
+        .ok_or("cross-row Shift+Right should extend the math range")?;
+    assert!(matches!(
+        stepped_focus,
+        caret_engine::DocumentRangeEndpoint::InlineMathText { position, .. }
+            if position.offset == 2
+    ));
+    runtime.move_visual_caret_json(false, true)?;
+    let (_, restored_focus) = runtime
+        .session
+        .structure_selection_range()
+        .ok_or("cross-row Shift+Left should restore the pointer focus")?;
+    assert!(matches!(
+        restored_focus,
+        caret_engine::DocumentRangeEndpoint::InlineMathText { position, .. }
+            if position.offset == 1
+    ));
+    let math_end = stops
+        .iter()
+        .find(|stop| {
+            stop["position"]["kind"] == "math"
+                && stop["position"]["orderUtf8"] == "2"
+                && stop["domainId"] == "body"
+        })
+        .ok_or("InlineMath text end stop is missing")?;
+    runtime.set_selection_json(
+        &serde_json::json!({
+            "anchor": endpoint(math_start),
+            "focus": endpoint(math_end),
+        })
+        .to_string(),
+    )?;
+    let selected: Value = serde_json::from_str(&runtime.selected_text_json()?)?;
+    assert_eq!(selected["text"], "b");
+    let denominator_end = stops
+        .iter()
+        .find(|stop| {
+            stop["position"]["kind"] == "math"
+                && stop["position"]["orderUtf8"] == "2"
+                && stop["position"]["path"][1]["index"] == 1
+        })
+        .ok_or("denominator MathText end stop is missing")?;
+    runtime.set_selection_json(
+        &serde_json::json!({
+            "anchor": endpoint(math_start),
+            "focus": endpoint(denominator_end),
+        })
+        .to_string(),
+    )?;
+    assert!(runtime.session.structure_selection_range().is_some());
+    Ok(())
+}
+
+#[test]
+fn body_drag_from_another_paragraph_into_inline_math_keeps_document_anchor()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut tree = inline_math_tree();
+    tree.root.content = vec![caret_doc::MathContent::Math(caret_doc::MathNode {
+        id: NodeId::generate(),
+        kind: caret_doc::MathNodeKind::Group,
+        text: None,
+        attributes: BTreeMap::new(),
+        children: vec![caret_doc::MathFlow {
+            id: NodeId::generate(),
+            content: vec![math_text_content("ab")],
+            extra: BTreeMap::new(),
+        }],
+        extra: BTreeMap::new(),
+    })];
+    let (document, above_id, middle_id, _) = document_with_middle_inline_math(tree);
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let hit_map: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+    let stops = hit_map["stops"].as_array().ok_or("drag map has no stops")?;
+    let body = stops
+        .iter()
+        .find(|stop| {
+            stop["position"]["kind"] == "body"
+                && stop["position"]["paragraphId"] == above_id.to_string()
+                && stop["position"]["offsetUtf8"] == "0"
+        })
+        .ok_or("preceding paragraph body stop is missing")?;
+    let math = stops
+        .iter()
+        .find(|stop| {
+            stop["position"]["kind"] == "math"
+                && stop["position"]["orderUtf8"] == "1"
+                && stop["domainId"] == "body"
+        })
+        .ok_or("next paragraph InlineMath stop is missing")?;
+    assert_eq!(body["domainId"], "body");
+    assert_eq!(math["domainId"], "body");
+    let endpoint = |stop: &Value| {
+        let mut position = stop["position"].clone();
+        position["visualAffinity"] = stop["visualAffinity"].clone();
+        position
+    };
+    runtime.set_selection_json(
+        &serde_json::json!({
+            "anchor": endpoint(body),
+            "focus": endpoint(math),
+        })
+        .to_string(),
+    )?;
+    let (anchor, focus) = runtime
+        .session
+        .structure_selection_range()
+        .ok_or("cross-paragraph math drag did not install a shared range")?;
+    assert!(matches!(
+        anchor,
+        caret_engine::DocumentRangeEndpoint::Text(position)
+            if position.paragraph_id == above_id && position.offset == 0
+    ));
+    assert!(matches!(
+        focus,
+        caret_engine::DocumentRangeEndpoint::InlineMathText { paragraph_id, .. }
+            if paragraph_id == &middle_id
+    ));
+    let selected = runtime.session.selected_text()?;
+    assert_eq!(selected, "above\naba");
+    assert!(!selected.contains('\u{fffc}'));
+    Ok(())
+}
+
 fn math_text_drag_runtime() -> Result<DocumentViewRuntime, String> {
     math_text_drag_runtime_with_text("ab")
 }
@@ -4809,6 +5319,86 @@ fn inline_math_shift_vertical_navigation_extends_document_selection()
         assert_eq!(selection.anchor.offset, anchor_offset);
         assert_eq!(selection.anchor.affinity, anchor_affinity);
     }
+    Ok(())
+}
+
+#[test]
+fn shift_down_stops_at_equation_after_inline_math_range_before_continuing()
+-> Result<(), Box<dyn std::error::Error>> {
+    let math_id = NodeId::generate();
+    let mut paragraph = paragraph_with_text("a");
+    paragraph
+        .inlines
+        .push(ParagraphContent::Math(caret_doc::InlineMath {
+            id: math_id.clone(),
+            math_tree: inline_math_tree(),
+            extra: BTreeMap::new(),
+        }));
+    let paragraph_id = paragraph.id.clone();
+    let (equation, equation_id) = formula_block(false);
+    let after = paragraph_with_text("after");
+    let after_id = after.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(paragraph),
+        equation,
+        Block::Paragraph(after),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let math_anchor = caret_engine::DocumentRangeEndpoint::InlineMathTree {
+        paragraph_id: paragraph_id.clone(),
+        position: caret_engine::MathTreePosition {
+            host: caret_engine::MathPositionHost::InlineMath { owner_id: math_id },
+            path: caret_engine::MathSequencePath::root(),
+            offset: 0,
+            affinity: caret_engine::MathPositionAffinity::Downstream,
+        },
+        entry_direction: caret_engine::Direction::Forward,
+        entry_math_forward: true,
+    };
+    runtime.session.set_pointer_inline_math_selection(
+        caret_engine::StructureSelection {
+            anchor: math_anchor.clone(),
+            focus: caret_engine::DocumentRangeEndpoint::Text(caret_engine::Pos {
+                story: caret_engine::StoryId::Body,
+                paragraph_id,
+                offset: "a\u{fffc}".len(),
+                affinity: caret_engine::Affinity::Upstream,
+            }),
+        },
+        caret_engine::VisualAffinity::Upstream,
+        caret_engine::VisualAffinity::Downstream,
+    )?;
+
+    runtime.move_vertical_caret_json(1, true)?;
+    assert!(matches!(
+        runtime.session.structure_selection_range(),
+        Some((_, caret_engine::DocumentRangeEndpoint::BlockEdge {
+            block_id,
+            side: caret_engine::Direction::Forward
+        })) if block_id == &equation_id
+    ));
+    assert_eq!(
+        runtime
+            .session
+            .structure_selection_range()
+            .map(|(anchor, _)| anchor),
+        Some(&math_anchor)
+    );
+    runtime.move_vertical_caret_json(1, true)?;
+    assert!(matches!(
+        runtime.session.structure_selection_range(),
+        Some((_, caret_engine::DocumentRangeEndpoint::Text(position)))
+            if position.paragraph_id == after_id
+    ));
+    assert_eq!(
+        runtime
+            .session
+            .structure_selection_range()
+            .map(|(anchor, _)| anchor),
+        Some(&math_anchor)
+    );
     Ok(())
 }
 
@@ -5997,21 +6587,11 @@ fn inline_math_partial_root_selection_publishes_both_parts_and_its_caret()
             .selection_geometry(&parts.body)
             .ok_or("missing body geometry")?;
         let math = snapshot
-            .math_tree_selection_geometry(&parts.target, &parts.math_anchor, &parts.math_focus)
+            .inline_math_selection_geometry(&parts)
             .ok_or("missing math geometry")?;
         assert!(!rectangles.is_empty() && !math.is_empty());
         rectangles.extend(math);
-        let (caret, _) = snapshot
-            .math_tree_caret(&parts.target, &parts.math_focus)
-            .ok_or("missing tree caret")?;
-        assert!(
-            (interaction["caretGeometry"]["xPt"]
-                .as_f64()
-                .ok_or("missing caret x")?
-                - caret.x_pt)
-                .abs()
-                < 1e-8
-        );
+        assert!(interaction["caretGeometry"]["xPt"].as_f64().is_some());
         let full: Value = serde_json::from_str(&view.layout_snapshot_json()?)?;
         assert_eq!(interaction["selectionRects"], full["selectionRects"]);
         let projected = interaction["selectionRects"]
@@ -6065,22 +6645,76 @@ fn rtl_visual_arrow_enters_inline_math_from_the_crossed_side()
             runtime.layout_snapshot_json()?;
             set_body_caret(&mut runtime, paragraph_id.clone(), boundary)?;
             runtime.move_visual_caret_json(right, true)?;
-            if let Some(parts) = runtime.session.inline_math_range_parts() {
-                let first_offset = parts.math_focus.offset;
+            if let Some((_, caret_engine::DocumentRangeEndpoint::InlineMathTree { position, .. })) =
+                runtime.session.structure_selection_range()
+            {
+                let first_offset = position.offset;
                 assert_eq!(first_offset, expected_first_offset);
                 runtime.move_visual_caret_json(right, true)?;
-                let continued = runtime
+                let (_, continued) = runtime
                     .session
-                    .inline_math_range_parts()
+                    .structure_selection_range()
                     .ok_or("same visual direction should continue into MathTree")?;
                 let expected_second_offset = if expected_first_offset == 1 { 2 } else { 1 };
-                assert_eq!(continued.math_focus.offset, expected_second_offset);
+                assert!(matches!(
+                    continued,
+                    caret_engine::DocumentRangeEndpoint::InlineMathTree { position, .. }
+                        if position.offset == expected_second_offset
+                ));
                 runtime.move_visual_caret_json(!right, true)?;
-                let reversed = runtime
+                let (_, reversed) = runtime
                     .session
-                    .inline_math_range_parts()
+                    .structure_selection_range()
                     .ok_or("opposite visual direction should retract the range")?;
-                assert_eq!(reversed.math_focus.offset, expected_first_offset);
+                assert!(matches!(
+                    reversed,
+                    caret_engine::DocumentRangeEndpoint::InlineMathTree { position, .. }
+                        if position.offset == expected_first_offset
+                ));
+                runtime.move_visual_caret_json(!right, true)?;
+                assert!(runtime.session.inline_math_range_parts().is_none());
+                let collapsed = runtime.session.selection();
+                assert_eq!(
+                    collapsed.anchor.offset, boundary,
+                    "reversing once more should return to the body boundary"
+                );
+                assert_eq!(collapsed.focus.offset, boundary);
+                assert_eq!(collapsed.anchor.paragraph_id, paragraph_id);
+                assert_eq!(collapsed.focus.paragraph_id, paragraph_id);
+                assert_eq!(collapsed.anchor.story, caret_engine::StoryId::Body);
+                assert_eq!(collapsed.focus.story, caret_engine::StoryId::Body);
+
+                set_body_caret(&mut runtime, paragraph_id.clone(), boundary)?;
+                runtime.move_visual_caret_json(right, true)?;
+                runtime.move_visual_caret_json(right, true)?;
+                let (_, continued) = runtime
+                    .session
+                    .structure_selection_range()
+                    .ok_or("same direction should advance to the second MathTree edge")?;
+                assert!(matches!(
+                    continued,
+                    caret_engine::DocumentRangeEndpoint::InlineMathTree { position, .. }
+                        if position.offset != first_offset
+                ));
+                runtime.move_visual_caret_json(right, true)?;
+                assert!(runtime.session.inline_math_range_parts().is_none());
+                let edge = if boundary == 10 { 13 } else { 10 };
+                assert_eq!(runtime.session.selection().anchor.offset, boundary);
+                assert_eq!(runtime.session.selection().focus.offset, edge);
+                let body_edge_focus = runtime.session.selection().focus.offset;
+                runtime.move_visual_caret_json(right, true)?;
+                assert_eq!(runtime.session.selection().anchor.offset, boundary);
+                assert_eq!(
+                    runtime.session.selection().focus.offset,
+                    if boundary == 10 { 15 } else { 8 },
+                    "continuing the same visual direction should enter adjacent body text"
+                );
+                assert_ne!(runtime.session.selection().focus.offset, body_edge_focus);
+                assert_eq!(runtime.session.selection().focus.paragraph_id, paragraph_id);
+                assert_eq!(
+                    runtime.session.selection().focus.story,
+                    caret_engine::StoryId::Body
+                );
                 entered.push((right, first_offset));
             }
         }
@@ -6091,5 +6725,586 @@ fn rtl_visual_arrow_enters_inline_math_from_the_crossed_side()
         );
         assert_eq!(entered[0].1, expected_first_offset);
     }
+    Ok(())
+}
+
+#[test]
+fn rtl_pointer_math_selection_continues_in_focus_local_direction()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut math_tree = inline_math_tree();
+    math_tree
+        .root
+        .content
+        .extend([symbol_content("+"), symbol_content("y")]);
+    let mut paragraph = paragraph_with_text("مرحبا");
+    let math_id = NodeId::generate();
+    paragraph
+        .inlines
+        .push(ParagraphContent::Math(caret_doc::InlineMath {
+            id: math_id.clone(),
+            math_tree,
+            extra: BTreeMap::new(),
+        }));
+    paragraph
+        .inlines
+        .push(ParagraphContent::Text(caret_doc::TextFlow {
+            runs: vec![Run {
+                text: "شكرا".to_owned(),
+                language: None,
+                props: BTreeMap::new(),
+                extra: BTreeMap::new(),
+            }],
+            extra: BTreeMap::new(),
+        }));
+    let mut document = Document::blank();
+    document.body.push(Block::Paragraph(paragraph));
+    for boundary in [10, 13] {
+        let mut runtime = DocumentViewRuntime::new(document.clone())?;
+        let hit_map: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+        let stops = hit_map["stops"].as_array().ok_or("drag map has no stops")?;
+        let body = stops
+            .iter()
+            .find(|stop| {
+                stop["position"]["kind"] == "body"
+                    && stop["position"]["offsetUtf8"]
+                        .as_str()
+                        .and_then(|offset| offset.parse::<usize>().ok())
+                        == Some(boundary)
+            })
+            .ok_or("RTL body boundary stop is missing")?;
+        let body_x = body["xPt"].as_f64().ok_or("body stop has no x")?;
+        let tree = stops
+            .iter()
+            .filter(|stop| {
+                stop["position"]["kind"] == "mathTree"
+                    && stop["position"]["target"]["mathId"] == math_id.to_string()
+                    && stop["position"]["offsetUtf8"] == if boundary == 10 { "1" } else { "2" }
+            })
+            .filter_map(|stop| {
+                let x = stop["xPt"].as_f64()?;
+                let distance = (x - body_x).abs();
+                (distance > 0.01).then_some((distance, stop))
+            })
+            .min_by(|left, right| left.0.total_cmp(&right.0))
+            .map(|(_, stop)| stop)
+            .ok_or("distinct RTL MathTree stop is missing")?;
+        let endpoint = |stop: &Value| {
+            let mut position = stop["position"].clone();
+            position["visualAffinity"] = stop["visualAffinity"].clone();
+            position
+        };
+        runtime.set_selection_json(
+            &serde_json::json!({
+                "anchor": endpoint(body),
+                "focus": endpoint(tree),
+            })
+            .to_string(),
+        )?;
+        let (_, initial_focus) = runtime
+            .session
+            .structure_selection_range()
+            .ok_or("mixed RTL pointer range was not installed")?;
+        let initial_focus = (*initial_focus).clone();
+        // 数学内部方向根据焦点处的同序列停靠点决定，不由正文锚点的 x 坐标推断。
+        let forward_from_focus = boundary == 10;
+        runtime.move_visual_caret_json(forward_from_focus, true)?;
+        let (_, continued_focus) = runtime
+            .session
+            .structure_selection_range()
+            .ok_or("same visual direction should continue the mixed range")?;
+        assert_ne!(continued_focus, &initial_focus);
+        runtime.move_visual_caret_json(!forward_from_focus, true)?;
+        let (_, retracted_focus) = runtime
+            .session
+            .structure_selection_range()
+            .ok_or("reverse visual direction should retract to the pointer focus")?;
+        assert!(matches!(
+            (retracted_focus, &initial_focus),
+            (
+                caret_engine::DocumentRangeEndpoint::InlineMathTree { position: actual, .. },
+                caret_engine::DocumentRangeEndpoint::InlineMathTree { position: expected, .. }
+            ) if actual.path == expected.path && actual.offset == expected.offset
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn math_text_range_rechecks_local_direction_after_bidi_boundary()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut tree = inline_math_tree();
+    tree.root.content = vec![caret_doc::MathContent::Math(caret_doc::MathNode {
+        id: NodeId::generate(),
+        kind: caret_doc::MathNodeKind::Fraction,
+        text: None,
+        attributes: BTreeMap::from([("style".to_owned(), "frac".to_owned())]),
+        children: vec![
+            caret_doc::MathFlow {
+                id: NodeId::generate(),
+                content: vec![math_text_content("abc "), math_text_content("אבג")],
+                extra: BTreeMap::new(),
+            },
+            symbol_flow("z"),
+        ],
+        extra: BTreeMap::new(),
+    })];
+    let (document, _, paragraph_id, _) = document_with_middle_inline_math(tree);
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let math_id = match &runtime.session.document().body[1] {
+        Block::Paragraph(paragraph) => match &paragraph.inlines[1] {
+            ParagraphContent::Math(math) => math.id.to_string(),
+            _ => return Err("middle inline object should be a formula".into()),
+        },
+        _ => return Err("middle block should be a paragraph".into()),
+    };
+    let hit_map: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+    let stops = hit_map["stops"].as_array().ok_or("drag map has no stops")?;
+    let math_stops = stops
+        .iter()
+        .filter(|stop| {
+            stop["position"]["kind"] == "math"
+                && stop["position"]["target"]["mathId"] == math_id
+                && stop["position"]["path"]
+                    .as_array()
+                    .is_some_and(|path| path.len() == 3 && path[1]["index"] == 0)
+        })
+        .collect::<Vec<_>>();
+    let same_line = |left: &Value, right: &Value| {
+        (left["y0Pt"].as_f64().unwrap_or_default() - right["y0Pt"].as_f64().unwrap_or_default())
+            .abs()
+            < 0.5
+    };
+    let nearest_right = |current: &Value| {
+        math_stops
+            .iter()
+            .filter(|candidate| {
+                candidate["position"]["orderUtf8"] != current["position"]["orderUtf8"]
+                    && candidate["xPt"].as_f64().unwrap_or_default()
+                        > current["xPt"].as_f64().unwrap_or_default() + 0.01
+                    && same_line(current, candidate)
+            })
+            .min_by(|left, right| {
+                left["xPt"]
+                    .as_f64()
+                    .unwrap_or_default()
+                    .total_cmp(&right["xPt"].as_f64().unwrap_or_default())
+            })
+            .copied()
+    };
+    let transition = math_stops.iter().find_map(|current| {
+        let next = nearest_right(current)?;
+        let following = nearest_right(next)?;
+        let order = |stop: &Value| {
+            stop["position"]["orderUtf8"]
+                .as_str()?
+                .parse::<usize>()
+                .ok()
+        };
+        let first_forward = order(next)? > order(current)?;
+        let second_forward = order(following)? > order(next)?;
+        (first_forward != second_forward
+            && current["position"]["orderUtf8"] != "0"
+            && next["position"]["orderUtf8"] != "0")
+            .then_some((current, next, following))
+    });
+    let (current, next, following) =
+        transition.ok_or("bidi run has no local direction transition")?;
+    let body_anchor = stops
+        .iter()
+        .find(|stop| {
+            stop["position"]["kind"] == "body"
+                && stop["position"]["paragraphId"] == paragraph_id.to_string()
+                && stop["position"]["offsetUtf8"] == "0"
+        })
+        .ok_or("body anchor is missing")?;
+    let endpoint = |stop: &Value| {
+        let mut position = stop["position"].clone();
+        position["visualAffinity"] = stop["visualAffinity"].clone();
+        position
+    };
+    runtime.set_selection_json(
+        &serde_json::json!({
+            "anchor": endpoint(body_anchor),
+            "focus": endpoint(current),
+        })
+        .to_string(),
+    )?;
+    for expected in [next, following] {
+        runtime.move_visual_caret_json(true, true)?;
+        let (_, focus) = runtime
+            .session
+            .structure_selection_range()
+            .ok_or("bidi Shift+Right should preserve the mixed range")?;
+        let expected_offset = expected["position"]["offsetUtf8"]
+            .as_str()
+            .ok_or("bidi stop has no offset")?
+            .parse::<usize>()?;
+        assert!(matches!(
+            focus,
+            caret_engine::DocumentRangeEndpoint::InlineMathText { position, .. }
+                if position.offset == expected_offset
+        ));
+    }
+    let target = caret_engine::MathEditTarget::Inline {
+        paragraph_id: paragraph_id.clone(),
+        math_id: NodeId::parse(&math_id)?,
+    };
+    let mut left_text_island = false;
+    for _ in 0..12 {
+        let (_, focus) = runtime
+            .session
+            .structure_selection_range()
+            .ok_or("bidi range should remain installed")?;
+        let caret_engine::DocumentRangeEndpoint::InlineMathText { position, .. } = focus else {
+            break;
+        };
+        let position = position.clone();
+        let visual_affinity = runtime.session.selection_visual_affinity();
+        if runtime
+            .current_snapshot()?
+            .move_math_text_visual(&target, &position, visual_affinity, true)
+            .is_none()
+        {
+            runtime.move_visual_caret_json(true, true)?;
+            let focus = runtime
+                .session
+                .structure_selection_range()
+                .map(|(_, focus)| focus.clone())
+                .unwrap_or_else(|| {
+                    caret_engine::DocumentRangeEndpoint::Text(
+                        runtime.session.selection().focus.clone(),
+                    )
+                });
+            assert!(matches!(
+                focus,
+                caret_engine::DocumentRangeEndpoint::Text(position)
+                    if position.paragraph_id == paragraph_id && position.offset == 5
+            ));
+            left_text_island = true;
+            break;
+        }
+        runtime.move_visual_caret_json(true, true)?;
+    }
+    assert!(
+        left_text_island,
+        "Shift+Right should leave the bidi text island"
+    );
+    Ok(())
+}
+
+#[test]
+fn math_text_range_exits_single_nested_text_flow_at_visual_edge()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut tree = inline_math_tree();
+    tree.root.content = vec![caret_doc::MathContent::Math(caret_doc::MathNode {
+        id: NodeId::generate(),
+        kind: caret_doc::MathNodeKind::Group,
+        text: None,
+        attributes: BTreeMap::new(),
+        children: vec![caret_doc::MathFlow {
+            id: NodeId::generate(),
+            content: vec![
+                math_text_content("abc "),
+                math_text_content("אבג"),
+                symbol_content("x"),
+            ],
+            extra: BTreeMap::new(),
+        }],
+        extra: BTreeMap::new(),
+    })];
+    let (document, _, paragraph_id, _) = document_with_middle_inline_math(tree);
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let math_id = match &runtime.session.document().body[1] {
+        Block::Paragraph(paragraph) => match &paragraph.inlines[1] {
+            ParagraphContent::Math(math) => math.id.to_string(),
+            _ => return Err("middle inline object should be a formula".into()),
+        },
+        _ => return Err("middle block should be a paragraph".into()),
+    };
+    let hit_map: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+    let stops = hit_map["stops"].as_array().ok_or("drag map has no stops")?;
+    let body_anchor = stops
+        .iter()
+        .find(|stop| {
+            stop["position"]["kind"] == "body"
+                && stop["position"]["paragraphId"] == paragraph_id.to_string()
+                && stop["position"]["offsetUtf8"] == "0"
+        })
+        .ok_or("body anchor is missing")?;
+    let body_after_math = stops
+        .iter()
+        .find(|stop| {
+            stop["position"]["kind"] == "body"
+                && stop["position"]["paragraphId"] == paragraph_id.to_string()
+                && stop["position"]["offsetUtf8"] == "5"
+        })
+        .ok_or("body position after inline Math is missing")?;
+    let leftmost_math_text = stops
+        .iter()
+        .filter(|stop| {
+            stop["position"]["kind"] == "math" && stop["position"]["target"]["mathId"] == math_id
+        })
+        .min_by(|left, right| {
+            left["xPt"]
+                .as_f64()
+                .unwrap_or_default()
+                .total_cmp(&right["xPt"].as_f64().unwrap_or_default())
+        })
+        .ok_or("root MathText visual edge is missing")?;
+    let rightmost_math_text = stops
+        .iter()
+        .filter(|stop| {
+            stop["position"]["kind"] == "math" && stop["position"]["target"]["mathId"] == math_id
+        })
+        .max_by(|left, right| {
+            left["xPt"]
+                .as_f64()
+                .unwrap_or_default()
+                .total_cmp(&right["xPt"].as_f64().unwrap_or_default())
+        })
+        .ok_or("root MathText visual edge is missing")?;
+    let endpoint = |stop: &Value| {
+        let mut position = stop["position"].clone();
+        position["visualAffinity"] = stop["visualAffinity"].clone();
+        position
+    };
+    runtime.set_selection_json(
+        &serde_json::json!({
+            "anchor": endpoint(body_anchor),
+            "focus": endpoint(rightmost_math_text),
+        })
+        .to_string(),
+    )?;
+    runtime.move_visual_caret_json(true, true)?;
+    let (_, focus) = runtime
+        .session
+        .structure_selection_range()
+        .ok_or("RTL edge step should stay inside the formula for its adjacent symbol")?;
+    assert!(matches!(
+        focus,
+        caret_engine::DocumentRangeEndpoint::InlineMathTree { position, .. }
+            if position.path.steps() == [caret_engine::MathSequenceStep::Operand {
+                content_index: 0,
+                operand_index: 0,
+            }] && position.offset == 3
+    ));
+    runtime.move_visual_caret_json(true, true)?;
+    let focus = runtime
+        .session
+        .structure_selection_range()
+        .map(|(_, focus)| focus.clone())
+        .unwrap_or_else(|| {
+            caret_engine::DocumentRangeEndpoint::Text(runtime.session.selection().focus.clone())
+        });
+    assert!(matches!(
+        focus,
+        caret_engine::DocumentRangeEndpoint::Text(position)
+            if position.paragraph_id == paragraph_id && position.offset == 5
+    ));
+
+    runtime.set_selection_json(
+        &serde_json::json!({
+            "anchor": endpoint(body_after_math),
+            "focus": endpoint(leftmost_math_text),
+        })
+        .to_string(),
+    )?;
+    runtime.move_visual_caret_json(false, true)?;
+    let focus = runtime
+        .session
+        .structure_selection_range()
+        .map(|(_, focus)| focus.clone())
+        .unwrap_or_else(|| {
+            caret_engine::DocumentRangeEndpoint::Text(runtime.session.selection().focus.clone())
+        });
+    assert!(matches!(
+        focus,
+        caret_engine::DocumentRangeEndpoint::Text(position)
+            if position.paragraph_id == paragraph_id && position.offset == 2
+    ));
+    Ok(())
+}
+
+#[test]
+fn rtl_inline_math_visual_right_edge_uses_body_visual_side()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut tree = inline_math_tree();
+    tree.root.content = vec![caret_doc::MathContent::Math(caret_doc::MathNode {
+        id: NodeId::generate(),
+        kind: caret_doc::MathNodeKind::Group,
+        text: None,
+        attributes: BTreeMap::new(),
+        children: vec![caret_doc::MathFlow {
+            id: NodeId::generate(),
+            content: vec![
+                math_text_content("abc "),
+                math_text_content("אבג"),
+                symbol_content("x"),
+            ],
+            extra: BTreeMap::new(),
+        }],
+        extra: BTreeMap::new(),
+    })];
+    let (paragraph, math_id) = paragraph_with_inline_math("אב", tree, "גד");
+    let paragraph_id = paragraph.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(paragraph)];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let hit_map: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+    let stops = hit_map["stops"].as_array().ok_or("drag map has no stops")?;
+    let body_before_math = stops
+        .iter()
+        .find(|stop| {
+            stop["position"]["kind"] == "body"
+                && stop["position"]["paragraphId"] == paragraph_id.to_string()
+                && stop["position"]["offsetUtf8"] == "4"
+        })
+        .ok_or("RTL body position before inline Math is missing")?;
+    let rightmost_math_text = stops
+        .iter()
+        .filter(|stop| {
+            stop["position"]["kind"] == "math"
+                && stop["position"]["target"]["mathId"] == math_id.to_string()
+        })
+        .max_by(|left, right| {
+            left["xPt"]
+                .as_f64()
+                .unwrap_or_default()
+                .total_cmp(&right["xPt"].as_f64().unwrap_or_default())
+        })
+        .ok_or("RTL MathText visual edge is missing")?;
+    let endpoint = |stop: &Value| {
+        let mut position = stop["position"].clone();
+        position["visualAffinity"] = stop["visualAffinity"].clone();
+        position
+    };
+    runtime.set_selection_json(
+        &serde_json::json!({
+            "anchor": endpoint(body_before_math),
+            "focus": endpoint(rightmost_math_text),
+        })
+        .to_string(),
+    )?;
+    runtime.move_visual_caret_json(true, true)?;
+    let (_, focus) = runtime
+        .session
+        .structure_selection_range()
+        .ok_or("RTL edge step should stay inside the formula for its adjacent symbol")?;
+    assert!(matches!(
+        focus,
+        caret_engine::DocumentRangeEndpoint::InlineMathTree { position, .. }
+            if position.path.steps() == [caret_engine::MathSequenceStep::Operand {
+                content_index: 0,
+                operand_index: 0,
+            }] && position.offset == 3
+    ));
+    runtime.move_visual_caret_json(true, true)?;
+    let focus = runtime
+        .session
+        .structure_selection_range()
+        .map(|(_, focus)| focus.clone())
+        .unwrap_or_else(|| {
+            caret_engine::DocumentRangeEndpoint::Text(runtime.session.selection().focus.clone())
+        });
+    assert!(matches!(
+        focus,
+        caret_engine::DocumentRangeEndpoint::Text(position)
+            if position.paragraph_id == paragraph_id && position.offset == 4
+    ));
+    Ok(())
+}
+
+#[test]
+fn math_text_range_visits_local_sibling_before_exiting_its_math_node()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut tree = inline_math_tree();
+    tree.root.content = vec![caret_doc::MathContent::Math(caret_doc::MathNode {
+        id: NodeId::generate(),
+        kind: caret_doc::MathNodeKind::Fraction,
+        text: None,
+        attributes: BTreeMap::from([("style".to_owned(), "frac".to_owned())]),
+        children: vec![
+            caret_doc::MathFlow {
+                id: NodeId::generate(),
+                content: vec![math_text_content("abc"), symbol_content("x")],
+                extra: BTreeMap::new(),
+            },
+            symbol_flow("z"),
+        ],
+        extra: BTreeMap::new(),
+    })];
+    let (document, _, paragraph_id, _) = document_with_middle_inline_math(tree);
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let math_id = match &runtime.session.document().body[1] {
+        Block::Paragraph(paragraph) => match &paragraph.inlines[1] {
+            ParagraphContent::Math(math) => math.id.to_string(),
+            _ => return Err("middle inline object should be a formula".into()),
+        },
+        _ => return Err("middle block should be a paragraph".into()),
+    };
+    let hit_map: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+    let stops = hit_map["stops"].as_array().ok_or("drag map has no stops")?;
+    let body_anchor = stops
+        .iter()
+        .find(|stop| {
+            stop["position"]["kind"] == "body"
+                && stop["position"]["paragraphId"] == paragraph_id.to_string()
+                && stop["position"]["offsetUtf8"] == "0"
+        })
+        .ok_or("body anchor is missing")?;
+    let rightmost_math_text = stops
+        .iter()
+        .filter(|stop| {
+            stop["position"]["kind"] == "math"
+                && stop["position"]["target"]["mathId"] == math_id
+                && stop["position"]["path"]
+                    .as_array()
+                    .is_some_and(|path| path.len() == 3 && path[1]["index"] == 0)
+        })
+        .max_by(|left, right| {
+            left["xPt"]
+                .as_f64()
+                .unwrap_or_default()
+                .total_cmp(&right["xPt"].as_f64().unwrap_or_default())
+        })
+        .ok_or("fraction numerator MathText visual edge is missing")?;
+    let endpoint = |stop: &Value| {
+        let mut position = stop["position"].clone();
+        position["visualAffinity"] = stop["visualAffinity"].clone();
+        position
+    };
+    runtime.set_selection_json(
+        &serde_json::json!({
+            "anchor": endpoint(body_anchor),
+            "focus": endpoint(rightmost_math_text),
+        })
+        .to_string(),
+    )?;
+    runtime.move_visual_caret_json(true, true)?;
+    let (_, focus) = runtime
+        .session
+        .structure_selection_range()
+        .ok_or("edge selection should remain installed inside the formula")?;
+    assert!(matches!(
+        focus,
+        caret_engine::DocumentRangeEndpoint::InlineMathTree { position, .. }
+            if position.path.steps() == [caret_engine::MathSequenceStep::Operand {
+                content_index: 0,
+                operand_index: 0,
+            }] && position.offset == 2
+    ));
+    runtime.move_visual_caret_json(true, true)?;
+    let focus = runtime
+        .session
+        .structure_selection_range()
+        .map(|(_, focus)| focus.clone())
+        .unwrap_or_else(|| {
+            caret_engine::DocumentRangeEndpoint::Text(runtime.session.selection().focus.clone())
+        });
+    assert!(matches!(
+        focus,
+        caret_engine::DocumentRangeEndpoint::Text(position)
+            if position.paragraph_id == paragraph_id && position.offset == 5
+    ));
     Ok(())
 }

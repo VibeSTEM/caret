@@ -90,7 +90,9 @@ impl Session {
                 }
                 None => self.exit_vertical_math_block(direction, extend),
                 Some(
-                    NavigationCandidate::BlockEdge { .. } | NavigationCandidate::Document { .. },
+                    NavigationCandidate::BlockEdge { .. }
+                    | NavigationCandidate::Document { .. }
+                    | NavigationCandidate::InlineMathRangeEdge { .. },
                 ) => Err(EditError::InvalidPosition),
             },
             MathEditBranch::Tree { .. } | MathEditBranch::Source => match candidate {
@@ -99,7 +101,9 @@ impl Session {
                     Ok(Effect::default())
                 }
                 Some(
-                    NavigationCandidate::BlockEdge { .. } | NavigationCandidate::MathText { .. },
+                    NavigationCandidate::BlockEdge { .. }
+                    | NavigationCandidate::MathText { .. }
+                    | NavigationCandidate::InlineMathRangeEdge { .. },
                 ) => Err(EditError::InvalidPosition),
                 Some(NavigationCandidate::MathTextHit { hit, generation }) => {
                     self.validate_navigation_generation(&generation)?;
@@ -152,10 +156,9 @@ impl Session {
             return Err(EditError::InvalidPosition);
         }
         let from_block = self.block_boundary_exit().is_some()
-            || matches!(
-                self.structure_selection_range(),
-                Some((DocumentRangeEndpoint::BlockEdge { .. }, _))
-            );
+            || self
+                .structure_selection_range()
+                .is_some_and(|(_, focus)| matches!(focus, DocumentRangeEndpoint::BlockEdge { .. }));
         match candidate {
             Some(NavigationCandidate::BlockEdge {
                 block_id,
@@ -191,7 +194,25 @@ impl Session {
                 generation,
             }) => {
                 self.validate_navigation_generation(&generation)?;
-                if extend && from_block {
+                if extend
+                    && let Some((anchor, _)) = self.structure_selection_range()
+                    && anchor.is_inline_math()
+                {
+                    return self.install_inline_math_selection(
+                        crate::StructureSelection {
+                            anchor: anchor.clone(),
+                            focus: DocumentRangeEndpoint::Text(focus),
+                        },
+                        self.selection_anchor_visual_affinity(),
+                        visual_affinity,
+                    );
+                }
+                if extend
+                    && (from_block
+                        || self.structure_selection_range().is_some_and(|(anchor, _)| {
+                            matches!(anchor, DocumentRangeEndpoint::BlockEdge { .. })
+                        }))
+                {
                     return self.commit_range_focus(
                         DocumentRangeEndpoint::Text(focus),
                         Some(visual_affinity),
@@ -213,6 +234,7 @@ impl Session {
             }
             Some(
                 NavigationCandidate::MathText { .. }
+                | NavigationCandidate::InlineMathRangeEdge { .. }
                 | NavigationCandidate::MathTextHit { .. }
                 | NavigationCandidate::MathTreeHit { .. },
             ) => Err(EditError::InvalidPosition),

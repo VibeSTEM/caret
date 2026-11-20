@@ -60,6 +60,7 @@ impl Session {
                             }
                             NavigationCandidate::BlockEdge { .. }
                             | NavigationCandidate::MathText { .. }
+                            | NavigationCandidate::InlineMathRangeEdge { .. }
                             | NavigationCandidate::MathTextHit { .. }
                             | NavigationCandidate::MathTreeHit { .. } => {
                                 return Err(EditError::InvalidPosition);
@@ -128,6 +129,7 @@ impl Session {
             Some(
                 NavigationCandidate::BlockEdge { .. }
                 | NavigationCandidate::MathText { .. }
+                | NavigationCandidate::InlineMathRangeEdge { .. }
                 | NavigationCandidate::MathTextHit { .. }
                 | NavigationCandidate::MathTreeHit { .. },
             ) => Err(EditError::InvalidPosition),

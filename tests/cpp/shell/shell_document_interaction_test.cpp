@@ -228,6 +228,9 @@ Item { WindowStatusBar { objectName: "statusBar" } }
     auto* view_model =
         engine.singletonInstance<caret::LayoutViewModel*>("Caret.ViewModels", "LayoutViewModel");
     QVERIFY(view_model != nullptr);
+    const QString initial_session_id = view_model->sessionId();
+    const QString initial_document_generation = view_model->documentGeneration();
+    const QString initial_font_generation = view_model->fontGeneration();
     snapshot.insert(QStringLiteral("textDiagnostics"), QJsonArray{});
     QVERIFY(caret::LayoutViewModelTestProbe::installSnapshot(*view_model, snapshot));
     QVERIFY(!warning->property("visible").toBool());
@@ -1929,6 +1932,7 @@ void ShellDocumentInteractionTest::crossPageDragPreviewIncludesIntermediatePages
         QVariantMap{
             {QStringLiteral("documentGeneration"), fixture.layout_view_model->documentGeneration()},
             {QStringLiteral("fontGeneration"), fixture.layout_view_model->fontGeneration()},
+            {QStringLiteral("sessionId"), fixture.layout_view_model->sessionId()},
             {QStringLiteral("layoutRevision"),
              QString::number(fixture.layout_view_model->layoutRevision())}});
     const QVariant first_point =
@@ -1994,6 +1998,9 @@ void ShellDocumentInteractionTest::mathTextDragUsesSharedPreviewAndCommitProtoco
                 {"type":"text","runs":[{"text":" after"}]},
                 {"type":"inlineMath","id":"inline-structure-math","mathTree":{
                     "schemaVersion":3,"root":{"id":"structure-root","content":[
+                        {"type":"math","id":"structure-x","kind":"symbol","text":"x"},
+                        {"type":"math","id":"structure-plus","kind":"symbol","text":"+"},
+                        {"type":"math","id":"structure-y","kind":"symbol","text":"y"},
                         {"type":"math","id":"empty-fraction","kind":"fraction",
                          "attributes":{"style":"frac"},"children":[
                             {"id":"structure-numerator","content":[]},
@@ -2037,12 +2044,19 @@ void ShellDocumentInteractionTest::mathTextDragUsesSharedPreviewAndCommitProtoco
     QVERIFY(view_model != nullptr);
     QSignalSpy open_finished(view_model, &caret::LayoutViewModel::documentFileOperationFinished);
     QVERIFY(open_finished.isValid());
+    const QString initial_session_id = view_model->sessionId();
+    const QString initial_document_generation = view_model->documentGeneration();
     const QVariantMap open_result = view_model->openDocument(path);
     QVERIFY2(open_result.value(QStringLiteral("valid")).toBool(),
              qPrintable(open_result.value(QStringLiteral("error")).toString()));
     QTRY_COMPARE_WITH_TIMEOUT(open_finished.size(), 1, 5000);
     QVERIFY2(open_finished.first().at(0).toBool(),
              qPrintable(open_finished.first().at(1).toString()));
+    const QString opened_session_id = view_model->sessionId();
+    QVERIFY(!opened_session_id.isEmpty());
+    QVERIFY(opened_session_id != initial_session_id);
+    QCOMPARE(view_model->documentGeneration(), initial_document_generation);
+    QVERIFY(!view_model->fontGeneration().isEmpty());
 
     auto* canvas = surface->findChild<caret::DocumentCanvas*>(QStringLiteral("documentCanvas"));
     QVERIFY(canvas != nullptr);
@@ -2306,7 +2320,8 @@ void ShellDocumentInteractionTest::mathTextDragUsesSharedPreviewAndCommitProtoco
     QVERIFY(!drag_focus.isEmpty());
     QCOMPARE(drag_anchor.value(QStringLiteral("domainId")).toString(),
              start.value(QStringLiteral("domainId")).toString());
-    QTRY_VERIFY_WITH_TIMEOUT(!canvas->selectionPreviewRects().isEmpty(), 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(!view_model->selectionRects().isEmpty(), 3000);
+    QVERIFY(canvas->selectionPreviewRects().isEmpty());
     QTest::mouseRelease(&window, Qt::LeftButton, Qt::NoModifier, end_window.toPoint());
     QTRY_VERIFY_WITH_TIMEOUT(!view_model->selectionRects().isEmpty(), 3000);
     QCOMPARE(view_model->documentGeneration(), QStringLiteral("0"));
@@ -2321,48 +2336,43 @@ void ShellDocumentInteractionTest::mathTextDragUsesSharedPreviewAndCommitProtoco
 
     QVERIFY(view_model->clearSelection().value(QStringLiteral("valid")).toBool());
     QVERIFY(view_model->selectionRects().isEmpty());
-    QPointF structural_window;
-    const QSizeF page_size = canvas->pageSizesPt().first().toSizeF();
-    for (int y = 40; static_cast<qreal>(y) < std::min<qreal>(260.0, page_size.height()); y += 2) {
-        for (int x = 40; static_cast<qreal>(x) < std::min<qreal>(page_size.width() - 20.0, 580.0);
-             x += 2) {
-            const qreal x_pt = static_cast<qreal>(x);
-            const qreal y_pt = static_cast<qreal>(y);
-            const QVariantMap placed = view_model->placeCaretAtPage(0, x_pt, y_pt);
-            if (!placed.value(QStringLiteral("valid")).toBool() ||
-                !placed.value(QStringLiteral("mathTree")).toBool())
-                continue;
-
-            const QPointF candidate = canvas->mapToItem(
-                window.contentItem(), canvas->documentToContent(0, QPointF(x_pt, y_pt)));
-            const QPoint rounded_candidate = candidate.toPoint();
-            const QPointF canvas_point =
-                canvas->mapFromItem(window.contentItem(), QPointF(rounded_candidate));
-            const QVariantMap actual_hit = canvas->hitTestPage(canvas_point);
-            if (actual_hit.value(QStringLiteral("pageIndex")).toInt() != 0)
-                continue;
-            const QVariantMap rounded_placement =
-                view_model->placeCaretAtPage(0, actual_hit.value(QStringLiteral("xPt")).toReal(),
-                                             actual_hit.value(QStringLiteral("yPt")).toReal());
-            if (!rounded_placement.value(QStringLiteral("valid")).toBool() ||
-                !rounded_placement.value(QStringLiteral("mathTree")).toBool())
-                continue;
-            const QVariantMap actual_domain =
-                view_model->dragStartDomain(0, actual_hit.value(QStringLiteral("xPt")).toReal(),
-                                            actual_hit.value(QStringLiteral("yPt")).toReal());
-            if (actual_domain.value(QStringLiteral("valid")).toBool() &&
-                actual_domain.value(QStringLiteral("domainId")).toString().isEmpty()) {
-                structural_window = rounded_candidate;
-                break;
-            }
-        }
-        if (!structural_window.isNull())
+    const QPointF body_left_window = canvas->mapToItem(window.contentItem(), stop_point(body_left));
+    QTest::mousePress(&window, Qt::LeftButton, Qt::NoModifier, body_left_window.toPoint());
+    QMouseEvent body_to_math_move(QEvent::MouseMove, start_window, start_window,
+                                  window.mapToGlobal(start_window.toPoint()), Qt::NoButton,
+                                  Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(&window, &body_to_math_move);
+    QTRY_VERIFY_WITH_TIMEOUT(selection_drag->property("active").toBool(), 3000);
+    QCOMPARE(pointer_handler->property("dragFocus")
+                 .toMap()
+                 .value(QStringLiteral("position"))
+                 .toMap()
+                 .value(QStringLiteral("kind"))
+                 .toString(),
+             QStringLiteral("math"));
+    QTRY_VERIFY_WITH_TIMEOUT(!view_model->selectionRects().isEmpty(), 3000);
+    QTest::mouseRelease(&window, Qt::LeftButton, Qt::NoModifier, start_window.toPoint());
+    QVERIFY(view_model->copySelectionToClipboard().value(QStringLiteral("valid")).toBool());
+    QVERIFY(QGuiApplication::clipboard()->text().endsWith(QStringLiteral("x")));
+    QVERIFY(view_model->clearSelection().value(QStringLiteral("valid")).toBool());
+    QVariantMap structural_stop;
+    for (const QVariant& value : drag_stops) {
+        const QVariantMap stop = value.toMap();
+        const QVariantMap position = stop.value(QStringLiteral("position")).toMap();
+        if (position.value(QStringLiteral("kind")).toString() == QStringLiteral("mathTree") &&
+            position.value(QStringLiteral("target")).toMap().value(QStringLiteral("mathId")) ==
+                QStringLiteral("inline-structure-math") &&
+            position.value(QStringLiteral("offsetUtf8")).toString() == QStringLiteral("1") &&
+            position.value(QStringLiteral("treePath")).toList().isEmpty()) {
+            structural_stop = stop;
             break;
+        }
     }
-    QVERIFY(!structural_window.isNull());
+    QVERIFY(!structural_stop.isEmpty());
+    const QPointF structural_window =
+        canvas->mapToItem(window.contentItem(), stop_point(structural_stop));
     QVERIFY(view_model->selectionRects().isEmpty());
 
-    const QPointF body_left_window = canvas->mapToItem(window.contentItem(), stop_point(body_left));
     const QPointF body_right_window =
         canvas->mapToItem(window.contentItem(), stop_point(body_right));
     const auto distance_from_structural = [&structural_window](const QPointF& point) {
@@ -2380,11 +2390,53 @@ void ShellDocumentInteractionTest::mathTextDragUsesSharedPreviewAndCommitProtoco
                                         Qt::LeftButton, Qt::NoModifier);
     QCoreApplication::sendEvent(&window, &structural_to_text_move);
     QTRY_VERIFY_WITH_TIMEOUT(selection_drag->property("active").toBool(), 3000);
-    QVERIFY(pointer_handler->property("dragAnchor").toMap().isEmpty());
+    const QVariantMap structural_anchor = pointer_handler->property("dragAnchor").toMap();
+    QVERIFY(!structural_anchor.isEmpty());
+    QCOMPARE(structural_anchor.value(QStringLiteral("domainId")).toString(),
+             QStringLiteral("body"));
+    QCOMPARE(structural_anchor.value(QStringLiteral("position"))
+                 .toMap()
+                 .value(QStringLiteral("kind"))
+                 .toString(),
+             QStringLiteral("mathTree"));
     QVERIFY(canvas->selectionPreviewRects().isEmpty());
+    QTRY_VERIFY_WITH_TIMEOUT(!view_model->selectionRects().isEmpty(), 3000);
     QTest::mouseRelease(&window, Qt::LeftButton, Qt::NoModifier, body_window.toPoint());
-    QVERIFY(view_model->selectionRects().isEmpty());
+    QVERIFY(!view_model->selectionRects().isEmpty());
+    QVERIFY(view_model->copySelectionToClipboard().value(QStringLiteral("valid")).toBool());
+    QVERIFY(QGuiApplication::clipboard()->text().contains(QStringLiteral("after")));
+    QVERIFY(QGuiApplication::clipboard()->text().contains(QStringLiteral("x")));
     QCOMPARE(view_model->documentGeneration(), QStringLiteral("0"));
+
+    QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, start_window.toPoint());
+    QInputMethodEvent preedit(QStringLiteral("ni"), {});
+    QCoreApplication::sendEvent(canvas, &preedit);
+    QTRY_VERIFY_WITH_TIMEOUT(!view_model->compositionRects().isEmpty(), 3000);
+    QTest::mousePress(&window, Qt::LeftButton, Qt::NoModifier, start_window.toPoint());
+    QMouseEvent preedit_drag(QEvent::MouseMove, end_window, end_window,
+                             window.mapToGlobal(end_window.toPoint()), Qt::NoButton, Qt::LeftButton,
+                             Qt::NoModifier);
+    QCoreApplication::sendEvent(&window, &preedit_drag);
+    QTRY_VERIFY_WITH_TIMEOUT(selection_drag->property("active").toBool(), 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(!pointer_handler->property("dragAnchor").toMap().isEmpty(), 3000);
+    QTest::mouseRelease(&window, Qt::LeftButton, Qt::NoModifier, end_window.toPoint());
+    QTRY_VERIFY_WITH_TIMEOUT(!view_model->selectionRects().isEmpty(), 3000);
+    pointer_handler->setProperty("selectionDragActive", true);
+    pointer_handler->setProperty("dragRebasePending", true);
+    pointer_handler->setProperty(
+        "dragRebaseIdentity",
+        QVariantMap{{QStringLiteral("documentGeneration"), view_model->documentGeneration()},
+                    {QStringLiteral("fontGeneration"), view_model->fontGeneration()},
+                    {QStringLiteral("sessionId"), view_model->sessionId()},
+                    {QStringLiteral("layoutRevision"),
+                     QString::number(view_model->layoutRevision())}});
+    const QVariantMap replacement_open_result = view_model->openDocument(path);
+    QVERIFY2(replacement_open_result.value(QStringLiteral("valid")).toBool(),
+             qPrintable(replacement_open_result.value(QStringLiteral("error")).toString()));
+    QTRY_COMPARE_WITH_TIMEOUT(open_finished.size(), 2, 5000);
+    QVERIFY(open_finished.last().at(0).toBool());
+    QVERIFY(!pointer_handler->property("dragRebasePending").toBool());
+    QVERIFY(pointer_handler->property("dragAnchor").toMap().isEmpty());
     delete surface;
 }
 

@@ -2050,6 +2050,17 @@ fn session_accepts_only_current_structurally_valid_math_text_hits() -> Result<()
         .unwrap_or_else(|| panic!("candidate equation text should be hittable"));
     let original_session_id = candidate.session_id().clone();
     let original_generation = candidate.document_generation();
+    let mut wrong_island = candidate_hit.clone();
+    wrong_island.token = wrong_island.token.wrapping_add(1);
+    assert_eq!(
+        candidate.set_math_text_selection_from_hits(
+            &candidate_hit,
+            &wrong_island,
+            catalog.generation()
+        ),
+        Err(EditError::InvalidPosition)
+    );
+    assert!(candidate.math_edit().is_none());
     let zero_length_effect = candidate.set_math_text_selection_from_hits(
         &candidate_hit,
         &candidate_hit,

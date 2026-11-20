@@ -67,7 +67,8 @@ impl Session {
         let selection = if visual_focus.is_some() {
             let ancestor_ids = |endpoint: &DocumentRangeEndpoint| {
                 let id = match endpoint {
-                    DocumentRangeEndpoint::InlineMathTree { paragraph_id, .. } => paragraph_id,
+                    DocumentRangeEndpoint::InlineMathTree { paragraph_id, .. }
+                    | DocumentRangeEndpoint::InlineMathText { paragraph_id, .. } => paragraph_id,
                     DocumentRangeEndpoint::Text(position) => &position.paragraph_id,
                     DocumentRangeEndpoint::BlockEdge { block_id, .. } => block_id,
                 };
@@ -92,6 +93,13 @@ impl Session {
             let (anchor, focus) = self.normalize_environment_range(anchor, focus)?;
             StructureSelection { anchor, focus }
         };
+        if selection.anchor.is_inline_math() || selection.focus.is_inline_math() {
+            return self.install_inline_math_selection(
+                selection,
+                self.selection_anchor_visual_affinity,
+                visual.unwrap_or(self.selection_visual_affinity),
+            );
+        }
         // 先派生覆盖列表：空覆盖范围绝不能安装成结构选区，否则隐藏范围会吞掉按键。
         // 结构选区安装入口还有同一空覆盖守卫；这里提前判断是为了回落到普通选区，
         // 而不是让安装失败。
@@ -111,6 +119,10 @@ impl Session {
         };
         let focus_visual_affinity = visual.unwrap_or_else(|| match &selection.focus {
             DocumentRangeEndpoint::InlineMathTree { position, .. } => match position.affinity {
+                crate::MathPositionAffinity::Upstream => crate::VisualAffinity::Upstream,
+                crate::MathPositionAffinity::Downstream => crate::VisualAffinity::Downstream,
+            },
+            DocumentRangeEndpoint::InlineMathText { position, .. } => match position.affinity {
                 crate::MathPositionAffinity::Upstream => crate::VisualAffinity::Upstream,
                 crate::MathPositionAffinity::Downstream => crate::VisualAffinity::Downstream,
             },
@@ -151,11 +163,15 @@ impl Session {
         let had_structure = self.has_structure_selection();
         let previous_host = self.host_caret_position.clone();
         match &selection.focus {
-            DocumentRangeEndpoint::InlineMathTree { .. } => return Err(EditError::InvalidPosition),
+            DocumentRangeEndpoint::InlineMathTree { .. }
+            | DocumentRangeEndpoint::InlineMathText { .. } => {
+                return Err(EditError::InvalidPosition);
+            }
             DocumentRangeEndpoint::Text(focus) => {
                 self.text_map_for(focus)?.validate_pos(focus)?;
                 let anchor = match &selection.anchor {
-                    DocumentRangeEndpoint::InlineMathTree { .. } => {
+                    DocumentRangeEndpoint::InlineMathTree { .. }
+                    | DocumentRangeEndpoint::InlineMathText { .. } => {
                         return Err(EditError::InvalidPosition);
                     }
                     DocumentRangeEndpoint::Text(anchor) => anchor.clone(),
@@ -216,7 +232,8 @@ impl Session {
         direction: Direction,
     ) -> Result<Option<DocumentRangeEndpoint>, EditError> {
         match focus {
-            DocumentRangeEndpoint::InlineMathTree { .. } => Ok(None),
+            DocumentRangeEndpoint::InlineMathTree { .. }
+            | DocumentRangeEndpoint::InlineMathText { .. } => Ok(None),
             DocumentRangeEndpoint::Text(position) => {
                 self.text_range_focus_step(position, direction)
             }

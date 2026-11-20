@@ -726,7 +726,7 @@ void ShellDocumentCanvasTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
                   caret::shell_test::snapshot_from_theme_facade(theme_path, QColor(Qt::white), 16));
     caret::install_theme_snapshots(std::move(themes), QStringLiteral("light"));
     const QString empty_snapshot = QStringLiteral(
-        R"({"documentGeneration":"0","fontGeneration":"1","marginsPt":{"top":72,"right":72,"bottom":72,"left":72},"pages":[{"widthPt":600,"heightPt":800,"fragments":[{"paragraphId":"p1","firstLine":0,"lineEnd":1,"yOffsetPt":0}]}],"paragraphs":[{"paragraphId":"p1","text":"","lines":[{"sourceStart":0,"sourceEnd":0,"consumedStart":0,"consumedEnd":0,"topPt":0,"baselinePt":9,"heightPt":12,"advancePt":0,"overflowsWidth":false}]}],"inputMethodContext":{"surroundingText":"","cursorPosition":0,"anchorPosition":0,"enabled":true,"preferLatin":false}})");
+        R"({"sessionId":"test-session","documentGeneration":"0","fontGeneration":"1","marginsPt":{"top":72,"right":72,"bottom":72,"left":72},"pages":[{"widthPt":600,"heightPt":800,"fragments":[{"paragraphId":"p1","firstLine":0,"lineEnd":1,"yOffsetPt":0}]}],"paragraphs":[{"paragraphId":"p1","text":"","lines":[{"sourceStart":0,"sourceEnd":0,"consumedStart":0,"consumedEnd":0,"topPt":0,"baselinePt":9,"heightPt":12,"advancePt":0,"overflowsWidth":false}]}],"inputMethodContext":{"surroundingText":"","cursorPosition":0,"anchorPosition":0,"enabled":true,"preferLatin":false}})");
     QString max_generation_snapshot = empty_snapshot;
     max_generation_snapshot.replace(
         QStringLiteral("\"documentGeneration\":\"0\""),
@@ -772,6 +772,15 @@ void ShellDocumentCanvasTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     const caret::LayoutViewModel retained_snapshot_model;
     QCOMPARE(retained_snapshot_model.documentGeneration(), QStringLiteral("0"));
     QCOMPARE(retained_snapshot_model.fontGeneration(), QStringLiteral("1"));
+    QCOMPARE(retained_snapshot_model.sessionId(), QStringLiteral("test-session"));
+    QString replacement_session_snapshot = empty_snapshot;
+    replacement_session_snapshot.replace(QStringLiteral("test-session"),
+                                         QStringLiteral("replacement-session"));
+    QVERIFY(caret::install_layout_snapshot(replacement_session_snapshot));
+    const caret::LayoutViewModel replacement_session_model;
+    QCOMPARE(replacement_session_model.documentGeneration(), QStringLiteral("0"));
+    QCOMPARE(replacement_session_model.fontGeneration(), QStringLiteral("1"));
+    QCOMPARE(replacement_session_model.sessionId(), QStringLiteral("replacement-session"));
     QQmlEngine engine;
     engine.addImportPath(QString::fromUtf8(CARET_QML_IMPORT_PATH));
     QQmlComponent view_model_component(&engine);
@@ -785,6 +794,7 @@ void ShellDocumentCanvasTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
             "    property var paragraphs: LayoutViewModel.paragraphLayouts\n"
             "    property string documentGeneration: LayoutViewModel.documentGeneration\n"
             "    property string fontGeneration: LayoutViewModel.fontGeneration\n"
+            "    property string sessionId: LayoutViewModel.sessionId\n"
             "}\n"),
         QUrl());
     QVERIFY2(view_model_component.isReady(), qPrintable(view_model_component.errorString()));
@@ -797,6 +807,7 @@ void ShellDocumentCanvasTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     QCOMPARE(view_model->property("paragraphs").toList().size(), 1);
     QCOMPARE(view_model->property("documentGeneration").toString(), QStringLiteral("0"));
     QCOMPARE(view_model->property("fontGeneration").toString(), QStringLiteral("1"));
+    QCOMPARE(view_model->property("sessionId").toString(), QStringLiteral("replacement-session"));
     QQmlComponent component(&engine);
     component.setData(
         QByteArrayLiteral("import QtQuick\n"

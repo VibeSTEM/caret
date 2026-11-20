@@ -50,10 +50,24 @@ impl Session {
         right: &DocumentRangeEndpoint,
     ) -> Result<Ordering, EditError> {
         match (left, right) {
-            (DocumentRangeEndpoint::InlineMathTree { .. }, _)
-            | (_, DocumentRangeEndpoint::InlineMathTree { .. }) => {
-                let snapshot = |endpoint: &DocumentRangeEndpoint| -> Result<super::super::SessionCaretSnapshot, EditError> {
-                    Ok(super::super::SessionCaretSnapshot {session_id:self.session_id.clone(),document_generation:self.document_generation,position:endpoint.as_document_caret()?})
+            (
+                DocumentRangeEndpoint::InlineMathTree { .. }
+                | DocumentRangeEndpoint::InlineMathText { .. },
+                _,
+            )
+            | (
+                _,
+                DocumentRangeEndpoint::InlineMathTree { .. }
+                | DocumentRangeEndpoint::InlineMathText { .. },
+            ) => {
+                let snapshot = |endpoint: &DocumentRangeEndpoint| {
+                    endpoint.as_document_caret().map(|position| {
+                        super::super::SessionCaretSnapshot {
+                            session_id: self.session_id.clone(),
+                            document_generation: self.document_generation,
+                            position,
+                        }
+                    })
                 };
                 self.compare_caret_snapshots(&snapshot(left)?, &snapshot(right)?)
             }
@@ -182,10 +196,13 @@ impl Session {
     pub fn structure_selection_text_bounds(&self) -> Option<(Pos, Pos)> {
         if let Some(parts) = self.inline_math_range_parts() {
             let Selection { anchor, focus } = parts.body;
-            return Some(if anchor.offset <= focus.offset {
-                (anchor, focus)
-            } else {
+            let ordered =
+                compare_positions(&self.document.body, &self.paragraph_index, &anchor, &focus)
+                    .ok()?;
+            return Some(if ordered.is_gt() {
                 (focus, anchor)
+            } else {
+                (anchor, focus)
             });
         }
         let (start, end) = self.ordered_structure_selection().ok()?;
@@ -213,7 +230,8 @@ impl Session {
         let selection = self.structure_selection.as_ref()?;
         match &selection.anchor {
             DocumentRangeEndpoint::Text(position) => Some(position.clone()),
-            DocumentRangeEndpoint::InlineMathTree { .. } => None,
+            DocumentRangeEndpoint::InlineMathTree { .. }
+            | DocumentRangeEndpoint::InlineMathText { .. } => None,
             endpoint @ DocumentRangeEndpoint::BlockEdge { side, .. } => {
                 let projected = self.text_endpoint_clamped(endpoint)?;
                 let ordering = self
@@ -239,7 +257,8 @@ impl Session {
         endpoint: &DocumentRangeEndpoint,
     ) -> Option<Pos> {
         match endpoint {
-            DocumentRangeEndpoint::InlineMathTree { .. } => {
+            DocumentRangeEndpoint::InlineMathTree { .. }
+            | DocumentRangeEndpoint::InlineMathText { .. } => {
                 self.inline_math_range_parts().map(|parts| parts.body.focus)
             }
             DocumentRangeEndpoint::Text(position) => Some(position.clone()),
@@ -271,7 +290,8 @@ impl Session {
         environment_id: &NodeId,
     ) -> bool {
         let node_id = match endpoint {
-            DocumentRangeEndpoint::InlineMathTree { paragraph_id, .. } => paragraph_id,
+            DocumentRangeEndpoint::InlineMathTree { paragraph_id, .. }
+            | DocumentRangeEndpoint::InlineMathText { paragraph_id, .. } => paragraph_id,
             DocumentRangeEndpoint::Text(position) => &position.paragraph_id,
             DocumentRangeEndpoint::BlockEdge { block_id, .. } => block_id,
         };
@@ -422,7 +442,10 @@ impl Session {
     }
 
     /// 映射到边界同侧最近的段落起点；没有时退回文档顺序上最近的段落。
-    fn text_endpoint_at_or_after(&self, endpoint: &DocumentRangeEndpoint) -> Option<Pos> {
+    pub(in crate::editing::session) fn text_endpoint_at_or_after(
+        &self,
+        endpoint: &DocumentRangeEndpoint,
+    ) -> Option<Pos> {
         if let DocumentRangeEndpoint::Text(position) = endpoint {
             return Some(position.clone());
         }
@@ -445,7 +468,10 @@ impl Session {
     }
 
     /// 映射到边界同侧最近的段落终点；没有时退回文档顺序上最近的段落。
-    fn text_endpoint_at_or_before(&self, endpoint: &DocumentRangeEndpoint) -> Option<Pos> {
+    pub(in crate::editing::session) fn text_endpoint_at_or_before(
+        &self,
+        endpoint: &DocumentRangeEndpoint,
+    ) -> Option<Pos> {
         if let DocumentRangeEndpoint::Text(position) = endpoint {
             return Some(position.clone());
         }

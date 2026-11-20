@@ -6,7 +6,8 @@
 use super::{DocumentViewRuntime, snapshot::rectangle_fields};
 use caret_engine::{
     Affinity, DocumentLayoutSnapshot, LaidOutParagraph, MathEditTarget, MathPositionAffinity,
-    MathTextFlowPathStep, MathTextPosition, PageCaretGeometry, PageMathTextDragStop,
+    MathSequencePath, MathSequenceStep, MathTextFlowPathStep, MathTextPosition, MathTreePosition,
+    PageCaretGeometry, PageMathStructureHit, PageMathTextDragStop, PageMathTreeDragStop,
     PageSelectionRect, Pos, Selection, VisualAffinity, utf16_offset_to_utf8,
 };
 use std::{
@@ -16,7 +17,7 @@ use std::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 
-type MathTextDragIsland = (MathEditTarget, Vec<(usize, MathTextPosition)>);
+type MathTextDragIsland = (MathEditTarget, String, Vec<(usize, MathTextPosition)>);
 
 impl DocumentViewRuntime {
     /// 返回按正文点击规则裁决后的拖选起点域，不修改当前会话状态。
@@ -39,11 +40,17 @@ impl DocumentViewRuntime {
                     .math_text_drag_stops(page_index)
                     .into_iter()
                     .find(|stop| stop.target == hit.target && stop.token == hit.token)
-                    .map(|stop| math_text_domain_id(&stop.target, stop.token))
+                    .map(|stop| math_drag_domain_id(&stop.target, stop.token))
             }
             Some(_) => snapshot
                 .hit_test(page_index, x_pt, y_pt)
                 .map(|_| "body".to_owned()),
+            None if snapshot
+                .hit_test_math_structure(page_index, x_pt, y_pt)
+                .is_some_and(|hit| matches!(&hit.target, MathEditTarget::Inline { .. })) =>
+            {
+                Some("body".to_owned())
+            }
             None if snapshot
                 .hit_test_math_structure(page_index, x_pt, y_pt)
                 .is_some() =>
@@ -91,6 +98,12 @@ impl DocumentViewRuntime {
         let (math_stops, math_islands) = math_drag_stop_entries(snapshot, page_index);
         stops.extend(math_stops);
         segments.extend(math_drag_segments(snapshot, page_index, math_islands));
+        stops.extend(
+            snapshot
+                .math_tree_drag_stops(page_index)
+                .iter()
+                .map(|stop| math_tree_drag_stop_json(snapshot, page_index, stop)),
+        );
         let hit_map = serde_json::json!({
             "documentGeneration": snapshot.document_generation.to_string(),
             "fontGeneration": snapshot.font_generation.to_string(),
@@ -109,21 +122,22 @@ impl DocumentViewRuntime {
         struct PositionDto {
             kind: Option<String>,
             domain_id: Option<String>,
+            x_pt: Option<f64>,
+            y_pt: Option<f64>,
+            page_index: Option<usize>,
             paragraph_id: Option<String>,
             offset_utf8: Option<String>,
             order_utf8: Option<String>,
             affinity: Option<String>,
             visual_affinity: Option<String>,
-            page_index: Option<usize>,
             document_generation: Option<String>,
             font_generation: Option<String>,
             session_id: Option<String>,
             token: Option<u64>,
-            x_pt: Option<f64>,
-            y_pt: Option<f64>,
             target: Option<MathTargetDto>,
             align_cell: Option<Vec<usize>>,
             path: Option<Vec<MathPathStepDto>>,
+            tree_path: Option<Vec<MathTreePathStepDto>>,
         }
         #[derive(serde::Deserialize)]
         #[serde(rename_all = "camelCase")]
@@ -140,10 +154,18 @@ impl DocumentViewRuntime {
             index: usize,
         }
         #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct MathTreePathStepDto {
+            kind: String,
+            content_index: usize,
+            operand_index: Option<usize>,
+        }
+        #[derive(serde::Deserialize)]
         struct SelectionDto {
             anchor: PositionDto,
             focus: PositionDto,
         }
+        #[derive(Clone)]
         struct MathEndpoint {
             domain_id: String,
             page_index: usize,
@@ -158,9 +180,30 @@ impl DocumentViewRuntime {
             x_pt: f64,
             y_pt: f64,
         }
+        #[derive(Clone)]
+        struct MathTreeEndpoint {
+            page_index: usize,
+            document_generation: u64,
+            font_generation: u64,
+            session_id: String,
+            target: MathEditTarget,
+            position: MathTreePosition,
+            visual_affinity: VisualAffinity,
+        }
+        #[derive(Clone)]
+        struct BodyEndpoint {
+            position: Pos,
+            visual_affinity: VisualAffinity,
+            session_id: Option<String>,
+            document_generation: Option<u64>,
+            font_generation: Option<u64>,
+            page_index: Option<usize>,
+        }
+        #[derive(Clone)]
         enum Endpoint {
-            Body(Pos, VisualAffinity),
+            Body(BodyEndpoint),
             Math(MathEndpoint),
+            MathTree(MathTreeEndpoint),
         }
         fn parse_affinity(value: Option<String>) -> Result<Affinity, String> {
             match value.as_deref() {
@@ -187,6 +230,89 @@ impl DocumentViewRuntime {
             session: &caret_engine::Session,
             dto: PositionDto,
         ) -> Result<Endpoint, String> {
+            if dto.kind.as_deref() == Some("mathTree") {
+                let target_dto = dto
+                    .target
+                    .ok_or_else(|| "selection.invalid_math_target".to_owned())?;
+                let target = match target_dto.kind.as_str() {
+                    "inline" => MathEditTarget::Inline {
+                        paragraph_id: caret_doc::NodeId::parse(
+                            target_dto
+                                .paragraph_id
+                                .ok_or_else(|| "selection.invalid_math_target".to_owned())?,
+                        )
+                        .map_err(|_| "selection.invalid_math_target".to_owned())?,
+                        math_id: caret_doc::NodeId::parse(
+                            target_dto
+                                .math_id
+                                .ok_or_else(|| "selection.invalid_math_target".to_owned())?,
+                        )
+                        .map_err(|_| "selection.invalid_math_target".to_owned())?,
+                    },
+                    _ => return Err("selection.invalid_math_target".to_owned()),
+                };
+                let math_id = match &target {
+                    MathEditTarget::Inline { math_id, .. } => math_id.clone(),
+                    MathEditTarget::Block { .. } => {
+                        return Err("selection.invalid_math_target".to_owned());
+                    }
+                };
+                let path = dto
+                    .tree_path
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|step| match step.kind.as_str() {
+                        "operand" => Ok(caret_engine::MathSequenceStep::Operand {
+                            content_index: step.content_index,
+                            operand_index: step
+                                .operand_index
+                                .ok_or_else(|| "selection.invalid_math_path".to_owned())?,
+                        }),
+                        "environmentChildren" if step.operand_index.is_none() => {
+                            Ok(caret_engine::MathSequenceStep::EnvironmentChildren {
+                                content_index: step.content_index,
+                            })
+                        }
+                        _ => Err("selection.invalid_math_path".to_owned()),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let offset = dto
+                    .offset_utf8
+                    .ok_or_else(|| "selection.invalid_math_offset".to_owned())?
+                    .parse::<usize>()
+                    .map_err(|_| "selection.invalid_math_offset".to_owned())?;
+                let position = MathTreePosition {
+                    host: caret_engine::MathPositionHost::InlineMath { owner_id: math_id },
+                    path: MathSequencePath::new(path),
+                    offset,
+                    affinity: parse_math_affinity(dto.affinity)?,
+                };
+                let page_index = dto
+                    .page_index
+                    .ok_or_else(|| "selection.invalid_page_index".to_owned())?;
+                let document_generation = dto
+                    .document_generation
+                    .ok_or_else(|| "selection.invalid_generation".to_owned())?
+                    .parse::<u64>()
+                    .map_err(|_| "selection.invalid_generation".to_owned())?;
+                let font_generation = dto
+                    .font_generation
+                    .ok_or_else(|| "selection.invalid_generation".to_owned())?
+                    .parse::<u64>()
+                    .map_err(|_| "selection.invalid_generation".to_owned())?;
+                let session_id = dto
+                    .session_id
+                    .ok_or_else(|| "selection.missing_session_id".to_owned())?;
+                return Ok(Endpoint::MathTree(MathTreeEndpoint {
+                    page_index,
+                    document_generation,
+                    font_generation,
+                    session_id,
+                    target,
+                    position,
+                    visual_affinity: parse_visual_affinity(dto.visual_affinity)?,
+                }));
+            }
             if dto.kind.as_deref() != Some("math") {
                 let paragraph_id = caret_doc::NodeId::parse(
                     dto.paragraph_id
@@ -203,15 +329,33 @@ impl DocumentViewRuntime {
                 let story = session
                     .story_for_paragraph(&paragraph_id)
                     .ok_or_else(|| "selection.unknown_paragraph".to_owned())?;
-                return Ok(Endpoint::Body(
-                    Pos {
+                return Ok(Endpoint::Body(BodyEndpoint {
+                    position: Pos {
                         story,
                         paragraph_id,
                         offset,
                         affinity,
                     },
                     visual_affinity,
-                ));
+                    session_id: dto.session_id,
+                    document_generation: dto
+                        .document_generation
+                        .map(|value| {
+                            value
+                                .parse::<u64>()
+                                .map_err(|_| "selection.invalid_generation".to_owned())
+                        })
+                        .transpose()?,
+                    font_generation: dto
+                        .font_generation
+                        .map(|value| {
+                            value
+                                .parse::<u64>()
+                                .map_err(|_| "selection.invalid_generation".to_owned())
+                        })
+                        .transpose()?,
+                    page_index: dto.page_index,
+                }));
             }
             let target_dto = dto
                 .target
@@ -300,7 +444,7 @@ impl DocumentViewRuntime {
             let domain_id = dto
                 .domain_id
                 .ok_or_else(|| "selection.invalid_math_domain".to_owned())?;
-            if domain_id != math_text_domain_id(&target, token) {
+            if domain_id != math_drag_domain_id(&target, token) {
                 return Err("selection.invalid_math_domain".to_owned());
             }
             let _ = session;
@@ -323,11 +467,138 @@ impl DocumentViewRuntime {
             .map_err(|error| format!("selection.invalid_payload: {error}"))?;
         let anchor = parse_endpoint(&self.session, dto.anchor)?;
         let focus = parse_endpoint(&self.session, dto.focus)?;
+        let body_is_anchor = matches!((&anchor, &focus), (Endpoint::Body(_), Endpoint::Math(_)));
+        let math_is_anchor = matches!(
+            (&anchor, &focus),
+            (Endpoint::Math(_), Endpoint::MathTree(_))
+        );
+        let math_right_moves_forward = |endpoint: &Endpoint,
+                                        snapshot: &DocumentLayoutSnapshot|
+         -> Result<bool, String> {
+            let same_line = |left: &PageCaretGeometry, right: &PageCaretGeometry| {
+                (left.y0_pt - right.y0_pt).abs() < 0.5 && (left.y1_pt - right.y1_pt).abs() < 0.5
+            };
+            let direction_from_neighbors =
+                |current_x: f64,
+                 current_caret: &PageCaretGeometry,
+                 neighbors: &[(f64, bool, PageCaretGeometry)]| {
+                    let right = neighbors
+                        .iter()
+                        .filter(|(x, _, caret)| {
+                            *x > current_x + 0.01 && same_line(current_caret, caret)
+                        })
+                        .min_by(|left, right| left.0.total_cmp(&right.0));
+                    if let Some((_, forward, _)) = right {
+                        return *forward;
+                    }
+                    neighbors
+                        .iter()
+                        .filter(|(x, _, caret)| {
+                            *x < current_x - 0.01 && same_line(current_caret, caret)
+                        })
+                        .max_by(|left, right| left.0.total_cmp(&right.0))
+                        .is_none_or(|(_, forward, _)| !forward)
+                };
+            match endpoint {
+                Endpoint::Math(math) => {
+                    let stops = snapshot.math_text_drag_stops(math.page_index);
+                    let current = stops
+                        .iter()
+                        .filter(|stop| {
+                            stop.target == math.target
+                                && stop.token == math.token
+                                && stop.order_utf8 == math.order_utf8
+                        })
+                        .min_by(|left, right| {
+                            let distance = |stop: &PageMathTextDragStop| {
+                                (stop.caret.x_pt - math.x_pt).hypot(stop.caret.y0_pt - math.y_pt)
+                            };
+                            distance(left).total_cmp(&distance(right))
+                        })
+                        .ok_or_else(|| "selection.stale_math_hit".to_owned())?;
+                    let neighbors = stops
+                        .iter()
+                        .filter(|stop| stop.target == math.target && stop.token == math.token)
+                        .map(|stop| {
+                            (
+                                stop.caret.x_pt,
+                                stop.order_utf8 > current.order_utf8,
+                                stop.caret,
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    Ok(direction_from_neighbors(
+                        current.caret.x_pt,
+                        &current.caret,
+                        &neighbors,
+                    ))
+                }
+                Endpoint::MathTree(tree) => {
+                    let current_caret = snapshot
+                        .math_tree_caret_geometry(&tree.target, &tree.position)
+                        .ok_or_else(|| "selection.stale_math_hit".to_owned())?;
+                    let neighbors = snapshot
+                        .math_tree_drag_stops(tree.page_index)
+                        .into_iter()
+                        .filter(|stop| {
+                            stop.target == tree.target
+                                && stop.position.host == tree.position.host
+                                && stop.position.path == tree.position.path
+                        })
+                        .map(|stop| {
+                            (
+                                stop.caret.x_pt,
+                                stop.position.offset > tree.position.offset,
+                                stop.caret,
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    Ok(direction_from_neighbors(
+                        current_caret.x_pt,
+                        &current_caret,
+                        &neighbors,
+                    ))
+                }
+                Endpoint::Body(_) => Ok(true),
+            }
+        };
+        let with_math_forward = |endpoint, forward| match endpoint {
+            caret_engine::DocumentRangeEndpoint::InlineMathText {
+                paragraph_id,
+                math_id,
+                position,
+                entry_direction,
+                ..
+            } => caret_engine::DocumentRangeEndpoint::InlineMathText {
+                paragraph_id,
+                math_id,
+                position,
+                entry_direction,
+                entry_math_forward: forward,
+            },
+            caret_engine::DocumentRangeEndpoint::InlineMathTree {
+                paragraph_id,
+                position,
+                entry_direction,
+                ..
+            } => caret_engine::DocumentRangeEndpoint::InlineMathTree {
+                paragraph_id,
+                position,
+                entry_direction,
+                entry_math_forward: forward,
+            },
+            body => body,
+        };
         match (anchor, focus) {
-            (Endpoint::Body(anchor, anchor_visual), Endpoint::Body(focus, focus_visual)) => {
+            (Endpoint::Body(anchor), Endpoint::Body(focus)) => {
                 let effect = self
                     .session
-                    .set_pointer_selection_range(anchor, focus, anchor_visual, focus_visual)
+                    .set_pointer_selection_range(
+                        anchor.position,
+                        focus.position,
+                        anchor.visual_affinity,
+                        focus.visual_affinity,
+                    )
                     .map_err(|error| format!("selection.set: {error}"))?;
                 self.preferred_visual_x_pt = None;
                 if effect.composition_changed {
@@ -335,14 +606,266 @@ impl DocumentViewRuntime {
                     return self.layout_snapshot_json_after_composition_cancel();
                 }
             }
+            (Endpoint::Body(body), Endpoint::Math(math))
+            | (Endpoint::Math(math), Endpoint::Body(body)) => {
+                let MathEditTarget::Inline {
+                    paragraph_id,
+                    math_id,
+                } = &math.target
+                else {
+                    return Err("selection.invalid_math_target".to_owned());
+                };
+                let snapshot = if self.composition_preview_session.is_some() {
+                    self.base_snapshot()?
+                } else {
+                    self.current_snapshot()?
+                };
+                if snapshot.document_generation != math.document_generation
+                    || snapshot.font_generation != math.font_generation
+                    || snapshot.session_id.as_ref().map(ToString::to_string)
+                        != Some(math.session_id.clone())
+                    || body.document_generation != Some(snapshot.document_generation)
+                    || body.font_generation != Some(snapshot.font_generation)
+                    || body.session_id.as_deref()
+                        != snapshot
+                            .session_id
+                            .as_ref()
+                            .map(ToString::to_string)
+                            .as_deref()
+                    || body.page_index.is_none_or(|page_index| {
+                        snapshot
+                            .caret_geometry(&body.position, body.visual_affinity)
+                            .is_none_or(|caret| caret.page_index != page_index)
+                    })
+                {
+                    return Err("selection.stale_pointer_hit".to_owned());
+                }
+                snapshot
+                    .math_text_drag_hit(
+                        math.page_index,
+                        math.token,
+                        &math.target,
+                        &math.position,
+                        math.order_utf8,
+                        math.visual_affinity,
+                    )
+                    .ok_or_else(|| "selection.stale_math_hit".to_owned())?;
+                let math_endpoint_value = Endpoint::Math(math.clone());
+                let math_forward = math_right_moves_forward(&math_endpoint_value, snapshot)?;
+                let math_endpoint = caret_engine::DocumentRangeEndpoint::InlineMathText {
+                    paragraph_id: paragraph_id.clone(),
+                    math_id: math_id.clone(),
+                    position: math.position.clone(),
+                    entry_direction: caret_engine::Direction::Forward,
+                    entry_math_forward: math_forward,
+                };
+                let body_endpoint = caret_engine::DocumentRangeEndpoint::Text(body.position);
+                let range = if body_is_anchor {
+                    caret_engine::StructureSelection {
+                        anchor: body_endpoint,
+                        focus: math_endpoint,
+                    }
+                } else {
+                    caret_engine::StructureSelection {
+                        anchor: math_endpoint,
+                        focus: body_endpoint,
+                    }
+                };
+                let effect = self
+                    .session
+                    .set_pointer_inline_math_selection(
+                        range,
+                        if body_is_anchor {
+                            body.visual_affinity
+                        } else {
+                            math.visual_affinity
+                        },
+                        if body_is_anchor {
+                            math.visual_affinity
+                        } else {
+                            body.visual_affinity
+                        },
+                    )
+                    .map_err(|error| format!("selection.inline_math_text: {error}"))?;
+                self.preferred_visual_x_pt = None;
+                if effect.composition_changed {
+                    self.clear_composition_state();
+                    return self.layout_snapshot_json_after_composition_cancel();
+                }
+            }
+            (Endpoint::Math(math), Endpoint::MathTree(tree))
+            | (Endpoint::MathTree(tree), Endpoint::Math(math)) => {
+                let snapshot = if self.composition_preview_session.is_some() {
+                    self.base_snapshot()?
+                } else {
+                    self.current_snapshot()?
+                };
+                if snapshot.document_generation != math.document_generation
+                    || snapshot.font_generation != math.font_generation
+                    || snapshot.session_id.as_ref().map(ToString::to_string)
+                        != Some(math.session_id.clone())
+                    || snapshot.document_generation != tree.document_generation
+                    || snapshot.font_generation != tree.font_generation
+                    || snapshot.session_id.as_ref().map(ToString::to_string)
+                        != Some(tree.session_id.clone())
+                    || snapshot
+                        .math_tree_caret_geometry(&tree.target, &tree.position)
+                        .is_none_or(|caret| caret.page_index != tree.page_index)
+                {
+                    return Err("selection.stale_pointer_hit".to_owned());
+                }
+                snapshot
+                    .math_text_drag_hit(
+                        math.page_index,
+                        math.token,
+                        &math.target,
+                        &math.position,
+                        math.order_utf8,
+                        math.visual_affinity,
+                    )
+                    .ok_or_else(|| "selection.stale_math_hit".to_owned())?;
+                let MathEditTarget::Inline {
+                    paragraph_id: math_paragraph_id,
+                    math_id,
+                } = &math.target
+                else {
+                    return Err("selection.invalid_math_target".to_owned());
+                };
+                let MathEditTarget::Inline {
+                    paragraph_id: tree_paragraph_id,
+                    ..
+                } = &tree.target
+                else {
+                    return Err("selection.invalid_math_target".to_owned());
+                };
+                let focus_endpoint = if math_is_anchor {
+                    Endpoint::MathTree(tree.clone())
+                } else {
+                    Endpoint::Math(math.clone())
+                };
+                let math_forward = math_right_moves_forward(&focus_endpoint, snapshot)?;
+                let math_endpoint = caret_engine::DocumentRangeEndpoint::InlineMathText {
+                    paragraph_id: math_paragraph_id.clone(),
+                    math_id: math_id.clone(),
+                    position: math.position.clone(),
+                    entry_direction: caret_engine::Direction::Forward,
+                    entry_math_forward: math_forward,
+                };
+                let tree_endpoint = caret_engine::DocumentRangeEndpoint::InlineMathTree {
+                    paragraph_id: tree_paragraph_id.clone(),
+                    position: tree.position.clone(),
+                    entry_direction: caret_engine::Direction::Forward,
+                    entry_math_forward: math_forward,
+                };
+                let range = if math_is_anchor {
+                    caret_engine::StructureSelection {
+                        anchor: math_endpoint,
+                        focus: tree_endpoint,
+                    }
+                } else {
+                    caret_engine::StructureSelection {
+                        anchor: tree_endpoint,
+                        focus: math_endpoint,
+                    }
+                };
+                let effect = self
+                    .session
+                    .set_pointer_inline_math_selection(
+                        range,
+                        if math_is_anchor {
+                            math.visual_affinity
+                        } else {
+                            tree.visual_affinity
+                        },
+                        if math_is_anchor {
+                            tree.visual_affinity
+                        } else {
+                            math.visual_affinity
+                        },
+                    )
+                    .map_err(|error| format!("selection.inline_math_mixed: {error}"))?;
+                self.preferred_visual_x_pt = None;
+                if effect.composition_changed {
+                    self.clear_composition_state();
+                    return self.layout_snapshot_json_after_composition_cancel();
+                }
+            }
             (Endpoint::Math(anchor), Endpoint::Math(focus)) => {
-                if anchor.domain_id != focus.domain_id
-                    || anchor.target != focus.target
-                    || anchor.token != focus.token
-                    || anchor.document_generation != focus.document_generation
+                if anchor.document_generation != focus.document_generation
                     || anchor.font_generation != focus.font_generation
                     || anchor.session_id != focus.session_id
                 {
+                    return Err("selection.invalid_math_range".to_owned());
+                }
+                if anchor.target != focus.target || anchor.token != focus.token {
+                    let snapshot = if self.composition_preview_session.is_some() {
+                        self.base_snapshot()?
+                    } else {
+                        self.current_snapshot()?
+                    };
+                    if snapshot.document_generation != anchor.document_generation
+                        || snapshot.font_generation != anchor.font_generation
+                        || snapshot.session_id.as_ref().map(ToString::to_string)
+                            != Some(anchor.session_id.clone())
+                    {
+                        return Err("selection.stale_math_hit".to_owned());
+                    }
+                    for endpoint in [&anchor, &focus] {
+                        snapshot
+                            .math_text_drag_hit(
+                                endpoint.page_index,
+                                endpoint.token,
+                                &endpoint.target,
+                                &endpoint.position,
+                                endpoint.order_utf8,
+                                endpoint.visual_affinity,
+                            )
+                            .ok_or_else(|| "selection.stale_math_hit".to_owned())?;
+                    }
+                    let endpoint = |math: &MathEndpoint, direction| {
+                        let MathEditTarget::Inline {
+                            paragraph_id,
+                            math_id,
+                        } = &math.target
+                        else {
+                            return Err("selection.invalid_math_target".to_owned());
+                        };
+                        Ok(caret_engine::DocumentRangeEndpoint::InlineMathText {
+                            paragraph_id: paragraph_id.clone(),
+                            math_id: math_id.clone(),
+                            position: math.position.clone(),
+                            entry_direction: direction,
+                            entry_math_forward: true,
+                        })
+                    };
+                    let math_forward =
+                        math_right_moves_forward(&Endpoint::Math(focus.clone()), snapshot)?;
+                    let range = caret_engine::StructureSelection {
+                        anchor: with_math_forward(
+                            endpoint(&anchor, caret_engine::Direction::Forward)?,
+                            math_forward,
+                        ),
+                        focus: with_math_forward(
+                            endpoint(&focus, caret_engine::Direction::Forward)?,
+                            math_forward,
+                        ),
+                    };
+                    let effect = self
+                        .session
+                        .set_pointer_inline_math_selection(
+                            range,
+                            anchor.visual_affinity,
+                            focus.visual_affinity,
+                        )
+                        .map_err(|error| format!("selection.inline_math_mixed: {error}"))?;
+                    self.preferred_visual_x_pt = None;
+                    if effect.composition_changed {
+                        self.clear_composition_state();
+                        return self.layout_snapshot_json_after_composition_cancel();
+                    }
+                    return self.interaction_state_json();
+                }
+                if anchor.domain_id != focus.domain_id {
                     return Err("selection.invalid_math_range".to_owned());
                 }
                 let (anchor_hit, focus_hit) = {
@@ -431,7 +954,134 @@ impl DocumentViewRuntime {
                     return self.layout_snapshot_json_after_composition_cancel();
                 }
             }
-            _ => return Err("selection.mixed_text_domains".to_owned()),
+            (
+                anchor @ (Endpoint::Body(_) | Endpoint::MathTree(_)),
+                focus @ (Endpoint::Body(_) | Endpoint::MathTree(_)),
+            ) => {
+                let (first_tree, second_tree) = match (&anchor, &focus) {
+                    (Endpoint::Body(_), Endpoint::MathTree(tree))
+                    | (Endpoint::MathTree(tree), Endpoint::Body(_)) => (tree, None),
+                    (Endpoint::MathTree(first), Endpoint::MathTree(second)) => {
+                        (first, Some(second))
+                    }
+                    _ => return Err("selection.invalid_math_target".to_owned()),
+                };
+                let target = first_tree.target.clone();
+                let snapshot = if self.composition_preview_session.is_some() {
+                    self.base_snapshot()?
+                } else {
+                    self.current_snapshot()?
+                };
+                for tree in [Some(first_tree), second_tree].into_iter().flatten() {
+                    if snapshot.document_generation != tree.document_generation
+                        || snapshot.font_generation != tree.font_generation
+                        || snapshot.session_id.as_ref().map(ToString::to_string)
+                            != Some(tree.session_id.clone())
+                        || snapshot
+                            .math_tree_caret_geometry(&tree.target, &tree.position)
+                            .is_none_or(|caret| caret.page_index != tree.page_index)
+                    {
+                        return Err("selection.stale_math_hit".to_owned());
+                    }
+                }
+                if let Some(body) = match (&anchor, &focus) {
+                    (Endpoint::Body(body), _) | (_, Endpoint::Body(body)) => Some(body),
+                    _ => None,
+                } && (body.document_generation != Some(snapshot.document_generation)
+                    || body.font_generation != Some(snapshot.font_generation)
+                    || body.session_id.as_deref()
+                        != snapshot
+                            .session_id
+                            .as_ref()
+                            .map(ToString::to_string)
+                            .as_deref()
+                    || body.page_index.is_none_or(|page_index| {
+                        snapshot
+                            .caret_geometry(&body.position, body.visual_affinity)
+                            .is_none_or(|caret| caret.page_index != page_index)
+                    }))
+                {
+                    return Err("selection.stale_body_hit".to_owned());
+                }
+                if let (Some(first), Some(second)) = (Some(first_tree), second_tree)
+                    && first.position.host == second.position.host
+                    && first.position.path == second.position.path
+                    && first.position.offset == second.position.offset
+                {
+                    let caret = snapshot
+                        .math_tree_caret_geometry(&target, &second.position)
+                        .ok_or_else(|| "selection.stale_math_hit".to_owned())?;
+                    self.session
+                        .focus_math_structure_hit(
+                            &PageMathStructureHit {
+                                session_id: Some(
+                                    caret_doc::NodeId::parse(&second.session_id)
+                                        .map_err(|_| "selection.missing_session_id".to_owned())?,
+                                ),
+                                document_generation: second.document_generation,
+                                font_generation: second.font_generation,
+                                target,
+                                position: second.position.clone(),
+                                caret,
+                            },
+                            second.font_generation,
+                        )
+                        .map_err(|error| format!("selection.inline_math_tree: {error}"))?;
+                    self.preferred_visual_x_pt = None;
+                    return self.interaction_state_json();
+                }
+                let visual_affinity = |endpoint: &Endpoint| match endpoint {
+                    Endpoint::Body(body) => body.visual_affinity,
+                    Endpoint::MathTree(tree) => tree.visual_affinity,
+                    Endpoint::Math(_) => VisualAffinity::Downstream,
+                };
+                let as_range_endpoint = |endpoint: &Endpoint, direction| match endpoint {
+                    Endpoint::Body(body) => Ok(caret_engine::DocumentRangeEndpoint::Text(
+                        body.position.clone(),
+                    )),
+                    Endpoint::MathTree(tree) => {
+                        let MathEditTarget::Inline { paragraph_id, .. } = &tree.target else {
+                            return Err("selection.invalid_math_target".to_owned());
+                        };
+                        Ok(caret_engine::DocumentRangeEndpoint::InlineMathTree {
+                            paragraph_id: paragraph_id.clone(),
+                            position: tree.position.clone(),
+                            entry_direction: direction,
+                            entry_math_forward: true,
+                        })
+                    }
+                    Endpoint::Math(_) => Err("selection.invalid_pointer_domain".to_owned()),
+                };
+                let focus_endpoint = if matches!(&focus, Endpoint::MathTree(_)) {
+                    &focus
+                } else {
+                    &anchor
+                };
+                let math_forward = math_right_moves_forward(focus_endpoint, snapshot)?;
+                let range = caret_engine::StructureSelection {
+                    anchor: with_math_forward(
+                        as_range_endpoint(&anchor, caret_engine::Direction::Forward)?,
+                        math_forward,
+                    ),
+                    focus: with_math_forward(
+                        as_range_endpoint(&focus, caret_engine::Direction::Forward)?,
+                        math_forward,
+                    ),
+                };
+                let effect = self
+                    .session
+                    .set_pointer_inline_math_selection(
+                        range,
+                        visual_affinity(&anchor),
+                        visual_affinity(&focus),
+                    )
+                    .map_err(|error| format!("selection.inline_math: {error}"))?;
+                self.preferred_visual_x_pt = None;
+                if effect.composition_changed {
+                    self.clear_composition_state();
+                    return self.layout_snapshot_json_after_composition_cancel();
+                }
+            }
         }
         self.interaction_state_json()
     }
@@ -704,6 +1354,12 @@ fn body_caret_stop_json(
         "position": {
             "kind": "body",
             "domainId": "body",
+            "sessionId": context.snapshot.session_id.as_ref().map(ToString::to_string),
+            "pageIndex": context.page_index,
+            "xPt": caret.x_pt,
+            "yPt": (caret.y0_pt + caret.y1_pt) / 2.0,
+            "documentGeneration": context.snapshot.document_generation.to_string(),
+            "fontGeneration": context.snapshot.font_generation.to_string(),
             "paragraphId": context.paragraph.id.to_string(),
             "paragraphIndex": context.paragraph_order,
             "offsetUtf8": offset.to_string(),
@@ -722,11 +1378,12 @@ fn math_drag_stop_entries(
     let mut stops = Vec::new();
     let mut islands = MathDragIslands::new();
     for stop in snapshot.math_text_drag_stops(page_index) {
-        let domain_id = math_text_domain_id(&stop.target, stop.token);
+        let island_id = math_text_domain_id(&stop.target, stop.token);
+        let domain_id = math_drag_domain_id(&stop.target, stop.token);
         let island = islands
-            .entry(domain_id.clone())
-            .or_insert_with(|| (stop.target.clone(), Vec::new()));
-        island.1.push((stop.order_utf8, stop.position.clone()));
+            .entry(island_id)
+            .or_insert_with(|| (stop.target.clone(), domain_id.clone(), Vec::new()));
+        island.2.push((stop.order_utf8, stop.position.clone()));
         stops.push(math_hit_stop_json(snapshot, page_index, &stop, &domain_id));
     }
     (stops, islands)
@@ -769,6 +1426,55 @@ fn math_hit_stop_json(
     })
 }
 
+/// 构造可由指针提交的公式树停靠点，并保留精确的序列路径。
+fn math_tree_drag_stop_json(
+    snapshot: &DocumentLayoutSnapshot,
+    page_index: usize,
+    stop: &PageMathTreeDragStop,
+) -> serde_json::Value {
+    serde_json::json!({
+        "domainId": "body",
+        "pageIndex": page_index,
+        "xPt": stop.caret.x_pt,
+        "y0Pt": stop.caret.y0_pt,
+        "y1Pt": stop.caret.y1_pt,
+        "position": {
+            "kind": "mathTree",
+            "domainId": "body",
+            "sessionId": snapshot.session_id.as_ref().map(ToString::to_string),
+            "pageIndex": page_index,
+            "xPt": stop.caret.x_pt,
+            "yPt": (stop.caret.y0_pt + stop.caret.y1_pt) / 2.0,
+            "documentGeneration": snapshot.document_generation.to_string(),
+            "fontGeneration": snapshot.font_generation.to_string(),
+            "offsetUtf8": stop.position.offset.to_string(),
+            "affinity": math_affinity_name(stop.position.affinity),
+            "visualAffinity": visual_affinity_name(stop.visual_affinity),
+            "target": math_target_json(&stop.target),
+            "treePath": stop.position.path.steps().iter().map(math_tree_path_step_json).collect::<Vec<_>>(),
+        },
+        "visualAffinity": visual_affinity_name(stop.visual_affinity),
+    })
+}
+
+/// 将公式树序列路径投影为 UI 可往返的稳定整数步骤。
+fn math_tree_path_step_json(step: &MathSequenceStep) -> serde_json::Value {
+    match step {
+        MathSequenceStep::Operand {
+            content_index,
+            operand_index,
+        } => serde_json::json!({
+            "kind": "operand",
+            "contentIndex": content_index,
+            "operandIndex": operand_index,
+        }),
+        MathSequenceStep::EnvironmentChildren { content_index } => serde_json::json!({
+            "kind": "environmentChildren",
+            "contentIndex": content_index,
+        }),
+    }
+}
+
 /// 为每个数学文本岛生成岛内相邻字素点的选区矩形条目。
 fn math_drag_segments(
     snapshot: &DocumentLayoutSnapshot,
@@ -776,7 +1482,7 @@ fn math_drag_segments(
     islands: MathDragIslands,
 ) -> Vec<serde_json::Value> {
     let mut segments = Vec::new();
-    for (domain_id, (target, mut points)) in islands {
+    for (_, (target, domain_id, mut points)) in islands {
         points.sort_unstable_by_key(|(offset, _)| *offset);
         points.dedup_by_key(|(offset, _)| *offset);
         for pair in points.windows(2) {
@@ -856,6 +1562,14 @@ fn math_text_domain_id(target: &MathEditTarget, token: u64) -> String {
         MathEditTarget::Block { block_id, align } => format!("block:{block_id}:{align}"),
     };
     format!("math:{target_id}:{token}")
+}
+
+/// InlineMath 的文本岛与树边界共用正文拖选域；块公式文本岛仍保持独立数学域。
+fn math_drag_domain_id(target: &MathEditTarget, token: u64) -> String {
+    match target {
+        MathEditTarget::Inline { .. } => "body".to_owned(),
+        MathEditTarget::Block { .. } => math_text_domain_id(target, token),
+    }
 }
 
 fn math_target_json(target: &MathEditTarget) -> serde_json::Value {
