@@ -1,6 +1,6 @@
 # 104 — Rust 1.100 与质量清理的后续项
 
-- 状态：implemented
+- 状态：done
 - 依赖：103
 - 优先级：P2
 - 创建 / 更新：2026-11-20 / 2026-11-21
@@ -82,7 +82,8 @@
 | 2026-11-20 | 锁定 `cmake-format --check` / `cmake-lint`（两个 CMake 文件）、clang-format（两个 C++ 文件） | 格式与 lint | 通过 |
 | 2026-11-21 | `cargo fmt --all -- --check`；`cargo format --check`；`cargo clippy --locked --workspace --all-targets -- -D warnings`；`cargo test --workspace --locked`；`cargo lint --check` | 全量门禁 | 通过：fmt/format ok；clippy 0；workspace 测试 1913 passed + 1 ignored，native CTest 20/20；lint 9 步通过 |
 | 2026-11-21 | 分领域评审 2 份 + 未参与实现的只读 final review | 发现项处理并复验 | 完成；必须修复项（Miri 记录指向、label 数量 12→11、验收勾选时序）与建议项（C++ 错误码断言前清空 error、miri 注释、codec 哨兵注释、Matrix 负例等）均已修复复验 |
-| — | PR CI 与合并后下一轮 Nightly `sanitizer matrix` | 外部验收 | 待提交 PR 后补记 |
+| 2026-11-21 | PR [#155](https://github.com/VibeSTEM/caret/pull/155) / Actions run [44774518879](https://github.com/VibeSTEM/caret/actions/runs/44774518879) | PR CI 通过 | 全部通过：check/build、format、clippy、cmake、layering、machete、qmllint、clang-tidy/includes/cppcheck、audit、math-backend；selector self-test 按路径规则跳过 |
+| 2026-11-21 | 合并后下一轮 Nightly `sanitizer matrix` | 恢复绿色 | 待观察；Linux TSan 与 macOS ASan/LSan 以该轮为准，失败按注释复查入口收敛 |
 
 ## 风险与回退
 
@@ -100,7 +101,8 @@
 - 2026-11-20：#145 删除旧 accent 常量与 `legacy_character` 字段，保留生产使用的 `accent_attribute`；矩阵样式默认值注释改写为构造期语义。
 - 2026-11-20：Linux TSan 排除从名字正则改为 `qt-qml-runtime` label（11 个引擎/窗口测试），保留 `App.HeadlessWindowLoads` 名字排除；`Qml.PreferencesWithoutRuntime`（不创建引擎）与 `Qml.FormatCheck` 保持运行。复查条件写入注释。
 - 2026-11-20：并行实现后由 lead 集成；全量门禁（fmt/format/clippy/workspace/lint）与 `cargo ub-check` 通过。两个分领域评审（native/sanitizer 与 math/document）及未参与实现的只读 final review 完成，发现项（记录指向、label 覆盖修正、测试错误码断言、注释措辞）已修复并复验。
+- 2026-11-21：PR #155 通过 CI（run 44774518879）并合并；任务关闭，Nightly sanitizer 矩阵作为合并后观察项保留。
 
 ## 完成摘要
 
-五项后续项已实现或形成明确结论：Miri nightly 升级并回填 `trim_prefix`（`cargo ub-check` 通过）、#149 快照三项必填、#145 旧数学符号清理、Qt TSan 排除按 label 收敛；依赖冷却期保持不启用并记录发布前复核条件。全量门禁（fmt/format/clippy/workspace 测试 1913 passed + 1 ignored、native CTest 20/20、lint）通过，`cargo ub-check` 在新 nightly 上通过；两个分领域评审与未参与实现的只读 final review 已完成，发现项修复后复验。PR CI 与合并后下一轮 Nightly `sanitizer matrix` 结果待补记。
+五项后续项已实现或形成明确结论：Miri nightly 升级并回填 `trim_prefix`（`cargo ub-check` 通过）、#149 快照三项必填、#145 旧数学符号清理、Qt TSan 排除按 label 收敛；依赖冷却期保持不启用并记录发布前复核条件。全量门禁（fmt/format/clippy/workspace 测试 1913 passed + 1 ignored、native CTest 20/20、lint）通过，`cargo ub-check` 在新 nightly 上通过；两个分领域评审与未参与实现的只读 final review 已完成，发现项修复后复验。PR #155 通过 CI 并合并；合并后下一轮 Nightly `sanitizer matrix` 作为外部观察项保留。
