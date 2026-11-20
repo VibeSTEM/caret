@@ -1,40 +1,36 @@
 //! 验证原子文件写入和失败后的旧文件保留。
 
 use super::{AtomicFileError, write_with};
+use core::mem::DropGuard;
 use std::cell::Cell;
 use std::fs;
 use std::io::{Error, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-struct TempDir {
-    root: PathBuf,
-}
+/// 测试目录的清理守卫。
+type TempDirGuard = DropGuard<PathBuf, fn(PathBuf)>;
 
-impl TempDir {
-    fn new(label: &str) -> std::io::Result<Self> {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |duration| duration.as_nanos());
-        let root = std::env::temp_dir().join(format!(
-            "caret-atomic-save-{}-{label}-{nonce}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&root)?;
-        Ok(Self { root })
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.root);
-    }
+/// 创建带唯一后缀的测试目录；守卫在作用域结束时递归删除该目录。
+fn temp_dir(label: &str) -> std::io::Result<(PathBuf, TempDirGuard)> {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    let root = std::env::temp_dir().join(format!(
+        "caret-atomic-save-{}-{label}-{nonce}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&root)?;
+    let guard: TempDirGuard = DropGuard::new(root.clone(), |root| {
+        let _ = fs::remove_dir_all(root);
+    });
+    Ok((root, guard))
 }
 
 #[test]
 fn failed_temporary_write_preserves_existing_file() -> Result<(), Box<dyn std::error::Error>> {
-    let directory = TempDir::new("write-failure")?;
-    let target = directory.root.join("document.cdoc");
+    let (directory, _cleanup) = temp_dir("write-failure")?;
+    let target = directory.join("document.cdoc");
     fs::write(&target, b"previous document")?;
 
     let result = write_with(
@@ -49,7 +45,7 @@ fn failed_temporary_write_preserves_existing_file() -> Result<(), Box<dyn std::e
 
     assert!(matches!(result, Err(AtomicFileError::Io(_))));
     assert_eq!(fs::read(&target)?, b"previous document");
-    let entries = fs::read_dir(&directory.root)?.count();
+    let entries = fs::read_dir(&directory)?.count();
     assert_eq!(entries, 1, "failed save must remove its temporary file");
     Ok(())
 }
@@ -81,8 +77,8 @@ fn missing_path_components_are_rejected_before_writing() {
 
 #[test]
 fn file_in_parent_path_is_preserved_without_writing() -> Result<(), Box<dyn std::error::Error>> {
-    let directory = TempDir::new("blocked-parent")?;
-    let blocker = directory.root.join("blocked");
+    let (directory, _cleanup) = temp_dir("blocked-parent")?;
+    let blocker = directory.join("blocked");
     fs::write(&blocker, b"existing file")?;
     let wrote = Cell::new(false);
     let result = write_with(
@@ -98,15 +94,15 @@ fn file_in_parent_path_is_preserved_without_writing() -> Result<(), Box<dyn std:
     assert!(matches!(result, Err(AtomicFileError::Io(_))));
     assert!(!wrote.get(), "parent failure must not reach the writer");
     assert_eq!(fs::read(&blocker)?, b"existing file");
-    assert_eq!(fs::read_dir(&directory.root)?.count(), 1);
+    assert_eq!(fs::read_dir(&directory)?.count(), 1);
     Ok(())
 }
 
 #[test]
 fn failed_replacement_preserves_target_directory_and_removes_temporary_file()
 -> Result<(), Box<dyn std::error::Error>> {
-    let directory = TempDir::new("rename-failure")?;
-    let target = directory.root.join("document.cdoc");
+    let (directory, _cleanup) = temp_dir("rename-failure")?;
+    let target = directory.join("document.cdoc");
     fs::create_dir(&target)?;
     let previous = target.join("previous.txt");
     fs::write(&previous, b"previous contents")?;
@@ -120,14 +116,14 @@ fn failed_replacement_preserves_target_directory_and_removes_temporary_file()
 
     assert!(matches!(result, Err(AtomicFileError::Io(_))));
     assert_eq!(fs::read(previous)?, b"previous contents");
-    assert_eq!(fs::read_dir(&directory.root)?.count(), 1);
+    assert_eq!(fs::read_dir(&directory)?.count(), 1);
     Ok(())
 }
 #[test]
 fn directory_sync_failure_reports_committed_content_with_warning()
 -> Result<(), Box<dyn std::error::Error>> {
-    let directory = TempDir::new("sync-warning")?;
-    let target = directory.root.join("settings.json");
+    let (directory, _cleanup) = temp_dir("sync-warning")?;
+    let target = directory.join("settings.json");
     fs::write(&target, b"previous")?;
     let result = write_with(
         &target,
@@ -143,17 +139,17 @@ fn directory_sync_failure_reports_committed_content_with_warning()
     let outcome = result.map_err(|error| format!("{error:?}"))?;
     assert!(outcome.durability_warning.is_some());
     assert_eq!(fs::read(&target)?, b"committed");
-    assert_eq!(fs::read_dir(&directory.root)?.count(), 1);
+    assert_eq!(fs::read_dir(&directory)?.count(), 1);
     Ok(())
 }
 
 #[test]
 fn unusable_temporary_filename_preserves_the_directory() -> Result<(), Box<dyn std::error::Error>> {
-    let directory = TempDir::new("long-filename")?;
-    let target = directory.root.join(format!("{}.cdoc", "a".repeat(512)));
+    let (directory, _cleanup) = temp_dir("long-filename")?;
+    let target = directory.join(format!("{}.cdoc", "a".repeat(512)));
 
     let result = super::write(&target, b"replacement");
     assert!(matches!(result, Err(AtomicFileError::Io(_))));
-    assert_eq!(fs::read_dir(&directory.root)?.count(), 0);
+    assert_eq!(fs::read_dir(&directory)?.count(), 0);
     Ok(())
 }

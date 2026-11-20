@@ -113,7 +113,7 @@ fn orchestrate() -> Result<(PathBuf, PathBuf), String> {
     let ninja = provision::resolve_ninja(&cmake)?;
     let target_triple = required_var("TARGET")?;
     let sdk_env = provision::windows_sdk_env(&target_triple)?;
-    let (ffi_include, ffi_staticlib) = ffi_artifacts(&out_dir)?;
+    let (ffi_include, ffi_staticlib) = ffi_artifacts(&out_dir, &target_root)?;
 
     let cxx_compiler = if cfg!(windows) {
         llvm.clang_cl.as_ref().ok_or("LLVM 缺少 clang-cl")?
@@ -269,7 +269,7 @@ fn locate_product(binary_dir: &Path, build_type: &str, exe_name: &str) -> Result
         })
 }
 
-fn ffi_artifacts(out_dir: &Path) -> Result<(PathBuf, PathBuf), String> {
+fn ffi_artifacts(out_dir: &Path, target_root: &Path) -> Result<(PathBuf, PathBuf), String> {
     let include = std::env::var_os("DEP_CARET_FFI_INCLUDE")
         .map(PathBuf::from)
         .ok_or_else(|| "Cargo 未提供 DEP_CARET_FFI_INCLUDE，caret-ffi 桥接头不可用".to_owned())?;
@@ -280,27 +280,34 @@ fn ffi_artifacts(out_dir: &Path) -> Result<(PathBuf, PathBuf), String> {
         ));
     }
 
-    let profile_dir = out_dir.ancestors().nth(3).ok_or_else(|| {
-        format!(
-            "无法从 launcher OUT_DIR 推导 profile：{}",
-            out_dir.display()
-        )
-    })?;
-    let deps_dir = profile_dir.join("deps");
-    let mut candidates = Vec::new();
-    for directory in [profile_dir, deps_dir.as_path()] {
-        let entries = fs::read_dir(directory)
-            .map_err(|error| format!("读取 caret-ffi 产物目录 {}：{error}", directory.display()))?;
-        candidates.extend(
-            entries
-                .filter_map(Result::ok)
-                .map(|entry| entry.path())
-                .filter(|path| {
-                    path.file_name()
-                        .and_then(|value| value.to_str())
-                        .is_some_and(ffi_names::is_caret_ffi_staticlib)
-                }),
-        );
+    let profile_dir = provision::artifact_dir(out_dir)?;
+    let mut candidates = ffi_staticlibs_in(&profile_dir)?;
+    // 非主 package 的 staticlib 留在 build-dir 的 unit 产物目录，不 uplift；
+    // 主 package 的 uplift 产物在上面直接命中。两种位置都只按当前布局查找。
+    let mut units_dirs = vec![profile_dir.join("build").join("caret-ffi")];
+    // 显式 `--target` 时构建脚本的 host 构建依赖单元位于 `<target>/<profile>/build`，
+    // 与目标产物目录 `<target>/<triple>/<profile>` 不同；build script 运行前已产出的是
+    // host 单元里的 staticlib，两个单元目录都要查找。
+    let profile = required_var("PROFILE")?;
+    let host_units_dir = target_root.join(profile).join("build").join("caret-ffi");
+    if host_units_dir != units_dirs[0] {
+        units_dirs.push(host_units_dir);
+    }
+    for units_dir in &units_dirs {
+        if !units_dir.is_dir() {
+            continue;
+        }
+        for entry in fs::read_dir(units_dir)
+            .map_err(|error| format!("读取 caret-ffi 构建目录 {}：{error}", units_dir.display()))?
+        {
+            let unit_out = entry
+                .map_err(|error| format!("读取 caret-ffi 构建目录项失败：{error}"))?
+                .path()
+                .join("out");
+            if unit_out.is_dir() {
+                candidates.extend(ffi_staticlibs_in(&unit_out)?);
+            }
+        }
     }
     candidates.sort_by_key(|path| {
         fs::metadata(path)
@@ -308,13 +315,27 @@ fn ffi_artifacts(out_dir: &Path) -> Result<(PathBuf, PathBuf), String> {
             .unwrap_or(SystemTime::UNIX_EPOCH)
     });
     let staticlib = candidates.into_iter().next_back().ok_or_else(|| {
-        format!(
-            "未找到 caret-ffi staticlib（检查 {} 与 {}）",
-            profile_dir.display(),
-            deps_dir.display()
-        )
+        let searched = std::iter::once(profile_dir.display().to_string())
+            .chain(units_dirs.iter().map(|dir| dir.display().to_string()))
+            .collect::<Vec<_>>()
+            .join("、");
+        format!("未找到 caret-ffi staticlib（已检查 {searched}）")
     })?;
     Ok((include, staticlib))
+}
+
+fn ffi_staticlibs_in(directory: &Path) -> Result<Vec<PathBuf>, String> {
+    let entries = fs::read_dir(directory)
+        .map_err(|error| format!("读取 caret-ffi 产物目录 {}：{error}", directory.display()))?;
+    Ok(entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|value| value.to_str())
+                .is_some_and(ffi_names::is_caret_ffi_staticlib)
+        })
+        .collect())
 }
 
 fn emit_translation_sources(i18n_dir: &Path, ts_dir: &Path) -> Result<(), String> {

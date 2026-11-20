@@ -10,8 +10,10 @@ publish = false
 [lints]
 workspace = true
 
-# caret-ffi 只经 build.rs 的 DEP_CARET_FFI_* 消费。普通依赖边必须留下，
-# cargo 1.95/1.98 不把纯 build-dependencies 的 links metadata 注入构建脚本。
+# caret-ffi 只经构建过程消费：普通依赖边提供 DEP_CARET_FFI_* links metadata
+# （Cargo 不把纯 build-dependencies 的 links metadata 注入构建脚本），
+# build-dependencies 边保证 build script 运行时 staticlib 已产出。两条边都不是
+# 目标代码引用，由这里和 workspace 的 cargo::unused_dependencies allow 压制误报。
 [package.metadata.cargo-machete]
 ignored = ["caret-ffi"]
 

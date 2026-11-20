@@ -1495,10 +1495,10 @@ fn align_projection_maps_empty_cells_before_delimiters() {
             .map(|offset| environment.start + offset)
             .unwrap_or_else(|| panic!("Align end marker should be in environment range"));
         assert!(!align.rows.is_empty());
-        for row in 0..align.rows.len() {
-            for cell in 0..align.rows[row].cells.len() {
+        for (row_index, row) in align.rows.iter().enumerate() {
+            for (cell_index, _cell) in row.cells.iter().enumerate() {
                 let range = align_map
-                    .cell_range(row, cell)
+                    .cell_range(row_index, cell_index)
                     .unwrap_or_else(|| panic!("cell range should exist"));
                 assert!(range.start <= range.end);
                 assert!(range.start >= environment.start);

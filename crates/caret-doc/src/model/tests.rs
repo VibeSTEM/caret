@@ -1168,3 +1168,41 @@ fn math_unknown_fields_are_rejected_only_on_their_retired_schema_node() {
 
     assert!(document.validate().is_ok());
 }
+
+#[test]
+fn non_current_math_schema_versions_are_rejected_by_typed_paths() {
+    // 直接 serde 解码（不经过 .cdoc envelope 的 raw 检查）也必须拒绝不匹配版本，
+    // 不做向前兼容；更高版本不得退化为 Opaque。
+    let tree_json = |version: u64| {
+        serde_json::json!({
+            "schemaVersion": version,
+            "root": {"id": "root", "content": []}
+        })
+    };
+    let block_json = |version: u64| {
+        serde_json::json!({
+            "type": "equation", "id": "equation", "mathTree": tree_json(version)
+        })
+    };
+    let current = u64::from(MATH_TREE_SCHEMA_VERSION);
+    assert!(serde_json::from_value::<Block>(block_json(current)).is_ok());
+    assert!(serde_json::from_value::<Block>(block_json(current + 1)).is_err());
+    assert!(serde_json::from_value::<Block>(block_json(current - 1)).is_err());
+
+    // 程序化构造的模型同样由 Document::validate 拒绝未来版本。
+    let mut document = Document::blank();
+    document.body.push(Block::Equation(Equation {
+        id: NodeId::generate(),
+        math_tree: MathTree {
+            schema_version: MATH_TREE_SCHEMA_VERSION + 1,
+            root: MathFlow {
+                id: NodeId::generate(),
+                content: Vec::new(),
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    }));
+    assert!(document.validate().is_err());
+}

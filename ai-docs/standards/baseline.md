@@ -1,6 +1,6 @@
 # 技术基线与版本决策
 
-更新日期：2026-11-06。下表是锁定版本。Rust、CMake、Ninja、LLVM、uv、hyperfine、DSL、Qt、CXX、native 工程和 GoogleTest SDK 已接入。GoogleTest 1.18.0 由 [016](../task/016-googletest-package.md) 独立生产并发布，消费摘要见 `native/cmake/googletest-sha256.json`。升级时以供给代码里的 URL 和 SHA256 为准，并在同一次提交里更新本表。
+更新日期：2026-11-20。下表是锁定版本。Rust、CMake、Ninja、LLVM、uv、hyperfine、DSL、Qt、CXX、native 工程和 GoogleTest SDK 已接入。GoogleTest 1.18.0 由 [016](../task/016-googletest-package.md) 独立生产并发布，消费摘要见 `native/cmake/googletest-sha256.json`。升级时以供给代码里的 URL 和 SHA256 为准，并在同一次提交里更新本表。
 
 ## 当前选择
 
@@ -9,7 +9,7 @@
 | 主验证平台 | macOS arm64 | 三平台 CI 覆盖构建，不代替实机窗口验收 |
 | C++ | 自有代码 C++20 | 编译器是托管 LLVM，不是系统 clang 的浮动版本 |
 | LLVM | 22.1.7 | Unix 用 clang / clang++，Windows 用 clang-cl；格式和静态检查用同一套 |
-| Rust | stable 1.99.0，edition 2024 | MSRV 1.99；工具链文件锁定 channel 和 rustfmt、clippy |
+| Rust | stable 1.100.0，edition 2024 | MSRV 1.100；工具链文件锁定 channel 和 rustfmt、clippy；升级与 build-dir 适配见 [103](../task/103-rust-1-100-upgrade.md) |
 | Cargo | 开发入口 | 调度构建、测试、格式、lint、覆盖率和打包 |
 | CMake + Ninja | CMake 4.4.3 + Ninja 1.13.2 | Cargo 供给固定资产。native 树的 `cmake_minimum_required` 沿用来源，当前为 3.22 |
 | Qt | 6.12.0 | qtbase、qtdeclarative、QtSvg、QtTools、QtScxml；Linux 附带与该 Qt 匹配的 ICU 73.2 |

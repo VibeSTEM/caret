@@ -1,3 +1,6 @@
+# LSan 抑制按任意栈帧的函数名做子串匹配（compiler-rt TemplateMatch），因此每项只写
+# 单个 Qt/系统函数名；复查时先确认未抑制报告的栈里是否含 caret 自有帧。
+
 # macOS 26 上 Qt 翻译初始化会留下进程级 CoreFoundation 偏好设置缓存。
 leak:CFPrefsPlistSource
 leak:synchronouslySendSystemMessage:andUserMessage:andDirectMessage
@@ -35,3 +38,17 @@ leak:_refreshMenuFontsIfNeeded
 
 # macOS 26 Nightly 的两笔泄漏报告来自 LaunchServices 通知注册回调。
 leak:LaunchServices::notifyd::NotifyToken::RegisterDispatch
+
+# macOS Nightly 的 Qml.ShellLoad 偶发泄漏（issue #152；run 44646139582 的
+# macos-latest job 135989089454 报 5736 字节、10 次分配）来自 Qt FileDialog/
+# 文件夹监视器与 macOS FSEvents 的进程级资源：QQuickFileDialog 打开时
+# QQuickFolderListModel 为当前文件夹创建 QFileSystemWatcher，FSEvents 回调和
+# libdispatch 源会保留自动释放池、CFNumber 和 dispatch 源直到进程退出。
+# 泄漏栈不含 caret 自有帧；未抑制报告保留在任务 103，Qt 更新或
+# FileDialog/文件监视器生命周期改变后复查。
+leak:QQuickFileDialog
+leak:QQuickFolderListModel::setFolder
+leak:QFileSystemWatcher::addPath
+# 符号名取自同一失败日志的 FSEvents 模块；另有两条分配栈只剩 FSEvents/
+# CoreFoundation 帧、没有 Qt 帧，靠这一帧抑制。
+leak:implementation_callback_rpc

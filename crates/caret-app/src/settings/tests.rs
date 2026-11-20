@@ -4,6 +4,8 @@ use super::{
     DEFAULT_THEME_ID, SETTINGS_SCHEMA_VERSION, SettingsError, SettingsService, UserSettings,
 };
 use crate::settings::preferences::{MAX_RECENT_PROJECTS, MINIMUM_WINDOW_WIDTH, PreferencesError};
+use core::mem::DropGuard;
+use std::path::PathBuf;
 
 fn service() -> SettingsService {
     SettingsService::builtin().unwrap_or_else(|error| panic!("{error}"))
@@ -97,31 +99,25 @@ fn recent_projects_are_deduplicated_ordered_and_bounded() -> Result<(), Preferen
     Ok(())
 }
 
-struct TempDir {
-    root: std::path::PathBuf,
-}
+/// 临时目录的清理守卫。
+type TempDirGuard = DropGuard<PathBuf, fn(PathBuf)>;
 
-impl TempDir {
-    fn new(label: &str) -> std::io::Result<Self> {
-        let base =
-            std::fs::canonicalize(std::env::temp_dir()).unwrap_or_else(|_| std::env::temp_dir());
-        let root = base.join(format!("caret-settings-{}-{label}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root)?;
-        Ok(Self { root })
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.root);
-    }
+/// 创建测试临时目录；守卫在作用域结束时递归删除该目录。
+fn temp_dir(label: &str) -> std::io::Result<(PathBuf, TempDirGuard)> {
+    let base = std::fs::canonicalize(std::env::temp_dir()).unwrap_or_else(|_| std::env::temp_dir());
+    let root = base.join(format!("caret-settings-{}-{label}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root)?;
+    let guard: TempDirGuard = DropGuard::new(root.clone(), |root| {
+        let _ = std::fs::remove_dir_all(root);
+    });
+    Ok((root, guard))
 }
 
 #[test]
 fn settings_file_round_trips_all_services() -> Result<(), Box<dyn std::error::Error>> {
-    let dir = TempDir::new("roundtrip")?;
-    let path = dir.root.join("settings.json");
+    let (dir, _cleanup) = temp_dir("roundtrip")?;
+    let path = dir.join("settings.json");
     let mut service_runtime = service();
     let mut candidate = service_runtime.current();
     candidate.language = "zh-Hans".to_owned();
@@ -142,8 +138,8 @@ fn settings_file_round_trips_all_services() -> Result<(), Box<dyn std::error::Er
 #[test]
 fn legacy_china_locale_loads_as_generic_simplified_chinese()
 -> Result<(), Box<dyn std::error::Error>> {
-    let dir = TempDir::new("legacy-language")?;
-    let path = dir.root.join("settings.json");
+    let (dir, _cleanup) = temp_dir("legacy-language")?;
+    let path = dir.join("settings.json");
     std::fs::write(
         &path,
         br#"{"schemaVersion":1,"themeId":"light","language":"zh-CN","windowWidth":1280,"windowHeight":720,"windowMaximized":true,"caretBlinkEnabled":true,"autoSaveEnabled":false,"recentProjectPaths":[]}"#,
@@ -158,8 +154,8 @@ fn legacy_china_locale_loads_as_generic_simplified_chinese()
 #[test]
 fn old_flat_settings_without_blink_flag_use_the_default() -> Result<(), Box<dyn std::error::Error>>
 {
-    let dir = TempDir::new("legacy-caret-blink")?;
-    let path = dir.root.join("settings.json");
+    let (dir, _cleanup) = temp_dir("legacy-caret-blink")?;
+    let path = dir.join("settings.json");
     std::fs::write(
         &path,
         r#"{"schemaVersion":1,"themeId":"light","language":"en","windowWidth":1280,"windowHeight":720,"windowMaximized":true,"recentProjectPaths":[]}"#,
@@ -172,21 +168,21 @@ fn old_flat_settings_without_blink_flag_use_the_default() -> Result<(), Box<dyn 
 
 #[test]
 fn failed_persistence_does_not_publish_the_candidate() -> Result<(), Box<dyn std::error::Error>> {
-    let dir = TempDir::new("commit-failure")?;
+    let (dir, _cleanup) = temp_dir("commit-failure")?;
     let mut service = service();
     let original = service.current();
     let mut candidate = original.clone();
     candidate.preferences.caret_blink_enabled = false;
 
-    assert!(service.commit_and_save(candidate, &dir.root).is_err());
+    assert!(service.commit_and_save(candidate, &dir).is_err());
     assert_eq!(service.current(), original);
     Ok(())
 }
 
 #[test]
 fn unknown_fields_are_rejected_and_quarantined() -> Result<(), Box<dyn std::error::Error>> {
-    let dir = TempDir::new("unknown-field")?;
-    let path = dir.root.join("settings.json");
+    let (dir, _cleanup) = temp_dir("unknown-field")?;
+    let path = dir.join("settings.json");
     std::fs::write(
         &path,
         r#"{"schemaVersion":1,"themeId":"light","language":"en","windowWidth":1280,"windowHeight":720,"windowMaximized":true,"recentProjectPaths":[],"futureSetting":true}"#,
@@ -198,16 +194,16 @@ fn unknown_fields_are_rejected_and_quarantined() -> Result<(), Box<dyn std::erro
         Err(super::SettingsFileError::Isolated { .. })
     ));
     assert_eq!(service.current(), original);
-    assert!(dir.root.join("settings.json.isolated").exists());
+    assert!(dir.join("settings.json.isolated").exists());
     Ok(())
 }
 
 #[test]
 fn invalid_settings_isolation_keeps_existing_quarantines() -> Result<(), Box<dyn std::error::Error>>
 {
-    let dir = TempDir::new("isolation-collision")?;
-    let path = dir.root.join("settings.json");
-    let existing = dir.root.join("settings.json.isolated");
+    let (dir, _cleanup) = temp_dir("isolation-collision")?;
+    let path = dir.join("settings.json");
+    let existing = dir.join("settings.json.isolated");
     std::fs::write(&existing, b"previous invalid settings")?;
     std::fs::write(&path, b"new invalid settings")?;
     let mut service = service();
@@ -219,7 +215,7 @@ fn invalid_settings_isolation_keeps_existing_quarantines() -> Result<(), Box<dyn
     let super::SettingsFileError::Isolated { quarantined, .. } = &error else {
         panic!("invalid file should have been isolated: {error}");
     };
-    assert_eq!(quarantined, &dir.root.join("settings.json.isolated-1"));
+    assert_eq!(quarantined, &dir.join("settings.json.isolated-1"));
     assert_eq!(std::fs::read(existing)?, b"previous invalid settings");
     assert_eq!(std::fs::read(quarantined)?, b"new invalid settings");
     assert!(!path.exists());
@@ -231,8 +227,8 @@ fn invalid_settings_isolation_keeps_existing_quarantines() -> Result<(), Box<dyn
 #[test]
 fn invalid_candidate_is_rejected_before_creating_a_settings_file()
 -> Result<(), Box<dyn std::error::Error>> {
-    let dir = TempDir::new("invalid-candidate")?;
-    let path = dir.root.join("settings.json");
+    let (dir, _cleanup) = temp_dir("invalid-candidate")?;
+    let path = dir.join("settings.json");
     let mut service = service();
     let before = service.current();
     let candidate = UserSettings {

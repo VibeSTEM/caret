@@ -1305,85 +1305,227 @@ fn paragraph_content_flow_requires_an_explicit_capability() -> Result<(), Box<dy
 }
 
 #[test]
-fn future_math_schema_opens_as_read_only_opaque_preview() -> Result<(), Box<dyn std::error::Error>>
-{
-    let cases = [
-        (
-            json!({
-                "type": "paragraph", "id": "paragraph", "inlines": [{
-                    "type": "inlineMath", "id": "inline", "mathTree": {
-                        "schemaVersion": 4,
-                        "root": {"id": "root", "kind": "row", "children": []}
-                    }
-                }]
-            }),
-            "caret.math.inline",
-        ),
-        (
-            json!({
-                "type": "equation", "id": "equation", "mathTree": {
-                    "schemaVersion": 4,
-                    "root": {"id": "root", "kind": "row", "children": []}
-                }
-            }),
-            "caret.math.equation",
-        ),
-        (
-            json!({
-                "type": "align", "id": "align", "rows": [{
-                    "id": "row", "cells": [{
-                        "schemaVersion": 4,
-                        "root": {"id": "root", "kind": "row", "children": []}
-                    }]
-                }]
-            }),
-            "caret.math.align",
-        ),
-        (
-            json!({
-                "type": "align", "id": "align", "source": "future source", "rows": [{
-                    "id": "row", "cells": [{
-                        "schemaVersion": 4,
-                        "root": {"id": "root", "content": []}
-                    }]
-                }]
-            }),
-            "caret.math.align",
-        ),
-        (
-            json!({
-                "type": "paragraph", "id": "paragraph", "inlines": [{
-                    "type": "inlineMath", "id": "inline", "mathTree": {
-                        "schemaVersion": 4,
-                        "root": {"id": "root", "kind": "future_kind", "children": []}
-                    }
-                }]
-            }),
-            "caret.math.inline",
-        ),
-    ];
-    for (node, feature) in cases {
-        let expected_align_source = node.get("source").and_then(Value::as_str);
-        let expected_node = node.clone();
+fn future_math_schema_is_rejected_as_format_error() -> Result<(), Box<dyn std::error::Error>> {
+    // 更高 schemaVersion 不做向前兼容：按格式错误拒绝，不再作为 Opaque 进入只读预览。
+    fn envelope(body: Value) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         let mut envelope = blank_envelope()?;
-        envelope["document"]["body"] = json!([node]);
+        envelope["document"]["body"] = json!([body]);
         envelope["requiredFeatures"] = json!([
-            feature,
+            "caret.math.align",
+            "caret.math.content-flow.v2",
+            "caret.math.equation",
+            "caret.math.inline",
+            "caret.paragraph.content-flow.v1",
             "caret.paragraph.layout-settings",
             "caret.text.default-font-size"
         ]);
-        let opened = open(envelope.to_string().as_bytes())?;
-        let OpenedDocument::SafePreview(preview) = opened else {
-            panic!("future or unknown math data must remain opaque and read-only");
-        };
-        assert!(!preview.can_save());
-        let preserved = preview.to_json_value()?;
-        assert!(preserved["document"]["body"][0].is_object());
-        if let Some(source) = expected_align_source {
-            assert_eq!(preserved["document"]["body"][0], expected_node);
-            assert_eq!(preserved["document"]["body"][0]["source"], source);
-        }
+        Ok(serde_json::to_vec(&envelope)?)
     }
+
+    let rejected = [
+        json!({
+            "type": "paragraph", "id": "paragraph", "inlines": [{
+                "type": "inlineMath", "id": "inline", "mathTree": {
+                    "schemaVersion": 4,
+                    "root": {"id": "root", "content": []}
+                }
+            }]
+        }),
+        json!({
+            "type": "equation", "id": "equation", "mathTree": {
+                "schemaVersion": 4,
+                "root": {"id": "root", "content": []}
+            }
+        }),
+        json!({
+            "type": "align", "id": "align", "rows": [{
+                "id": "row", "cells": [{
+                    "schemaVersion": 4,
+                    "root": {"id": "root", "content": []}
+                }]
+            }]
+        }),
+    ];
+    for node in rejected {
+        let Err(DocumentError::InvalidDocument(reason)) = open(&envelope(node)?) else {
+            panic!("future math schema must be rejected instead of opening as a preview");
+        };
+        assert!(
+            reason.contains("future math tree schema 4"),
+            "unexpected error: {reason}"
+        );
+    }
+
+    // 与 equation/inlineMath 一致：先报单元格的未来 schema 版本，再报 align.source
+    // 退役字段；两种顺序都拒绝，这里固定顺序以免不同载体给出相反的拒绝原因。
+    let align_with_source = json!({
+        "type": "align", "id": "align", "source": "future source", "rows": [{
+            "id": "row", "cells": [{
+                "schemaVersion": 4,
+                "root": {"id": "root", "content": []}
+            }]
+        }]
+    });
+    let Err(DocumentError::InvalidDocument(reason)) = open(&envelope(align_with_source)?) else {
+        panic!("future math schema inside a retired align carrier must be rejected");
+    };
+    assert!(
+        reason.contains("future math tree schema 4"),
+        "unexpected error: {reason}"
+    );
+    Ok(())
+}
+
+#[test]
+fn missing_or_non_integer_math_schema_version_is_rejected() -> Result<(), Box<dyn std::error::Error>>
+{
+    // 缺失或类型错误的 schemaVersion 不能绕过版本检查，也不再降级为 Opaque 预览。
+    let malformed_trees = [
+        json!({}),
+        json!({"schemaVersion": null, "root": {"id": "root", "content": []}}),
+        json!({"schemaVersion": "3", "root": {"id": "root", "content": []}}),
+        json!({"schemaVersion": 3.5, "root": {"id": "root", "content": []}}),
+    ];
+    for tree in malformed_trees {
+        let mut envelope = blank_envelope()?;
+        envelope["document"]["body"] = json!([{
+            "type": "equation", "id": "equation", "mathTree": tree
+        }]);
+        envelope["requiredFeatures"] = json!([
+            "caret.math.content-flow.v2",
+            "caret.math.equation",
+            "caret.paragraph.content-flow.v1",
+            "caret.paragraph.layout-settings",
+            "caret.text.default-font-size"
+        ]);
+        let Err(DocumentError::InvalidDocument(reason)) = open(envelope.to_string().as_bytes())
+        else {
+            panic!("malformed math schema version must be rejected instead of opening");
+        };
+        assert!(
+            reason.contains("math tree schema version is missing or not an integer"),
+            "unexpected error: {reason}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn current_schema_unknown_math_node_types_still_open_as_opaque_preview()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Opaque 只保留给未知节点类型/结构变体：当前 schemaVersion 下仍进入只读预览。
+    let unknown_contents = [
+        // 未知 MathContent.type
+        json!({"type": "futureContent", "payload": {"kind": "future"}}),
+        // 未知 environment scope（`page` 是已定义但未实现的 scope，这里用真正的未知值）
+        json!({
+            "type": "environment", "scope": "future_scope", "id": "future-scope",
+            "kind": "future_scope"
+        }),
+        // 未知 MathNodeKind
+        json!({"type": "math", "id": "future-node", "kind": "future_kind"}),
+        // 未知行内环境 kind
+        json!({
+            "type": "environment", "scope": "inline", "id": "future-environment",
+            "kind": "future_style", "children": []
+        }),
+    ];
+    for content in unknown_contents {
+        let expected_content = json!([content.clone()]);
+        let mut envelope = blank_envelope()?;
+        envelope["document"]["body"] = json!([{
+            "type": "equation", "id": "equation", "mathTree": {
+                "schemaVersion": 3,
+                "root": {"id": "root", "content": [content]}
+            }
+        }]);
+        envelope["requiredFeatures"] = json!([
+            "caret.math.content-flow.v2",
+            "caret.math.equation",
+            "caret.paragraph.content-flow.v1",
+            "caret.paragraph.layout-settings",
+            "caret.text.default-font-size"
+        ]);
+        let OpenedDocument::SafePreview(preview) = open(envelope.to_string().as_bytes())? else {
+            panic!("unknown math node types must remain opaque and read-only");
+        };
+        assert!(
+            preview
+                .reasons
+                .contains(&PreviewReason::UnsupportedNodeKind)
+        );
+        assert!(!preview.can_save());
+        // 未知节点按 Opaque 原样保留：预览 JSON 的整段内容必须与原始输入一致。
+        let preserved = preview.to_json_value()?;
+        assert_eq!(
+            preserved["document"]["body"][0]["mathTree"]["root"]["content"],
+            expected_content
+        );
+    }
+
+    // Align 单元格中的未知节点同样保留为 Opaque。
+    let mut envelope = blank_envelope()?;
+    envelope["document"]["body"] = json!([{
+        "type": "align", "id": "align", "rows": [{
+            "id": "row", "cells": [{
+                "schemaVersion": 3,
+                "root": {"id": "root", "content": [
+                    {"type": "math", "id": "future-node", "kind": "future_kind"}
+                ]}
+            }]
+        }]
+    }]);
+    envelope["requiredFeatures"] = json!([
+        "caret.math.align",
+        "caret.math.content-flow.v2",
+        "caret.paragraph.content-flow.v1",
+        "caret.paragraph.layout-settings",
+        "caret.text.default-font-size"
+    ]);
+    let OpenedDocument::SafePreview(preview) = open(envelope.to_string().as_bytes())? else {
+        panic!("unknown math node inside an Align cell must remain opaque and read-only");
+    };
+    assert!(
+        preview
+            .reasons
+            .contains(&PreviewReason::UnsupportedNodeKind)
+    );
+    Ok(())
+}
+
+#[test]
+fn align_unknown_cell_still_rejects_duplicate_known_ids() -> Result<(), Box<dyn std::error::Error>>
+{
+    // 未知节点让 Align 整块转为 Opaque 前，已知节点之间的重复 ID 仍必须拒绝。
+    let mut envelope = blank_envelope()?;
+    envelope["document"]["body"] = json!([{
+        "type": "align", "id": "align", "rows": [{
+            "id": "row", "cells": [
+                {
+                    "schemaVersion": 3,
+                    "root": {"id": "duplicate-root", "content": [
+                        {"type": "math", "id": "future-node", "kind": "future_kind"}
+                    ]}
+                },
+                {
+                    "schemaVersion": 3,
+                    "root": {"id": "duplicate-root", "content": []}
+                }
+            ]
+        }]
+    }]);
+    envelope["requiredFeatures"] = json!([
+        "caret.math.align",
+        "caret.math.content-flow.v2",
+        "caret.paragraph.content-flow.v1",
+        "caret.paragraph.layout-settings",
+        "caret.text.default-font-size"
+    ]);
+    assert!(matches!(
+        open(envelope.to_string().as_bytes()),
+        Err(DocumentError::InvalidDocument(reason))
+            if reason.contains("invalid known math encoding: align mathTree")
+    ));
     Ok(())
 }
 

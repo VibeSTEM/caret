@@ -1,6 +1,6 @@
 # Task 索引
 
-更新日期：2026-11-18。非平凡改动先从[模板](task/_template.md)建 task，在本索引登记，然后再动代码。行为规格在[架构](architecture/README.md)和[规范](standards/README.md)。2026-10-25 删去未执行的旧队列，现行任务从 001 重新编号。
+更新日期：2026-11-20。非平凡改动先从[模板](task/_template.md)建 task，在本索引登记，然后再动代码。行为规格在[架构](architecture/README.md)和[规范](standards/README.md)。2026-10-25 删去未执行的旧队列，现行任务从 001 重新编号。
 
 ## 使用方式
 
@@ -134,5 +134,6 @@
 | 100 | 测试 | [测试确定性与诊断基础设施](task/100-test-determinism-and-diagnostics.md) | P2 | 093 | L | done |
 | 101 | native 架构 | [native 边界协议与渲染期重复校验收敛](task/101-native-protocol-and-render-revalidation.md) | P2 | 093 | L | done |
 | 102 | 质量清理 | [Brooks sweep 后续收敛项](task/102-sweep-followup-convergence.md) | P2 | 093、095 | M | done |
+| 103 | 工具链 | [Rust 1.100 工具链升级与 Nightly sanitizer 恢复](task/103-rust-1-100-upgrade.md) | P0 | 001、006、070 | M | done |
 
 分类描述任务主题；里程碑和实施边界写在对应任务中。任务拆分、状态变更及执行记录以各任务文档为准。

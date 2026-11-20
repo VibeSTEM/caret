@@ -423,17 +423,13 @@ fn math_tree_paths_are_vertical_neighbors(
             );
         }
     }
-    if candidate.len() == current.len() + 1
+    candidate.len() == current.len() + 1
         && candidate.starts_with(current)
         && matches!(
             candidate.last(),
             Some(MathSequenceStep::Operand { content_index, .. })
                 if *content_index == current_offset || content_index.saturating_add(1) == current_offset
         )
-    {
-        return true;
-    }
-    false
 }
 
 #[cfg(test)]
