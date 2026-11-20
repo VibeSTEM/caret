@@ -7,11 +7,13 @@ use std::collections::BTreeMap;
 
 use caret_doc::{
     InlineEnvironment, InlineEnvironmentKind, MATH_ACCENTS, MATH_MATRIX_STYLES, MathContent,
-    MathFlow, MathNode, MathNodeKind as K, MathTree, NodeId, Run, TextFlow,
+    MathFlow, MathNode, MathNodeKind as K, MathTree, NodeId, OpaqueNode, Run, TextFlow,
 };
+use serde_json::{Value, json};
 
 use crate::{
-    MathInputKind, MathInputStatus, MathParseError, ParsedMath, ProjectedMath, classify_input,
+    MAX_MATH_SOURCE_BYTES, MathFragment, MathFragmentError, MathInputKind, MathInputStatus,
+    MathLossReason, MathParseError, ParsedMath, ProjectedMath, classify_input,
     input_body_range_for_edit, is_incomplete_input_prefix, parse, serialize_align, serialize_tree,
 };
 
@@ -1839,4 +1841,810 @@ fn serializes_edited_trees() {
     base.text = Some("ab".to_owned());
     assert_eq!(serialize_tree(&tree), "{ab}^{2}");
     assert_eq!(K::Superscript, root_node_mut(&mut tree).kind);
+}
+
+fn first_math_mut(flow: &mut MathFlow) -> &mut MathNode {
+    match flow.content.first_mut() {
+        Some(MathContent::Math(node)) => node,
+        other => panic!("expected first math node, got {other:?}"),
+    }
+}
+
+fn fragment(kind: MathInputKind, source: &str) -> MathFragment {
+    MathFragment::parse(source, kind)
+        .unwrap_or_else(|error| panic!("{source:?} should parse as {kind:?}: {error}"))
+}
+
+fn fragment_shape(fragment: &MathFragment) -> String {
+    match fragment.math() {
+        ParsedMath::Tree(tree) => shape(&tree.root),
+        ParsedMath::Align(align) => align
+            .rows
+            .iter()
+            .map(|row| {
+                row.cells
+                    .iter()
+                    .map(|cell| shape(&cell.root))
+                    .collect::<Vec<_>>()
+                    .join(" &")
+            })
+            .collect::<Vec<_>>()
+            .join(" \\\\ "),
+    }
+}
+
+fn expect_loss(fragment: &MathFragment, path: &str, reason: MathLossReason) {
+    let error = match fragment.to_tex() {
+        Ok(tex) => panic!("expected loss, got success: {tex:?}"),
+        Err(error) => error,
+    };
+    let MathFragmentError::Loss(loss) = error else {
+        panic!("expected loss, got {error:?}");
+    };
+    assert_eq!(loss.path().to_string(), path);
+    assert_eq!(loss.reason(), &reason);
+}
+
+fn tree_fragment(tree: MathTree) -> MathFragment {
+    MathFragment::from_math(MathInputKind::Equation, ParsedMath::Tree(tree))
+        .unwrap_or_else(|error| panic!("tree model should be consistent: {error}"))
+}
+
+fn align_fragment(align: caret_doc::Align) -> MathFragment {
+    MathFragment::from_math(MathInputKind::Align, ParsedMath::Align(align))
+        .unwrap_or_else(|error| panic!("align model should be consistent: {error}"))
+}
+
+#[test]
+fn math_fragment_round_trips_each_host_kind() {
+    let cases = [
+        (MathInputKind::Inline, r"x^2 + \frac{a}{b}"),
+        (MathInputKind::Inline, r"\text{if $x$ ok}"),
+        (MathInputKind::Equation, r"\left( x \right)"),
+        (
+            MathInputKind::Equation,
+            r"\begin{matrix} a & b \\ c & d \end{matrix}",
+        ),
+        (MathInputKind::Equation, r"\textcolor{#ff0000}x"),
+        (
+            MathInputKind::Equation,
+            r"\vec{x} + \overleftrightarrow{AB}",
+        ),
+        (MathInputKind::Equation, r"\mathbb{R} + \boldsymbol{x}"),
+        (MathInputKind::Equation, r"\text{\textbf{ab}}"),
+        (MathInputKind::Equation, r"\text{\textsf{ab}}"),
+        (
+            MathInputKind::Equation,
+            r"\operatorname{foo}(x) + \mathrm{abc}",
+        ),
+        (
+            MathInputKind::Align,
+            r"\begin{aligned} a &= b \\ c &= d \end{aligned}",
+        ),
+    ];
+    for (kind, source) in cases {
+        let original = fragment(kind, source);
+        assert_eq!(original.kind(), kind);
+        let tex = original
+            .to_tex()
+            .unwrap_or_else(|error| panic!("{source}: {error}"));
+        let reparsed = fragment(kind, &tex);
+        assert_eq!(
+            fragment_shape(&original),
+            fragment_shape(&reparsed),
+            "{source} → {tex}"
+        );
+        assert_eq!(
+            reparsed
+                .to_tex()
+                .unwrap_or_else(|error| panic!("{tex}: {error}")),
+            tex,
+            "{source}"
+        );
+    }
+}
+
+fn environment_fingerprints(fragment: &MathFragment) -> Vec<String> {
+    fn flow(flow: &MathFlow, out: &mut Vec<String>) {
+        for content in &flow.content {
+            content_item(content, out);
+        }
+    }
+    fn content_item(content: &MathContent, out: &mut Vec<String>) {
+        match content {
+            MathContent::Math(node) => {
+                for operand in &node.children {
+                    flow(operand, out);
+                }
+            }
+            MathContent::Environment(environment) => {
+                out.push(format!("{:?}{:?}", environment.kind, environment.props));
+                for child in &environment.children {
+                    content_item(child, out);
+                }
+            }
+            MathContent::Text(_) | MathContent::SoftBreak(_) | MathContent::Opaque(_) => {}
+        }
+    }
+    let mut out = Vec::new();
+    match fragment.math() {
+        ParsedMath::Tree(tree) => flow(&tree.root, &mut out),
+        ParsedMath::Align(align) => {
+            for row in &align.rows {
+                for cell in &row.cells {
+                    flow(&cell.root, &mut out);
+                }
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn math_fragment_round_trips_environment_properties() {
+    for source in [
+        r"\text{\textbf{ab}}",
+        r"\text{\textmd{ab}}",
+        r"\text{\textit{ab}}",
+        r"\text{\textup{ab}}",
+        r"\text{\textsf{ab}}",
+        r"\text{\texttt{ab}}",
+        r"\text{\textrm{ab}}",
+    ] {
+        let original = fragment(MathInputKind::Equation, source);
+        let tex = original
+            .to_tex()
+            .unwrap_or_else(|error| panic!("{source}: {error}"));
+        let reparsed = fragment(MathInputKind::Equation, &tex);
+        assert_eq!(
+            environment_fingerprints(&original),
+            environment_fingerprints(&reparsed),
+            "{source} → {tex}"
+        );
+        assert_eq!(
+            reparsed
+                .to_tex()
+                .unwrap_or_else(|error| panic!("{tex}: {error}")),
+            tex
+        );
+    }
+}
+
+#[test]
+fn math_fragment_normalizes_transparent_wrappers_and_empty_groups() {
+    let plain = fragment(MathInputKind::Equation, "x");
+    let plain_tex = plain
+        .to_tex()
+        .unwrap_or_else(|error| panic!("plain: {error}"));
+
+    let mut wrapped = tree("x");
+    let original = std::mem::take(&mut wrapped.root.content);
+    let content_flow = MathFlow {
+        id: NodeId::generate(),
+        content: original,
+        extra: Default::default(),
+    };
+    wrapped.root.content = vec![MathContent::Math(MathNode {
+        id: NodeId::generate(),
+        kind: K::Row,
+        text: None,
+        attributes: Default::default(),
+        children: vec![content_flow],
+        extra: Default::default(),
+    })];
+    assert_eq!(
+        tree_fragment(wrapped)
+            .to_tex()
+            .unwrap_or_else(|error| panic!("row wrapper: {error}")),
+        plain_tex
+    );
+
+    let mut wrapped = tree("x");
+    let original = std::mem::take(&mut wrapped.root.content);
+    let content_flow = MathFlow {
+        id: NodeId::generate(),
+        content: original,
+        extra: Default::default(),
+    };
+    wrapped.root.content = vec![MathContent::Math(MathNode {
+        id: NodeId::generate(),
+        kind: K::Style,
+        text: None,
+        attributes: Default::default(),
+        children: vec![content_flow],
+        extra: Default::default(),
+    })];
+    assert_eq!(
+        tree_fragment(wrapped)
+            .to_tex()
+            .unwrap_or_else(|error| panic!("style wrapper: {error}")),
+        plain_tex
+    );
+
+    let mut empty_root = tree("x");
+    empty_root.root.content.clear();
+    assert_eq!(
+        tree_fragment(empty_root)
+            .to_tex()
+            .unwrap_or_else(|error| panic!("empty flow: {error}")),
+        ""
+    );
+
+    let mut group = tree("x");
+    let original = std::mem::take(&mut group.root.content);
+    let content_flow = MathFlow {
+        id: NodeId::generate(),
+        content: original,
+        extra: Default::default(),
+    };
+    group.root.content = vec![MathContent::Math(MathNode {
+        id: NodeId::generate(),
+        kind: K::Group,
+        text: None,
+        attributes: Default::default(),
+        children: vec![content_flow],
+        extra: Default::default(),
+    })];
+    let group_tex = tree_fragment(group)
+        .to_tex()
+        .unwrap_or_else(|error| panic!("group: {error}"));
+    assert_eq!(group_tex, format!("{{{plain_tex}}}"));
+
+    // 空 Group 归一为 `{}`（解析回来是空槽位），不写入非法或空输出。
+    let mut empty_group = tree("x");
+    empty_group.root.content = vec![MathContent::Math(MathNode {
+        id: NodeId::generate(),
+        kind: K::Group,
+        text: None,
+        attributes: Default::default(),
+        children: Vec::new(),
+        extra: Default::default(),
+    })];
+    assert_eq!(
+        tree_fragment(empty_group)
+            .to_tex()
+            .unwrap_or_else(|error| panic!("empty group: {error}")),
+        "{}"
+    );
+}
+
+#[test]
+fn math_fragment_rejects_softbreak_metadata() {
+    let mut model = tree("x");
+    model
+        .root
+        .content
+        .push(MathContent::SoftBreak(caret_doc::SoftBreak {
+            extra: BTreeMap::from([("future".to_owned(), Value::Null)]),
+        }));
+    expect_loss(
+        &tree_fragment(model),
+        "root.content[1]",
+        MathLossReason::ExtraField,
+    );
+
+    let mut model = tree(r"\textbf{\textit{ab}}");
+    match model.root.content.first_mut() {
+        Some(MathContent::Environment(environment)) => match environment.children.first_mut() {
+            Some(MathContent::Environment(inner)) => {
+                inner.extra.insert("future".to_owned(), Value::Null);
+            }
+            other => panic!("expected nested environment, got {other:?}"),
+        },
+        other => panic!("expected environment, got {other:?}"),
+    }
+    expect_loss(
+        &tree_fragment(model),
+        "root.content[0].environmentChild[0]",
+        MathLossReason::ExtraField,
+    );
+}
+
+#[test]
+fn math_fragment_rejects_dimensions_outside_the_parser_budget() {
+    let mut model = tree(r"\hspace{1em}");
+    match model.root.content.first_mut() {
+        Some(MathContent::Math(node)) => {
+            node.attributes.insert(
+                "valueNumerator".to_owned(),
+                "99999999999999999999".to_owned(),
+            );
+            node.attributes
+                .insert("valueDenominator".to_owned(), "1".to_owned());
+        }
+        other => panic!("expected space node, got {other:?}"),
+    }
+    expect_loss(
+        &tree_fragment(model),
+        "root.content[0]",
+        MathLossReason::UnrepresentableDimension,
+    );
+
+    let mut model = tree(r"\rule{0em}{1em}");
+    match model.root.content.first_mut() {
+        Some(MathContent::Math(node)) => {
+            node.attributes
+                .insert("heightNumerator".to_owned(), i128::MAX.to_string());
+            node.attributes
+                .insert("depthNumerator".to_owned(), i128::MAX.to_string());
+            node.attributes
+                .insert("heightDenominator".to_owned(), "1".to_owned());
+            node.attributes
+                .insert("depthDenominator".to_owned(), "1".to_owned());
+        }
+        other => panic!("expected strut node, got {other:?}"),
+    }
+    expect_loss(
+        &tree_fragment(model),
+        "root.content[0]",
+        MathLossReason::UnrepresentableDimension,
+    );
+
+    // i128 极值：检查阶段自身也不得 panic 或调用未受保护的格式化。
+    let mut model = tree(r"\hspace{1em}");
+    match model.root.content.first_mut() {
+        Some(MathContent::Math(node)) => {
+            node.attributes
+                .insert("valueNumerator".to_owned(), i128::MAX.to_string());
+            node.attributes
+                .insert("valueDenominator".to_owned(), "3".to_owned());
+        }
+        other => panic!("expected space node, got {other:?}"),
+    }
+    expect_loss(
+        &tree_fragment(model),
+        "root.content[0]",
+        MathLossReason::UnrepresentableDimension,
+    );
+
+    let mut model = tree(r"\hspace{1em}");
+    match model.root.content.first_mut() {
+        Some(MathContent::Math(node)) => {
+            node.attributes.insert(
+                "valueNumerator".to_owned(),
+                (10_i128.pow(38) - 1).to_string(),
+            );
+            node.attributes
+                .insert("valueDenominator".to_owned(), 10_i128.pow(38).to_string());
+        }
+        other => panic!("expected space node, got {other:?}"),
+    }
+    expect_loss(
+        &tree_fragment(model),
+        "root.content[0]",
+        MathLossReason::UnrepresentableDimension,
+    );
+
+    let mut model = tree(r"\rule{0em}{1em}");
+    match model.root.content.first_mut() {
+        Some(MathContent::Math(node)) => {
+            node.attributes
+                .insert("heightNumerator".to_owned(), i128::MAX.to_string());
+            node.attributes
+                .insert("depthNumerator".to_owned(), i128::MIN.to_string());
+            node.attributes
+                .insert("heightDenominator".to_owned(), "1".to_owned());
+            node.attributes
+                .insert("depthDenominator".to_owned(), "1".to_owned());
+        }
+        other => panic!("expected strut node, got {other:?}"),
+    }
+    expect_loss(
+        &tree_fragment(model),
+        "root.content[0]",
+        MathLossReason::UnrepresentableDimension,
+    );
+
+    // 未约分且只能写成超预算 mu 的合法属性必须拒绝，不能通过 em 回退。
+    let mut model = tree(r"\hspace{1em}");
+    match model.root.content.first_mut() {
+        Some(MathContent::Math(node)) => {
+            node.attributes
+                .insert("valueNumerator".to_owned(), "300000000000000000".to_owned());
+            node.attributes
+                .insert("valueDenominator".to_owned(), "3".to_owned());
+        }
+        other => panic!("expected space node, got {other:?}"),
+    }
+    expect_loss(
+        &tree_fragment(model),
+        "root.content[0]",
+        MathLossReason::UnrepresentableDimension,
+    );
+
+    // 解析器产生的常规 em/mu 尺寸仍可无损序列化并再解析。
+    for source in [
+        r"\hspace{1em}",
+        r"\hspace{1.5em}",
+        r"\hspace{6mu}",
+        r"\rule{0em}{1em}",
+        r"\rule[-1.5em]{0em}{2em}",
+    ] {
+        let positive = fragment(MathInputKind::Equation, source);
+        let tex = positive
+            .to_tex()
+            .unwrap_or_else(|error| panic!("{source}: {error}"));
+        assert_eq!(
+            fragment(MathInputKind::Equation, &tex)
+                .to_tex()
+                .unwrap_or_else(|error| panic!("{source} → {tex}: {error}")),
+            tex
+        );
+    }
+}
+
+#[test]
+fn math_fragment_rejects_font_environment_without_family() {
+    let mut model = tree(r"\textbf{ab}");
+    match model.root.content.first_mut() {
+        Some(MathContent::Environment(environment)) => {
+            *environment = caret_doc::InlineEnvironment {
+                id: environment.id.clone(),
+                kind: InlineEnvironmentKind::Font,
+                definition_id: None,
+                props: BTreeMap::new(),
+                children: environment.children.clone(),
+                extra: Default::default(),
+            };
+        }
+        other => panic!("expected environment, got {other:?}"),
+    }
+    expect_loss(
+        &tree_fragment(model),
+        "root.content[0]",
+        MathLossReason::MissingFontFamily,
+    );
+}
+
+#[test]
+fn math_fragment_normalizes_empty_align() {
+    let align = caret_doc::Align {
+        id: NodeId::generate(),
+        rows: Vec::new(),
+        extra: Default::default(),
+    };
+    let tex = align_fragment(align)
+        .to_tex()
+        .unwrap_or_else(|error| panic!("empty align: {error}"));
+    assert_eq!(tex, r"\begin{aligned}\end{aligned}");
+
+    let empty_cell = MathTree {
+        schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+        root: MathFlow {
+            id: NodeId::generate(),
+            content: Vec::new(),
+            extra: Default::default(),
+        },
+        extra: Default::default(),
+    };
+    let align = caret_doc::Align {
+        id: NodeId::generate(),
+        rows: vec![caret_doc::MathAlignRow {
+            id: NodeId::generate(),
+            cells: vec![empty_cell],
+            extra: Default::default(),
+        }],
+        extra: Default::default(),
+    };
+    let tex = align_fragment(align)
+        .to_tex()
+        .unwrap_or_else(|error| panic!("empty cell align: {error}"));
+    assert_eq!(tex, r"\begin{aligned}\end{aligned}");
+}
+
+#[test]
+fn math_fragment_accepts_empty_fragments() {
+    for kind in [MathInputKind::Inline, MathInputKind::Equation] {
+        let empty = fragment(kind, "");
+        let tex = empty
+            .to_tex()
+            .unwrap_or_else(|error| panic!("empty: {error}"));
+        assert_eq!(tex, "");
+        let reparsed = fragment(kind, &tex);
+        assert_eq!(
+            reparsed
+                .to_tex()
+                .unwrap_or_else(|error| panic!("reparsed empty: {error}")),
+            tex
+        );
+        assert_eq!(fragment_shape(&empty), fragment_shape(&reparsed));
+    }
+}
+
+#[test]
+fn math_fragment_rejects_extra_metadata_with_model_paths() {
+    let mut model = tree(r"\frac{x}{y}");
+    model.extra.insert("future".to_owned(), Value::Null);
+    expect_loss(&tree_fragment(model), "root", MathLossReason::ExtraField);
+
+    let mut model = tree(r"\frac{x}{y}");
+    model.root.extra.insert("future".to_owned(), Value::Null);
+    expect_loss(&tree_fragment(model), "root", MathLossReason::ExtraField);
+
+    let mut model = tree(r"\frac{x}{y}");
+    first_math_mut(&mut model.root)
+        .children
+        .first_mut()
+        .map(first_math_mut)
+        .unwrap_or_else(|| panic!("fraction numerator"))
+        .extra
+        .insert("future".to_owned(), Value::Null);
+    expect_loss(
+        &tree_fragment(model),
+        "root.content[0].operand[0].content[0]",
+        MathLossReason::ExtraField,
+    );
+}
+
+#[test]
+fn math_fragment_rejects_text_metadata() {
+    let mut model = tree(r"\text{ab}");
+    match model.root.content.first_mut() {
+        Some(MathContent::Text(text)) => {
+            text.runs[0].props.insert("weight".to_owned(), json!(700));
+        }
+        other => panic!("expected text flow, got {other:?}"),
+    }
+    expect_loss(
+        &tree_fragment(model),
+        "root.content[0].textRun[0]",
+        MathLossReason::TextRunProperty,
+    );
+
+    let mut model = tree(r"\text{ab}");
+    match model.root.content.first_mut() {
+        Some(MathContent::Text(text)) => text.runs[0].language = Some("en".to_owned()),
+        other => panic!("expected text flow, got {other:?}"),
+    }
+    expect_loss(
+        &tree_fragment(model),
+        "root.content[0].textRun[0]",
+        MathLossReason::TextRunLanguage,
+    );
+
+    let mut model = tree(r"\text{ab}");
+    match model.root.content.first_mut() {
+        Some(MathContent::Text(text)) => text.extra.insert("future".to_owned(), Value::Null),
+        other => panic!("expected text flow, got {other:?}"),
+    };
+    expect_loss(
+        &tree_fragment(model),
+        "root.content[0]",
+        MathLossReason::ExtraField,
+    );
+
+    let mut model = tree(r"\text{ab}");
+    match model.root.content.first_mut() {
+        Some(MathContent::Text(text)) => text.runs.clear(),
+        other => panic!("expected text flow, got {other:?}"),
+    }
+    expect_loss(
+        &tree_fragment(model),
+        "root.content[0]",
+        MathLossReason::TextFlowWithoutRuns,
+    );
+}
+
+#[test]
+fn math_fragment_rejects_unexpressible_environment_metadata() {
+    let mut model = tree(r"\textbf{ab}");
+    match model.root.content.first_mut() {
+        Some(MathContent::Environment(environment)) => {
+            environment.extra.insert("future".to_owned(), Value::Null);
+        }
+        other => panic!("expected environment, got {other:?}"),
+    }
+    expect_loss(
+        &tree_fragment(model),
+        "root.content[0]",
+        MathLossReason::ExtraField,
+    );
+
+    let mut model = tree(r"\textbf{ab}");
+    match model.root.content.first_mut() {
+        Some(MathContent::Environment(environment)) => {
+            environment.definition_id = Some("theme-template".to_owned());
+        }
+        other => panic!("expected environment, got {other:?}"),
+    }
+    expect_loss(
+        &tree_fragment(model),
+        "root.content[0]",
+        MathLossReason::EnvironmentTemplateReference,
+    );
+
+    let mut model = tree(r"\textbf{ab}");
+    match model.root.content.first_mut() {
+        Some(MathContent::Environment(environment)) => {
+            environment
+                .props
+                .insert("unknown".to_owned(), Value::Bool(true));
+        }
+        other => panic!("expected environment, got {other:?}"),
+    }
+    expect_loss(
+        &tree_fragment(model),
+        "root.content[0]",
+        MathLossReason::EnvironmentProperty {
+            key: "unknown".to_owned(),
+        },
+    );
+
+    let mut model = tree(r"\textsf{ab}");
+    match model.root.content.first_mut() {
+        Some(MathContent::Environment(environment)) => {
+            environment
+                .props
+                .insert("fontFamily".to_owned(), json!("Latin Modern Math"));
+        }
+        other => panic!("expected environment, got {other:?}"),
+    }
+    expect_loss(
+        &tree_fragment(model),
+        "root.content[0]",
+        MathLossReason::UnsupportedFontFamily {
+            family: "Latin Modern Math".to_owned(),
+        },
+    );
+}
+
+#[test]
+fn math_fragment_rejects_opaque_content() {
+    let model = MathTree {
+        schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+        root: MathFlow {
+            id: NodeId::generate(),
+            content: vec![MathContent::Opaque(OpaqueNode {
+                raw: json!({"kind": "future"}),
+            })],
+            extra: Default::default(),
+        },
+        extra: Default::default(),
+    };
+    expect_loss(
+        &tree_fragment(model),
+        "root.content[0]",
+        MathLossReason::OpaqueContent,
+    );
+}
+
+#[test]
+fn math_fragment_rejects_align_metadata() {
+    let mut align = match parse(
+        r"\begin{aligned} a &= b \end{aligned}",
+        MathInputKind::Align,
+    ) {
+        Ok(ParsedMath::Align(align)) => align,
+        other => panic!("expected align: {other:?}"),
+    };
+    align.extra.insert("future".to_owned(), Value::Null);
+    expect_loss(&align_fragment(align), "root", MathLossReason::ExtraField);
+
+    let mut align = match parse(
+        r"\begin{aligned} a &= b \end{aligned}",
+        MathInputKind::Align,
+    ) {
+        Ok(ParsedMath::Align(align)) => align,
+        other => panic!("expected align: {other:?}"),
+    };
+    align.rows[0].extra.insert("future".to_owned(), Value::Null);
+    expect_loss(
+        &align_fragment(align),
+        "root.row[0]",
+        MathLossReason::ExtraField,
+    );
+
+    let mut align = match parse(
+        r"\begin{aligned} a &= b \end{aligned}",
+        MathInputKind::Align,
+    ) {
+        Ok(ParsedMath::Align(align)) => align,
+        other => panic!("expected align: {other:?}"),
+    };
+    align.rows[0].cells[0]
+        .extra
+        .insert("future".to_owned(), Value::Null);
+    expect_loss(
+        &align_fragment(align),
+        "root.row[0].cell[0]",
+        MathLossReason::ExtraField,
+    );
+}
+
+#[test]
+fn math_fragment_rejects_invalid_models() {
+    let mut model = tree("x");
+    first_math_mut(&mut model.root)
+        .attributes
+        .insert("atomClass".to_owned(), "bogus".to_owned());
+    assert!(matches!(
+        tree_fragment(model).to_tex(),
+        Err(MathFragmentError::Validation(_))
+    ));
+
+    let mut model = tree("x");
+    model.schema_version = caret_doc::MATH_TREE_SCHEMA_VERSION + 1;
+    assert!(matches!(
+        tree_fragment(model).to_tex(),
+        Err(MathFragmentError::Validation(_))
+    ));
+}
+
+#[test]
+fn math_fragment_preserves_parse_error_classification() {
+    assert!(matches!(
+        MathFragment::parse(
+            &"x".repeat(MAX_MATH_SOURCE_BYTES + 1),
+            MathInputKind::Inline
+        ),
+        Err(MathFragmentError::Parse(
+            MathParseError::InputTooLong { .. }
+        ))
+    ));
+    assert!(matches!(
+        MathFragment::parse(r"\tag{1}", MathInputKind::Equation),
+        Err(MathFragmentError::Parse(
+            MathParseError::UnsupportedNumbering { .. }
+        ))
+    ));
+    assert!(matches!(
+        MathFragment::parse(r"\[x\]", MathInputKind::Inline),
+        Err(MathFragmentError::Parse(
+            MathParseError::InputKindMismatch {
+                expected: MathInputKind::Inline
+            }
+        ))
+    ));
+    assert!(matches!(
+        MathFragment::parse("}", MathInputKind::Inline),
+        Err(MathFragmentError::Parse(MathParseError::Parse { .. }))
+    ));
+}
+
+#[test]
+fn math_fragment_reports_nesting_limits() {
+    let mut source = String::from("x");
+    for _ in 0..40 {
+        source = format!(r"\frac{{{source}}}{{y}}");
+    }
+    assert!(matches!(
+        MathFragment::parse(&source, MathInputKind::Equation),
+        Err(MathFragmentError::Parse(
+            MathParseError::InputTooDeep { .. }
+        ))
+    ));
+}
+
+#[test]
+fn math_fragment_rejects_inconsistent_model_kind() {
+    let align = match parse(
+        r"\begin{aligned} a &= b \end{aligned}",
+        MathInputKind::Align,
+    ) {
+        Ok(ParsedMath::Align(align)) => align,
+        other => panic!("expected align: {other:?}"),
+    };
+    assert_eq!(
+        MathFragment::from_math(MathInputKind::Inline, ParsedMath::Align(align)),
+        Err(MathFragmentError::KindMismatch {
+            kind: MathInputKind::Inline
+        })
+    );
+    let tree = tree("x");
+    assert_eq!(
+        MathFragment::from_math(MathInputKind::Align, ParsedMath::Tree(tree)),
+        Err(MathFragmentError::KindMismatch {
+            kind: MathInputKind::Align
+        })
+    );
+}
+
+#[test]
+fn math_fragment_loss_does_not_mutate_the_model() {
+    let mut model = tree("x");
+    model.extra.insert("future".to_owned(), Value::Null);
+    let fragment = tree_fragment(model);
+    let before = fragment.clone();
+    assert!(fragment.to_tex().is_err());
+    assert_eq!(fragment, before);
 }

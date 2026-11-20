@@ -10,6 +10,7 @@
 mod backend;
 mod dimension;
 mod fonts;
+mod fragment;
 pub mod layout;
 mod parser;
 mod projection;
@@ -20,6 +21,10 @@ use std::{fmt, ops::Range};
 
 use caret_doc::{Align, MathTree};
 
+pub use fragment::{
+    MathFragment, MathFragmentError, MathFragmentLoss, MathFragmentPath, MathFragmentPathStep,
+    MathLossReason,
+};
 pub use parser::{classify_input, is_incomplete_input_prefix, parse, parse_projection};
 pub use projection::{
     AlignSourceMap, MathContentSourceMap, MathFlowSourceMap, MathProjection, MathRangeSourceMap,
