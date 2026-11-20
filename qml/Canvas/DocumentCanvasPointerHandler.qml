@@ -291,10 +291,7 @@ Item {
             dragRebaseIdentity = currentDragIdentity();
             Qt.callLater(function () {
                 if (inputHandler.dragRebasePending && inputHandler.dragRebaseIdentityIsCurrent())
-                    inputHandler.rebaseDragPreview(
-                                inputHandler.dragRebasePressPosition,
-                                inputHandler.dragRebaseCurrentPosition,
-                                false);
+                    inputHandler.rebaseDragPreview(inputHandler.dragRebasePressPosition, inputHandler.dragRebaseCurrentPosition, false);
                 else if (inputHandler.dragRebasePending)
                     inputHandler.resetDragPreview();
             });

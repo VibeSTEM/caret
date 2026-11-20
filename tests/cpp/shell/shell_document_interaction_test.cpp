@@ -2425,11 +2425,11 @@ void ShellDocumentInteractionTest::mathTextDragUsesSharedPreviewAndCommitProtoco
     pointer_handler->setProperty("dragRebasePending", true);
     pointer_handler->setProperty(
         "dragRebaseIdentity",
-        QVariantMap{{QStringLiteral("documentGeneration"), view_model->documentGeneration()},
-                    {QStringLiteral("fontGeneration"), view_model->fontGeneration()},
-                    {QStringLiteral("sessionId"), view_model->sessionId()},
-                    {QStringLiteral("layoutRevision"),
-                     QString::number(view_model->layoutRevision())}});
+        QVariantMap{
+            {QStringLiteral("documentGeneration"), view_model->documentGeneration()},
+            {QStringLiteral("fontGeneration"), view_model->fontGeneration()},
+            {QStringLiteral("sessionId"), view_model->sessionId()},
+            {QStringLiteral("layoutRevision"), QString::number(view_model->layoutRevision())}});
     const QVariantMap replacement_open_result = view_model->openDocument(path);
     QVERIFY2(replacement_open_result.value(QStringLiteral("valid")).toBool(),
              qPrintable(replacement_open_result.value(QStringLiteral("error")).toString()));

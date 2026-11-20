@@ -73,7 +73,7 @@ LayoutViewModel::LayoutViewModel(QObject* parent) : QObject(parent) {
     m_math_text_highlight_rects = parsed_snapshot.math_text_highlight_rects;
     m_document_generation = parsed_snapshot.document_generation;
     m_font_generation = parsed_snapshot.font_generation;
-    m_session_id = std::move(parsed_snapshot.session_id);
+    m_session_id = parsed_snapshot.session_id;
 }
 
 QString LayoutViewModel::documentOperationMessage(const QString& error) const {
