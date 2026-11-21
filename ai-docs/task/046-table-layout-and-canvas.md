@@ -80,6 +80,12 @@
 - 2026-11-22：性能基线：新增 50×8（400 cell）整表布局 Criterion 场景 `rust/table_layout`，记录输入/配置，不设时限门槛。
 - 2026-11-22：完成剩余实现切片：单元格环境布局、native 表格键位、编辑态虚线辅助线（engine→app→native/QML）、辅助线严格校验与 50×8 性能基线。待办：整表复制/结构删除与跨 cell 范围（当前显式拒绝，按 012 集成计划后续接入）、真实窗口人工验收、领域评审 + 独立 final review、PR/CI。
 
+## 性能基线与验证记录
+
+| 日期 | 场景/命令 | 输入与配置 | 实际结果 |
+| --- | --- | --- | --- |
+| 2026-11-22 | `cargo bench -p caret-engine --bench table_layout_criterion -- --sample-size 10 --measurement-time 2` | 50×8=400 个单元格，每格一段约 62 字符英文；1200 centipoints；默认 A4 页面与系统字体目录；Criterion `rust/table_layout/fifty_by_eight_full_layout`（release bench profile，macOS arm64） | 全表布局 **8.97–9.33 ms**（中位约 9.11 ms，43.9–44.6 Kcell/s）；仅记录基线，不设时限门槛、不对跨机器比较。 |
+
 ## 当前状态与后续切片
 
 已完成 S1（可插入→布局→绘制→命中/光标，命令面板与 native 表键入口）：`caret-layout::table` 网格几何、分页表格片段、engine 表格测量/放置、cell 段落行位置与矩形裁剪、page_glyphs 文本与边框、hit/caret/range 同源几何、`\table` 与 Alt+T/Shift+Tab/行列插入/删除行列意图、codec `table` kind。engine 954、caret-app 354、workspace 测试与 clippy 通过。
