@@ -3,7 +3,7 @@
 - 状态：in-progress
 - 依赖：024、026、027、030
 - 优先级：P2
-- 创建 / 更新：2026-10-29 / 2026-10-30
+- 创建 / 更新：2026-10-29 / 2026-11-21
 
 ## 目标与背景
 
@@ -48,7 +48,7 @@
 - [x] Qt CPU benchmark 覆盖视口跨页/可见页范围变化，并清楚声明离屏测试边界。
 - [x] Criterion throughput 与各测试实际处理工作量一致。
 - [x] Nightly artifact 含 Criterion 原始统计结果，并使用唯一 run ID 命名、保留 30 天。
-- [ ] Qt GPU nightly 远端执行已核验实际 RHI backend、renderer 与 GPU timestamp 能力；软件 renderer 不表述为物理 GPU 测量。
+- [x] Qt GPU nightly 远端执行已核验实际 RHI backend、renderer 与 GPU timestamp 能力；软件 renderer 不表述为物理 GPU 测量。
 - [x] macOS 真实窗口已对 10 万与 100 万字符文档执行打开、输入和删除，并确认 100 万字符文档跨页滚动与内容绘制。
 - [ ] 真实窗口的可信端到端操作延迟仍待通过帧/性能采集工具测量；辅助功能调用耗时不能代替应用延迟。
 - [x] 所有已实施优化均有相同条件下的前后数据；未验证项明确标注。
@@ -65,6 +65,7 @@
 | 2026-10-29 | Xcode Instruments `xctrace` Animation Hitches；尝试附加当前 Caret 进程 | 采集真实窗口帧卡顿样本 | 已确认 Xcode 模板可用，但本机运行环境不能把桌面应用映射到可附加进程（`Cannot find process matching name`）；没有生成追踪样本，真实帧延迟仍未测。 |
 | 2026-10-29 | `cargo test --locked -p caret-app single_paragraph_undo_and_redo_publish_incremental_layout_deltas`、`cargo test --locked -p caret-engine` | 局部撤销/重做增量结果与领域历史回归通过 | 通过；app 定向测试 1/1，engine 单元测试 91/91。 |
 | 2026-10-29 | macOS release app；1,000,001 码点 `/Users/yuki/Documents/caret/test_1.cdoc` 和 100,001 码点临时副本 | 真实窗口打开并显示大文档；验证输入、删除和换页，避免修改原始测试文档 | 两个规模均打开并绘制多语言内容，1M 文档可滚动查看后续页面。100k 临时副本和 1M 原文件均完成人工输入、退格和两次撤销，标题状态恢复为 `Saved`；Autosave 关闭，原始 1M 文件内容未写回。未使用帧采集器；操作链计时包含桌面事件和辅助功能刷新，不作为应用延迟数据。 |
+| 2026-11-21 | GitHub Actions Nightly [44865061216](https://github.com/VibeSTEM/caret/actions/runs/44865061216) 的 `Qt headless GPU performance sample (ubuntu)`，artifact `qt-gpu-performance-44865061216-1/qt-gpu.log` | 远端核验 RHI backend、renderer 与 GPU timestamp 能力；软件 renderer 如实记录 | 通过：`api=OpenGL`，`renderer=Mesa llvmpipe (LLVM 21.1.8, 256 bits) 4.5 (Compatibility Profile) Mesa 26.0.8-1ubuntu0.3`，`device_type=unknown`，`gpu_time_supported=true`，`gpu_timestamp_available=true`，31 个 timestamp 样本（中位 2944.696 µs）；该 runner 为软件 renderer，不能表述为物理 GPU 测量。 |
 
 > 外部 1M 文档的实测文本为 1,000,001 个 Unicode 码点，不等于基准夹具固定的 1,000,000 字符。
 
@@ -94,7 +95,8 @@ Criterion 跨机器数据不可直接作为硬门槛；基准应保存原始数�
 - 2026-10-29：修正打开基准的吞吐量仅标记完整解码/打开操作；单字素删除移出整篇吞吐分组，并记录外部 `.cdoc` 的字节和已知文本字符数。撤销/重做和保存快照基准固定覆盖 100k/1M 字符。
 - 2026-10-29：Qt CPU suite 增加 400 页视口跨页滚动合成场景；把页/字形/选区状态安装计入跨页场景计时。Nightly Rust CPU artifact 额外保留 `target/criterion/**/new/*.json`，30 天过期，独立于 PR/default CI。修复性能 job shell 对前序基准失败可能被后续命令掩盖的问题。
 - 2026-10-29：独立 final review 指出 Session 析构误计时和 Qt 跨页更新未计时；改用 `iter_batched_ref + PerIteration`、将场景安装纳入计时并重跑同口径对照。复审确认修复，完整 diff 无新增问题。
+- 2026-11-21：核对 Ubuntu nightly 的 Qt GPU artifact，RHI backend、软件 renderer 与 GPU timestamp 能力已可核验，关闭对应验收项；真实窗口可信端到端延迟仍待采集，任务保持 in-progress。
 
 ## 完成摘要
 
-基准入口、统计归档和单段撤销/重做优化已完成并取得同口径本机对比。已在真实窗口验证 100k/1M 打开、输入和删除，并检查 1M 跨页滚动。可信端到端延迟与 Ubuntu nightly 的 Qt RHI renderer/GPU timestamp 核验仍待完成。合成离屏数据不替代这些验证。
+基准入口、统计归档和单段撤销/重做优化已完成并取得同口径本机对比。已在真实窗口验证 100k/1M 打开、输入和删除，并检查 1M 跨页滚动；Ubuntu nightly 的 Qt RHI/GPU timestamp 能力已核验（软件 renderer）。可信端到端操作延迟仍待完成。合成离屏数据不替代这些验证。
