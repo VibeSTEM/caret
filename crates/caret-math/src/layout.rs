@@ -164,6 +164,8 @@ pub struct MathNodeBox {
     pub baseline: f64,
     /// 该节点所在数学样式的有效字号（pt），供树原生光标继续继承。
     pub font_size_pt: Option<f64>,
+    /// 该盒所在视觉结构槽的嵌套深度；透明/格式化包装不增加。
+    pub structural_depth: u32,
 }
 
 /// 排版结果。颜色为 `None` 的项使用正文颜色。
@@ -393,6 +395,7 @@ fn layout_align_internal<'a>(
                 is_flow: false,
                 is_container: false,
                 font_size_pt: None,
+                structural_depth: 0,
             }),
             kind: BackendNodeKind::Row,
             text: None,
@@ -422,6 +425,7 @@ fn layout_align_internal<'a>(
             is_flow: false,
             is_container: false,
             font_size_pt: None,
+            structural_depth: 0,
         }),
         kind: BackendNodeKind::Matrix,
         text: None,
@@ -460,6 +464,7 @@ fn layout_nodes<'a>(
         requested_text_family_missing: false,
         text_tokens: std::collections::HashSet::new(),
         math_text_style: Default::default(),
+        slot_depth: 0,
     };
     converter.ctx.host_table_id = host_table_id;
     if let Some(row_grid) = host_row_grid {
@@ -597,6 +602,7 @@ fn layout_nodes<'a>(
                         height,
                         baseline: y + node_baseline,
                         font_size_pt: position.font_size_pt,
+                        structural_depth: position.structural_depth,
                     });
                 }
             }

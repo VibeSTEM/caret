@@ -1383,6 +1383,7 @@ fn text_islands_follow_editable_flow_boundaries() {
                 is_flow: false,
                 is_container: false,
                 font_size_pt: None,
+                structural_depth: 0,
             }),
             kind: crate::backend::BackendNodeKind::TextSpace,
             text: None,
@@ -1939,6 +1940,7 @@ fn coalescing_container_boxes_preserves_distinct_paths_and_first_occurrence_orde
         height: 10.0,
         baseline: 8.0,
         font_size_pt: None,
+        structural_depth: 0,
     };
     let mut nodes = vec![
         make_box(vec![MathPathStep::Content(0)], 0.0, 1.0),

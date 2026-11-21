@@ -162,6 +162,8 @@ pub(crate) struct NodePosition {
     pub(crate) is_container: bool,
     /// 当前数学样式的字号；序列化投影不携带布局字号。
     pub(crate) font_size_pt: Option<f64>,
+    /// 进入视觉结构槽的嵌套深度；透明/格式化包装不增加该深度。
+    pub(crate) structural_depth: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -218,6 +220,7 @@ pub(crate) fn flow_nodes_for_layout_with_templates(
         is_flow: true,
         is_container: false,
         font_size_pt: None,
+        structural_depth: 0,
     });
     let children = if flow.content.is_empty() {
         Vec::new()
@@ -321,6 +324,7 @@ fn content_nodes(
                     is_flow: false,
                     is_container: true,
                     font_size_pt: None,
+                    structural_depth: 0,
                 }),
                 kind: MathNodeKind::TextStyle,
                 text: None,
@@ -399,6 +403,7 @@ fn position(
         is_flow,
         is_container: false,
         font_size_pt: None,
+        structural_depth: 0,
     })
 }
 
