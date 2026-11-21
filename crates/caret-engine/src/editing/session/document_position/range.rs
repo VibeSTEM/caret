@@ -413,8 +413,14 @@ impl Session {
     ) -> Result<(), EditError> {
         for block in blocks {
             match block {
-                Block::Table(_) => {
-                    return Err(EditError::UnsupportedTableContent);
+                Block::Table(table) => {
+                    // 表格尚未作为范围对象；只有范围真正覆盖整表时拒绝，避免
+                    // 含表文档的无关结构选区被一刀切禁用。
+                    let unit = range_block_unit(&table.id);
+                    if matches!(self.block_unit_is_covered(start, end, &unit), Ok(true)) {
+                        return Err(EditError::UnsupportedTableContent);
+                    }
+                    continue;
                 }
                 Block::Environment(environment) => {
                     let Some(unit) = self.block_range_unit(block) else {

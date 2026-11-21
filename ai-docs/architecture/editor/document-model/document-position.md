@@ -4,7 +4,7 @@
 
 ## 位置
 
-`Pos` 是文本宿主中的文本边界坐标，其身份由 story ID、终止节点稳定 ID、UTF-8 字节偏移和逻辑边界亲和性组成；它不单独表示空 Inline 内部状态或 Block 虚拟边界。有类型祖先路径（`EnvironmentBody(environmentId)`、`TableCell(tableId, cellId)`、`Paragraph(paragraphId)` 或 `EnvironmentTitle(environmentId, paragraphId)`）可作为可重建的定位与校验投影，不使用数组下标。节点 ID 在文档内唯一，索引可从 ID 重建当前路径；解析器验证路径段类型和父子关系。插入、删除、替换、移动、拆分、合并和解除环境都通过事务返回位置映射；跨父移动保留节点 ID，但旧祖先路径不再作为目标路径。偏移按目标段落逻辑文本的 UTF-8 字节计数。Run 边界和行内 EnvironmentNode 嵌套不改变偏移单位；给定偏移所属的真实 InlineEnvironment 链和 Run 属性派生范围分别从内容树/Run props 计算；适配后的当前环境视图不得给 Run 范围伪造节点身份。Rust 内以 UTF-8 字节作为规范存储单位，键盘左右移动在连续文本中按同一 Unicode 版本的 extended grapheme cluster 移动，不允许落在文本字素簇内部；Qt/C++ UTF-16 索引只在 FFI 边界映射。
+`Pos` 是文本宿主中的文本边界坐标，其身份由 story ID、终止节点稳定 ID、UTF-8 字节偏移和逻辑边界亲和性组成；它不单独表示空 Inline 内部状态或 Block 虚拟边界。有类型祖先路径（`EnvironmentBody(environmentId)`、`TableCell(tableId, rowId, cellId)`、`Paragraph(paragraphId)` 或 `EnvironmentTitle(environmentId, paragraphId)`）可作为可重建的定位与校验投影，不使用数组下标；表格实现以稳定 ID 重建路径，行/列下标只作同一快照内的文档顺序键，不持久化、不跨代复用。单元格内文本位置使用独立 Story（table/row/cell 身份），跨单元格文本位置不构成可比较范围：不属同一 Story 时原子拒绝；跨 cell 的选择/删除由 046 以结构范围对象接入。节点 ID 在文档内唯一，索引可从 ID 重建当前路径；解析器验证路径段类型和父子关系。插入、删除、替换、移动、拆分、合并和解除环境都通过事务返回位置映射；跨父移动保留节点 ID，但旧祖先路径不再作为目标路径。偏移按目标段落逻辑文本的 UTF-8 字节计数。Run 边界和行内 EnvironmentNode 嵌套不改变偏移单位；给定偏移所属的真实 InlineEnvironment 链和 Run 属性派生范围分别从内容树/Run props 计算；适配后的当前环境视图不得给 Run 范围伪造节点身份。Rust 内以 UTF-8 字节作为规范存储单位，键盘左右移动在连续文本中按同一 Unicode 版本的 extended grapheme cluster 移动，不允许落在文本字素簇内部；Qt/C++ UTF-16 索引只在 FFI 边界映射。
 
 具有独立边界语义的 Block 与 Inline 焦点共用三态分类：`外前`、`内部(宿主局部位置)`、`外后`。这是三种状态类型，不是固定三个光标坐标；内部位置由宿主局部结构决定。单个空 InlineEnvironment 或单个空编辑槽只有一个内部插入点；复合 Block 即使内容为空，也可因多个 cell、标题或子宿主拥有多个合法内部位置。若宿主没有合法内部编辑位置，适配器不得伪造 caret。外侧位置即使映射到同一文档偏移，也必须与内部位置保持可区分。普通 Paragraph 使用真实 TextMap 首尾位置，不额外制造虚拟 Block 外侧停靠；复杂 Block 的 `外前/外后` 保存稳定宿主身份和侧向，内部位置由 Section 子树、Equation MathEdit、Align 行/单元格等适配器提供。
 
@@ -30,7 +30,7 @@ Paragraph 是 `Block` 的简单变体，使用完整的 Paragraph/TextMap 位置
 
 跨宿主比较的两个端点必须绑定同一个 Session 与 document generation。快照在事务后失效；映射成功后重新构造快照再比较，不得把旧快照只按 ID 或偏移重新解析。源码草稿还须匹配所属 Session 内的草稿身份与内容修订，因草稿改动不推进 document generation。
 
-顺序由文档树的父级路径、同级顺序和宿主内坐标共同推导。多个宿主边界若指向同一编辑间隙且没有不同的操作目标，应规范为一个文档位置（例如 Section 最后子块的外后与 Section 内部终点、相邻 Block 之间的前后侧）。需要通过方向进入特定宿主时，由转换器结合相邻顺序恢复目标；父容器自身的外侧边界仍与子树边界可区分。段落序号可用于 Paragraph 导航，但不是全树全序；稳定 ID 用于身份而不是排序。索引或位置解析器必须覆盖嵌套块、标题、空容器、连续公式块及其边界；对于不属于同一可排序 Story、结构已变化或代际不匹配的位置，应显式映射或原子拒绝，不能靠任取一个 Paragraph、ID 字典序或全树临时猜测顺序。
+顺序由文档树的父级路径、同级顺序和宿主内坐标共同推导。多个宿主边界若指向同一编辑间隙且没有不同的操作目标，应规范为一个文档位置（例如 Section 最后子块的外后与 Section 内部终点、相邻 Block 之间的前后侧）。需要通过方向进入特定宿主时，由转换器结合相邻顺序恢复目标；父容器自身的外侧边界仍与子树边界可区分。段落序号可用于 Paragraph 导航，但不是全树全序；稳定 ID 用于身份而不是排序。索引或位置解析器必须覆盖嵌套块、标题、空容器、连续公式块及其边界；对于不属于同一可排序 Story、结构已变化或代际不匹配的位置，应显式映射或原子拒绝，不能靠任取一个 Paragraph、ID 字典序或全树临时猜测顺序。同一表格内若需要投影顺序，使用行优先（row-major）快照顺序键；它只服务定位/导航派生，不替代跨宿主范围协议。
 
 物理节点的外前/外后顺序从节点真实 slot 推导，同一有序序列里两个相邻节点的外侧边界可归一为同一间隙；父节点外后必须排在其所有后代之后。该物理边界次序本身不证明光标可到达，实际位置还须通过对应宿主 adapter 校验。MathTree 内部先按类型化 MathSequencePath 和所属内容序列边界比较；同一 Math TextFlow 内按合法字素边界比较 UTF-8 偏移，不同 TextFlow 通过结构路径比较。源码 UTF-8 偏移、TextFlow 路径及 MathTree 位置属于不同坐标载体，只有 adapter 证明同一宿主、同一代且映射唯一时才能跨载体比较，禁止直接比较裸偏移或节点 ID。
 

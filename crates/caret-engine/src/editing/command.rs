@@ -20,6 +20,13 @@ pub(crate) mod command_ids {
     pub(crate) const TEXT_INSERT_TWO_CHARACTER_WIDTH_SPACE: &str =
         "text.insert.two_character_width_space";
     pub(crate) const INSERT_INLINE_MATH: &str = "insert.inline_math";
+    pub(crate) const INSERT_TABLE: &str = "insert.table";
+    pub(crate) const TABLE_INSERT_ROW_BEFORE: &str = "table.insert_row_before";
+    pub(crate) const TABLE_INSERT_ROW_AFTER: &str = "table.insert_row_after";
+    pub(crate) const TABLE_DELETE_ROW: &str = "table.delete_row";
+    pub(crate) const TABLE_INSERT_COL_BEFORE: &str = "table.insert_col_before";
+    pub(crate) const TABLE_INSERT_COL_AFTER: &str = "table.insert_col_after";
+    pub(crate) const TABLE_DELETE_COL: &str = "table.delete_col";
     pub(crate) const INSERT_EQUATION: &str = "insert.equation";
     pub(crate) const INSERT_ALIGN: &str = "insert.align";
     pub(crate) const STRUCT_SECTION_CREATE: &str = "struct.section.create";
@@ -221,13 +228,13 @@ impl Command {
             Self::EnterMath(_) => "math.enter",
             Self::SetMathTextSelection { .. } => "math.text_selection.set",
             Self::InsertParagraphBreak => command_ids::TEXT_SPLIT_PARAGRAPH,
-            Self::InsertTable => "insert.table",
-            Self::TableInsertRow(Direction::Forward) => "table.insert_row_after",
-            Self::TableInsertRow(Direction::Backward) => "table.insert_row_before",
-            Self::TableDeleteRow => "table.delete_row",
-            Self::TableInsertColumn(Direction::Forward) => "table.insert_col_after",
-            Self::TableInsertColumn(Direction::Backward) => "table.insert_col_before",
-            Self::TableDeleteColumn => "table.delete_col",
+            Self::InsertTable => command_ids::INSERT_TABLE,
+            Self::TableInsertRow(Direction::Forward) => command_ids::TABLE_INSERT_ROW_AFTER,
+            Self::TableInsertRow(Direction::Backward) => command_ids::TABLE_INSERT_ROW_BEFORE,
+            Self::TableDeleteRow => command_ids::TABLE_DELETE_ROW,
+            Self::TableInsertColumn(Direction::Forward) => command_ids::TABLE_INSERT_COL_AFTER,
+            Self::TableInsertColumn(Direction::Backward) => command_ids::TABLE_INSERT_COL_BEFORE,
+            Self::TableDeleteColumn => command_ids::TABLE_DELETE_COL,
             Self::Delete(_) => "text.delete",
             Self::MoveCaret(_) => "caret.move",
             Self::MoveStructure(Direction::Forward) => "struct.next",

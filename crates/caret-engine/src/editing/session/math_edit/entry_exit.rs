@@ -731,9 +731,10 @@ impl Session {
             return Err(EditError::CompositionPending);
         }
         let focus = self.selection.focus.clone();
-        if !matches!(focus.story, StoryId::Body | StoryId::TableCell { .. })
-            || self.selection.anchor != focus
-        {
+        if matches!(focus.story, StoryId::TableCell { .. }) {
+            return Err(EditError::UnsupportedTableCellMath);
+        }
+        if focus.story != StoryId::Body || self.selection.anchor != focus {
             return Err(EditError::InvalidPosition);
         }
         let location = self
@@ -1080,6 +1081,9 @@ impl Session {
         &mut self,
         direction: Direction,
     ) -> Result<Effect, EditError> {
+        if self.table_context().is_some() {
+            return Err(EditError::UnsupportedTableCellMath);
+        }
         if let Some(position) = self.host_caret_position.clone()
             && position.kind() == HostCaretKind::Block
             && let Some((block_id, _)) = position.as_outside()

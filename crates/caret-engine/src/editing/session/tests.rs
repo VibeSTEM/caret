@@ -4,7 +4,8 @@ use super::*;
 use crate::editing::{DocumentRangeEndpoint, EditorKey, EnvironmentSource, StructureSelection};
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, DocumentFontTarget, InlineEnvironment,
-    InlineEnvironmentKind, NodeId, Paragraph, ParagraphContent, Run, Table, TextFlow,
+    InlineEnvironmentKind, NodeId, Paragraph, ParagraphContent, Run, Table, TableCell, TableRow,
+    TextFlow,
 };
 use std::collections::BTreeMap;
 use unicode_segmentation::UnicodeSegmentation;
@@ -2520,6 +2521,18 @@ fn table_cell_enter_splits_inside_the_cell_transaction() {
     )
     .unwrap_or_else(|| panic!("cell blocks must resolve"));
     assert_eq!(cell_blocks.len(), 2);
+    let generation_after_split = session.document_generation();
+    session
+        .run(Command::InsertText("X".to_owned()))
+        .unwrap_or_else(|error| panic!("typing after cell split must succeed: {error}"));
+    assert!(matches!(
+        session.selection.focus.story,
+        StoryId::TableCell { .. }
+    ));
+    assert_eq!(session.document_generation(), generation_after_split + 1);
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("typing undo must succeed: {error}"));
     session
         .run(Command::Undo)
         .unwrap_or_else(|error| panic!("cell split undo must succeed: {error}"));
@@ -2535,14 +2548,15 @@ fn table_cell_enter_splits_inside_the_cell_transaction() {
 }
 
 #[test]
-fn table_cell_display_math_insertion_uses_the_cell_container_transaction() {
-    let (document, table_id, row_id, cell_id, paragraph_id) = table_document_for_session();
+fn table_cell_display_math_insertion_is_rejected_until_046() {
+    let (document, _table_id, _row_id, _cell_id, paragraph_id) = table_document_for_session();
+    let before = document.clone();
     let mut session =
         Session::new(document).unwrap_or_else(|error| panic!("table document must open: {error}"));
     let story = StoryId::TableCell {
-        table_id: table_id.clone(),
-        row_id: row_id.clone(),
-        cell_id: cell_id.clone(),
+        table_id: _table_id.clone(),
+        row_id: _row_id.clone(),
+        cell_id: _cell_id.clone(),
     };
     let position = Pos {
         story,
@@ -2556,45 +2570,11 @@ fn table_cell_display_math_insertion_uses_the_cell_container_transaction() {
             focus: position,
         }))
         .unwrap_or_else(|error| panic!("cell caret must be valid: {error}"));
-    assert!(session.can_insert_display_math(false));
-    session
-        .insert_display_math(false)
-        .unwrap_or_else(|error| panic!("cell display math insertion must succeed: {error}"));
-    let cell_blocks = caret_structure::block_list_by_table_cell(
-        &session.document.body,
-        &[],
-        &table_id,
-        &row_id,
-        &cell_id,
-    )
-    .unwrap_or_else(|| panic!("cell blocks must resolve"));
-    assert!(
-        cell_blocks
-            .iter()
-            .any(|block| matches!(block, Block::Equation(_))),
-        "display equation must be inserted inside the cell"
-    );
     assert!(matches!(
-        session.current_math_edit_target(),
-        Some(crate::editing::MathEditTarget::Block { .. })
+        session.insert_display_math(false),
+        Err(EditError::UnsupportedTableCellMath)
     ));
-    session
-        .run(Command::Undo)
-        .unwrap_or_else(|error| panic!("cell math undo must succeed: {error}"));
-    let cell_blocks = caret_structure::block_list_by_table_cell(
-        &session.document.body,
-        &[],
-        &table_id,
-        &row_id,
-        &cell_id,
-    )
-    .unwrap_or_else(|| panic!("cell blocks must resolve"));
-    assert!(
-        !cell_blocks
-            .iter()
-            .any(|block| matches!(block, Block::Equation(_))),
-        "undo must remove the inserted equation"
-    );
+    assert_eq!(session.document(), &before);
 }
 
 fn table_from_session(session: &Session) -> &Table {
@@ -2684,14 +2664,17 @@ fn table_tab_and_shift_tab_move_between_cells_and_grow_the_last_row() {
         .run(Command::InsertTable)
         .unwrap_or_else(|error| panic!("insert table must succeed: {error}"));
     let before = session.selection.focus.clone();
+    let generation = session.document_generation();
     let effect = session
         .run(Command::EditorKey(EditorKey::Tab))
         .unwrap_or_else(|error| panic!("tab must succeed: {error}"));
     assert!(effect.selection_changed);
+    assert_eq!(session.document_generation(), generation);
     assert_ne!(session.selection.focus.paragraph_id, before.paragraph_id);
     session
         .run(Command::EditorKey(EditorKey::ShiftTab))
         .unwrap_or_else(|error| panic!("shift-tab must succeed: {error}"));
+    assert_eq!(session.document_generation(), generation);
     assert_eq!(session.selection.focus.paragraph_id, before.paragraph_id);
 
     // 移动到最后一个单元格后，Tab 增加一行并落到新行的首格。
@@ -2702,6 +2685,7 @@ fn table_tab_and_shift_tab_move_between_cells_and_grow_the_last_row() {
     }
     let table = table_from_session(&session);
     assert_eq!(table.rows.len(), 3);
+    assert_eq!(session.document_generation(), generation + 1);
 }
 
 #[test]
@@ -2833,18 +2817,19 @@ fn section_creation_then_enter_keeps_environment_view_resolvable() {
 }
 
 #[test]
-fn table_cell_accepts_inline_math_and_align_blocks() {
-    let (document, table_id, row_id, cell_id, paragraph_id) = table_document_for_session();
+fn table_cell_math_editing_is_explicitly_rejected_until_046() {
+    let (document, _table_id, _row_id, _cell_id, paragraph_id) = table_document_for_session();
+    let before = document.clone();
     let mut session =
         Session::new(document).unwrap_or_else(|error| panic!("table document must open: {error}"));
     let story = StoryId::TableCell {
-        table_id: table_id.clone(),
-        row_id: row_id.clone(),
-        cell_id: cell_id.clone(),
+        table_id: _table_id.clone(),
+        row_id: _row_id.clone(),
+        cell_id: _cell_id.clone(),
     };
     let position = Pos {
-        story: story.clone(),
-        paragraph_id: paragraph_id.clone(),
+        story,
+        paragraph_id,
         offset: 3,
         affinity: Affinity::Downstream,
     };
@@ -2854,47 +2839,69 @@ fn table_cell_accepts_inline_math_and_align_blocks() {
             focus: position,
         }))
         .unwrap_or_else(|error| panic!("cell caret must be valid: {error}"));
-    session
-        .run(Command::InsertInlineMath("x".to_owned()))
-        .unwrap_or_else(|error| panic!("cell inline math must insert: {error}"));
-    let cell_blocks = caret_structure::block_list_by_table_cell(
-        &session.document.body,
-        &[],
-        &table_id,
-        &row_id,
-        &cell_id,
-    )
-    .unwrap_or_else(|| panic!("cell blocks must resolve"));
-    let inline_math = cell_blocks.iter().find_map(|block| match block {
-        Block::Paragraph(paragraph) => paragraph.inlines.iter().find_map(|content| match content {
-            ParagraphContent::Math(math) => Some(math),
-            _ => None,
-        }),
-        _ => None,
-    });
-    assert!(
-        inline_math.is_some(),
-        "cell paragraph must hold inline math"
-    );
-    session
-        .run(Command::Undo)
-        .unwrap_or_else(|error| panic!("cell inline math undo must succeed: {error}"));
+    assert!(matches!(
+        session.run(Command::InsertInlineMath("x".to_owned())),
+        Err(EditError::UnsupportedTableCellMath)
+    ));
+    assert!(matches!(
+        session.insert_display_math(true),
+        Err(EditError::UnsupportedTableCellMath)
+    ));
+    assert_eq!(session.document(), &before);
+}
 
+#[test]
+fn table_column_limit_failure_keeps_document_and_generation_unchanged() {
+    let cells = (0..63)
+        .map(|_| TableCell {
+            id: NodeId::generate(),
+            blocks: vec![Block::Paragraph(Paragraph::empty(NodeId::generate()))],
+        })
+        .collect::<Vec<_>>();
+    let row = TableRow {
+        id: NodeId::generate(),
+        cells,
+    };
+    let table = Table {
+        id: NodeId::generate(),
+        rows: vec![row],
+    };
+    let table_id = table.id.clone();
+    let row_id = table.rows[0].id.clone();
+    let cell_id = table.rows[0].cells[0].id.clone();
+    let paragraph_id = match &table.rows[0].cells[0].blocks[0] {
+        Block::Paragraph(paragraph) => paragraph.id.clone(),
+        _ => panic!("cell fixture must hold a paragraph"),
+    };
+    let mut document = Document::blank();
+    document.body.push(Block::Table(table));
+    let mut session =
+        Session::new(document).unwrap_or_else(|error| panic!("table document must open: {error}"));
+    let position = Pos {
+        story: StoryId::TableCell {
+            table_id: table_id.clone(),
+            row_id,
+            cell_id,
+        },
+        paragraph_id,
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
     session
-        .insert_display_math(true)
-        .unwrap_or_else(|error| panic!("cell align insertion must succeed: {error}"));
-    let cell_blocks = caret_structure::block_list_by_table_cell(
-        &session.document.body,
-        &[],
-        &table_id,
-        &row_id,
-        &cell_id,
-    )
-    .unwrap_or_else(|| panic!("cell blocks must resolve"));
-    assert!(
-        cell_blocks
-            .iter()
-            .any(|block| matches!(block, Block::Align(_))),
-        "align block must be inserted inside the cell"
-    );
+        .set_selection(Some(Selection {
+            anchor: position.clone(),
+            focus: position,
+        }))
+        .unwrap_or_else(|error| panic!("cell caret must be valid: {error}"));
+    let before = session.document().clone();
+    let generation = session.document_generation();
+    assert!(matches!(
+        session.run(Command::TableInsertColumn(
+            crate::editing::Direction::Forward
+        )),
+        Err(EditError::InvalidDocument(_))
+    ));
+    assert_eq!(session.document(), &before);
+    assert_eq!(session.document_generation(), generation);
+    assert!(!session.can_undo());
 }

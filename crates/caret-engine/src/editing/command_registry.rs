@@ -99,9 +99,11 @@ const CANDIDATES: &[RegisteredCandidate] = &[
         label: "Multiline equation",
         available: true,
     },
+    // 046 布局完成前不暴露表格入口：命令本身在 Session 已可用，但 	able
+    // 候选与 native 键位保持禁用，避免插入不可见/不可排版的表格。
     RegisteredCandidate {
         alias: "\\table",
-        command_id: "insert.table",
+        command_id: command_ids::INSERT_TABLE,
         label: "Table",
         available: false,
     },

@@ -83,8 +83,13 @@ impl Session {
     fn insert_table_row(&mut self, direction: Direction) -> Result<Effect, EditError> {
         let context = self.table_context().ok_or(EditError::InvalidPosition)?;
         let before = self.current_table(&context)?;
+        let columns = before
+            .rows
+            .get(context.row_index)
+            .ok_or(EditError::InvalidPosition)?
+            .cells
+            .len();
         let mut table = before.clone();
-        let columns = before.rows[context.row_index].cells.len();
         let insert_at = match direction {
             Direction::Backward => context.row_index,
             Direction::Forward => context.row_index + 1,
@@ -146,15 +151,19 @@ impl Session {
         };
         let before = self.current_table(&context)?;
         let columns = before.rows[0].cells.len();
+        let index = context.row_index * columns + context.cell_index + 1;
+        if index < before.rows.len() * columns {
+            return Ok(Some(self.focus_table_cell(
+                &before,
+                index / columns,
+                index % columns,
+                true,
+            )?));
+        }
         let mut table = before.clone();
-        let mut index = context.row_index * columns + context.cell_index + 1;
-        if index >= table.rows.len() * columns {
-            table.rows.push(empty_row(columns));
-        }
-        if index >= table.rows.len() * columns {
-            index = context.row_index * columns + context.cell_index;
-        }
-        let target = table_target(&table, index / columns, index % columns, true);
+        table.rows.push(empty_row(columns));
+        let last_row = table.rows.len() - 1;
+        let target = table_target(&table, last_row, 0, true);
         Ok(Some(self.replace_table(context, before, table, target)?))
     }
 
@@ -167,11 +176,14 @@ impl Session {
             return Ok(Some(Effect::default()));
         }
         let before = self.current_table(&context)?;
-        let table = before.clone();
-        let columns = table.rows[0].cells.len();
+        let columns = before.rows[0].cells.len();
         let previous = context.row_index * columns + context.cell_index - 1;
-        let target = table_target(&table, previous / columns, previous % columns, false);
-        Ok(Some(self.replace_table(context, before, table, target)?))
+        Ok(Some(self.focus_table_cell(
+            &before,
+            previous / columns,
+            previous % columns,
+            false,
+        )?))
     }
 
     /// 横向结构键在单元格间移动；到达行边缘后交给外侧移动。
@@ -240,6 +252,30 @@ impl Session {
         )?))
     }
 
+    /// 纯单元格移动只改变选区，不产生文档补丁、generation 或历史步。
+    fn focus_table_cell(
+        &mut self,
+        table: &Table,
+        row_index: usize,
+        cell_index: usize,
+        forward: bool,
+    ) -> Result<Effect, EditError> {
+        let Some(target) = table_target(table, row_index, cell_index, forward) else {
+            return Err(EditError::UnsupportedTableContent);
+        };
+        if !self.paragraph_index.contains_key(&target.paragraph_id) {
+            return Err(EditError::InvalidPosition);
+        }
+        self.selection = Selection {
+            anchor: target.clone(),
+            focus: target,
+        };
+        Ok(Effect {
+            selection_changed: true,
+            ..Effect::default()
+        })
+    }
+
     fn current_table(&self, context: &TableContext) -> Result<Table, EditError> {
         let blocks = block_list_in_container(&self.document.body, &context.table_container)
             .ok_or(EditError::InvalidPosition)?;
@@ -277,13 +313,16 @@ impl Session {
         after: Vec<Block>,
         target_position: Option<Pos>,
     ) -> Result<Effect, EditError> {
+        let Some(target_position) = target_position else {
+            return Err(EditError::UnsupportedTableContent);
+        };
         let before_selection = self.selection.clone();
         let before_anchor_visual_affinity = self.selection_anchor_visual_affinity;
         let before_visual_affinity = self.selection_visual_affinity;
         let before_state_id = self.history_state_id;
+        let mut candidate = self.document.clone();
         {
-            let Some(blocks) = block_list_in_container_mut(&mut self.document.body, &container)
-            else {
+            let Some(blocks) = block_list_in_container_mut(&mut candidate.body, &container) else {
                 return Err(EditError::InvalidPosition);
             };
             let Some(end) = sibling_index.checked_add(before.len()) else {
@@ -294,16 +333,10 @@ impl Session {
             }
             blocks.splice(sibling_index..end, after.iter().cloned());
         }
-        if let Err(error) = self.document.validate() {
-            self.document.body = self.document.body.clone();
-            return Err(EditError::InvalidDocument(error.to_string()));
-        }
-        let Some(target_position) = target_position else {
-            return Ok(Effect {
-                document_changed: true,
-                ..Effect::default()
-            });
-        };
+        candidate
+            .validate()
+            .map_err(|error| EditError::InvalidDocument(error.to_string()))?;
+        self.document = candidate;
         self.selection = Selection {
             anchor: target_position.clone(),
             focus: target_position,

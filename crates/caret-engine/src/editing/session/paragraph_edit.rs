@@ -12,6 +12,14 @@ use super::super::{Affinity, EditError, Effect, Pos, PositionMap, Selection, Sto
 use super::Session;
 use caret_doc::NodeId;
 
+/// Enter 拆分后右侧段落的 Story：标题拆出的正文回到环境正文 Story，其余沿用原 Story。
+fn split_right_story(story: &StoryId) -> StoryId {
+    match story {
+        StoryId::EnvironmentTitle(_) => StoryId::Body,
+        other => other.clone(),
+    }
+}
+
 impl Session {
     pub(super) fn split_paragraph(&mut self) -> Result<Effect, EditError> {
         if self.composition.is_some() {
@@ -47,8 +55,9 @@ impl Session {
             }
             self.paragraph_index = build_paragraph_index(&self.document.body);
             self.text_map_cache.clear();
+            let right_story = split_right_story(&start.story);
             let position = Pos {
-                story: StoryId::Body,
+                story: right_story.clone(),
                 paragraph_id: right_id.clone(),
                 offset: 0,
                 affinity: Affinity::Downstream,
@@ -74,8 +83,8 @@ impl Session {
                         source_id: target.paragraph_id,
                         right_id,
                         split_offset: start.offset,
-                        source_story: StoryId::Body,
-                        right_story: StoryId::Body,
+                        source_story: start.story.clone(),
+                        right_story,
                     },
                 ])),
                 ..Effect::default()
@@ -147,8 +156,9 @@ impl Session {
             &right_id,
             &location,
         );
+        let right_story = split_right_story(&anchor.story);
         let pos = Pos {
-            story: StoryId::Body,
+            story: right_story.clone(),
             paragraph_id: right_id.clone(),
             offset: 0,
             affinity: Affinity::Downstream,
@@ -169,7 +179,7 @@ impl Session {
                     right_id,
                     split_offset,
                     source_story,
-                    right_story: StoryId::Body,
+                    right_story: right_story.clone(),
                 }
             } else {
                 PositionMap::Composite(vec![
@@ -185,8 +195,8 @@ impl Session {
                         source_id,
                         right_id,
                         split_offset,
-                        source_story,
-                        right_story: StoryId::Body,
+                        source_story: source_story.clone(),
+                        right_story: right_story.clone(),
                     },
                 ])
             }),
