@@ -40,6 +40,7 @@
 #include <QRectF>
 #include <QRegularExpression>
 #include <QScopeGuard>
+#include <QSet>
 #include <QSignalSpy>
 #include <QSize>
 #include <QString>
@@ -1213,20 +1214,20 @@ constexpr auto kRichClipboardDocument = R"json({
                 {"type":"text","runs":[{"text":"before "}]},
                 {"type":"inlineMath","id":"inline-x","mathTree":{
                     "schemaVersion":3,"root":{"id":"inline-root","content":[
-                        {"type":"math","id":"inline-x-symbol","kind":"symbol","text":"x"}
+                        {"type":"math","id":"inline-x-symbol","kind":"symbol","text":"x","attributes":{"atomClass":"ord"}}
                     ]}
                 }},
                 {"type":"text","runs":[{"text":" after"}]}
             ]},
             {"type":"equation","id":"equation-y","mathTree":{
                 "schemaVersion":3,"root":{"id":"equation-root","content":[
-                    {"type":"math","id":"equation-y-symbol","kind":"symbol","text":"y"}
+                    {"type":"math","id":"equation-y-symbol","kind":"symbol","text":"y","attributes":{"atomClass":"ord"}}
                 ]}
             }},
             {"type":"align","id":"align-one","rows":[
                 {"id":"align-row","cells":[{"schemaVersion":3,
                     "root":{"id":"align-root","content":[
-                        {"type":"math","id":"align-a-symbol","kind":"symbol","text":"a"}
+                        {"type":"math","id":"align-a-symbol","kind":"symbol","text":"a","attributes":{"atomClass":"ord"}}
                     ]}}]}
             ]},
             {"type":"paragraph","id":"paragraph-two","inlines":[
@@ -1327,6 +1328,24 @@ qsizetype math_fragment_count(const caret::LayoutViewModel& view_model) {
     qsizetype total = 0;
     for (const QVariant& page : view_model.pageLayouts())
         total += page.toMap().value(QStringLiteral("mathFragments")).toList().size();
+    return total;
+}
+
+QStringList math_fragment_ids(const caret::LayoutViewModel& view_model) {
+    QStringList ids;
+    for (const QVariant& page : view_model.pageLayouts()) {
+        for (const QVariant& fragment :
+             page.toMap().value(QStringLiteral("mathFragments")).toList()) {
+            ids.push_back(fragment.toMap().value(QStringLiteral("mathId")).toString());
+        }
+    }
+    return ids;
+}
+
+qsizetype inline_math_placeholder_count(const caret::LayoutViewModel& view_model) {
+    qsizetype total = 0;
+    for (const QVariant& value : view_model.paragraphLayouts())
+        total += value.toMap().value(QStringLiteral("text")).toString().count(QChar(0xFFFC));
     return total;
 }
 
@@ -3031,6 +3050,133 @@ void ShellDocumentInteractionTest::richClipboardPasteRoundTripsMathStructureAndU
     QCOMPARE(paragraph_text_by_id(view_model, QStringLiteral("paragraph-two")),
              QStringLiteral("tail"));
     QVERIFY(view_model.canRedo());
+}
+
+void ShellDocumentInteractionTest::richClipboardBlocksPasteRoundTripsDisplayMathAndUndo() {
+    QString error;
+    QVERIFY2(installClipboardDocumentRuntime(QByteArray(kRichClipboardDocument), &error),
+             qPrintable(error));
+    caret::LayoutViewModel view_model;
+    QVERIFY2(view_model.error().isEmpty(), qPrintable(view_model.error()));
+    QCOMPARE(math_fragment_count(view_model), 2);
+    QCOMPARE(view_model.documentGeneration(), QStringLiteral("0"));
+
+    // 跨段 Blocks 选区包含正文、Equation 与 Align：复制后信封保留两类数学块。
+    QGuiApplication::clipboard()->clear();
+    QVERIFY(select_document_paragraph_range(view_model, QStringLiteral("paragraph-one"), 0,
+                                            QStringLiteral("paragraph-two"), 4));
+    QVERIFY2(view_model.copySelectionToClipboard().value(QStringLiteral("valid")).toBool(),
+             "跨段 Blocks 复制失败");
+    const QMimeData* mime = QGuiApplication::clipboard()->mimeData();
+    if (mime == nullptr)
+        QFAIL("clipboard must expose the copied MIME data");
+    QVERIFY(mime->hasFormat(clipboard_fragment_mime_name()));
+    const QJsonObject envelope =
+        QJsonDocument::fromJson(mime->data(clipboard_fragment_mime_name())).object();
+    QCOMPARE(envelope.value(QStringLiteral("shape")).toString(), QStringLiteral("blocks"));
+    const QJsonArray blocks = envelope.value(QStringLiteral("blocks")).toArray();
+    QCOMPARE(blocks.size(), 4);
+    QCOMPARE(blocks.at(0).toObject().value(QStringLiteral("type")).toString(),
+             QStringLiteral("paragraph"));
+    QCOMPARE(blocks.at(1).toObject().value(QStringLiteral("type")).toString(),
+             QStringLiteral("equation"));
+    QCOMPARE(blocks.at(2).toObject().value(QStringLiteral("type")).toString(),
+             QStringLiteral("align"));
+    QCOMPARE(blocks.at(3).toObject().value(QStringLiteral("type")).toString(),
+             QStringLiteral("paragraph"));
+
+    // 片段内容逐项断言：InlineMath 的 MathTree 符号 x、Equation 符号 y、Align 首格符号 a。
+    bool inline_symbol_x = false;
+    for (const QJsonValue value :
+         blocks.at(0).toObject().value(QStringLiteral("inlines")).toArray()) {
+        const QJsonObject inline_object = value.toObject();
+        if (inline_object.value(QStringLiteral("type")).toString() != QStringLiteral("inlineMath"))
+            continue;
+        const QJsonArray content = inline_object.value(QStringLiteral("mathTree"))
+                                       .toObject()
+                                       .value(QStringLiteral("root"))
+                                       .toObject()
+                                       .value(QStringLiteral("content"))
+                                       .toArray();
+        inline_symbol_x = !content.isEmpty() &&
+                          content.at(0).toObject().value(QStringLiteral("text")).toString() ==
+                              QStringLiteral("x");
+    }
+    QVERIFY(inline_symbol_x);
+    const auto math_tree_symbol = [](const QJsonObject& tree) {
+        const QJsonArray content = tree.value(QStringLiteral("root"))
+                                       .toObject()
+                                       .value(QStringLiteral("content"))
+                                       .toArray();
+        return content.isEmpty()
+                   ? QString()
+                   : content.at(0).toObject().value(QStringLiteral("text")).toString();
+    };
+    QCOMPARE(math_tree_symbol(blocks.at(1).toObject().value(QStringLiteral("mathTree")).toObject()),
+             QStringLiteral("y"));
+    const QJsonArray align_cells = blocks.at(2)
+                                       .toObject()
+                                       .value(QStringLiteral("rows"))
+                                       .toArray()
+                                       .at(0)
+                                       .toObject()
+                                       .value(QStringLiteral("cells"))
+                                       .toArray();
+    QCOMPARE(align_cells.size(), 1);
+    QCOMPARE(math_tree_symbol(align_cells.at(0).toObject()), QStringLiteral("a"));
+    const QString blocks_text = mime->text();
+    QVERIFY(blocks_text.contains(QStringLiteral("\\(x\\)")));
+    QVERIFY(blocks_text.contains(QStringLiteral("\\[y\\]")));
+    QVERIFY(blocks_text.contains(QStringLiteral("aligned")));
+    QVERIFY(!blocks_text.contains(QChar(0xFFFC)));
+    QCOMPARE(inline_math_placeholder_count(view_model), 1);
+    const QStringList source_math_ids = math_fragment_ids(view_model);
+    QCOMPARE(source_math_ids.size(), 2);
+
+    // 粘贴到 paragraph-two 末尾：正文、InlineMath、Equation、Align 全部进入目标文档，
+    // 新显示公式 ID 与源 ID 不冲突，一次 Undo/Redo 恢复整份文档快照。
+    QVERIFY(select_document_paragraph_range(view_model, QStringLiteral("paragraph-two"), 4,
+                                            QStringLiteral("paragraph-two"), 4));
+    const QVariantMap paste = view_model.pasteFromClipboard();
+    QVERIFY2(paste.value(QStringLiteral("valid")).toBool(),
+             qPrintable(paste.value(QStringLiteral("error")).toString()));
+    QCOMPARE(view_model.documentGeneration(), QStringLiteral("1"));
+    QCOMPARE(math_fragment_count(view_model), 4);
+    QCOMPARE(inline_math_placeholder_count(view_model), 2);
+    bool copied_inline_paragraph = false;
+    for (const QVariant& value : view_model.paragraphLayouts()) {
+        if (value.toMap().value(QStringLiteral("text")).toString() ==
+            QStringLiteral("before ") + QChar(0xFFFC) + QStringLiteral(" after"))
+            copied_inline_paragraph = true;
+    }
+    QVERIFY(copied_inline_paragraph);
+    const QStringList pasted_math_ids = math_fragment_ids(view_model);
+    QCOMPARE(pasted_math_ids.size(), 4);
+    QCOMPARE(QSet<QString>(pasted_math_ids.begin(), pasted_math_ids.end()).size(), 4);
+    for (const QString& source_id : source_math_ids)
+        QVERIFY(pasted_math_ids.contains(source_id));
+    const QSet<QString> source_ids(source_math_ids.begin(), source_math_ids.end());
+    const qsizetype new_math_ids =
+        std::count_if(pasted_math_ids.begin(), pasted_math_ids.end(),
+                      [&source_ids](const QString& id) { return !source_ids.contains(id); });
+    QCOMPARE(new_math_ids, 2);
+
+    const QVariantMap undo = view_model.undo();
+    QVERIFY2(undo.value(QStringLiteral("valid")).toBool(),
+             qPrintable(undo.value(QStringLiteral("error")).toString()));
+    QCOMPARE(view_model.documentGeneration(), QStringLiteral("2"));
+    QCOMPARE(math_fragment_count(view_model), 2);
+    QCOMPARE(inline_math_placeholder_count(view_model), 1);
+    QCOMPARE(paragraph_text_by_id(view_model, QStringLiteral("paragraph-two")),
+             QStringLiteral("tail"));
+    QVERIFY(view_model.canRedo());
+
+    const QVariantMap redo = view_model.redo();
+    QVERIFY2(redo.value(QStringLiteral("valid")).toBool(),
+             qPrintable(redo.value(QStringLiteral("error")).toString()));
+    QCOMPARE(view_model.documentGeneration(), QStringLiteral("3"));
+    QCOMPARE(math_fragment_count(view_model), 4);
+    QCOMPARE(inline_math_placeholder_count(view_model), 2);
 }
 
 void ShellDocumentInteractionTest::richClipboardRejectsInvalidFragmentPayload() {
