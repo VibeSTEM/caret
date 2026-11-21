@@ -9,133 +9,18 @@ use super::{Direction, EditError, Pos, StoryId};
 use caret_doc::{Block, FlowContent, NodeId, Paragraph, ParagraphContent};
 use std::collections::HashMap;
 
-/// 表格单元格块流的稳定身份；行列下标只用于同一单元格容器内的顺序比较。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct TableCellPath {
-    pub(super) table_id: NodeId,
-    pub(super) row_id: NodeId,
-    pub(super) cell_id: NodeId,
-    pub(super) row_index: usize,
-    pub(super) cell_index: usize,
-}
+pub(super) use caret_structure::{BlockContainerPath, ContainerStep, TableCellPath};
 
-impl TableCellPath {
-    fn story(&self) -> StoryId {
-        StoryId::TableCell {
-            table_id: self.table_id.clone(),
-            row_id: self.row_id.clone(),
-            cell_id: self.cell_id.clone(),
-        }
+fn cell_story(cell: &TableCellPath) -> StoryId {
+    StoryId::TableCell {
+        table_id: cell.table_id.clone(),
+        row_id: cell.row_id.clone(),
+        cell_id: cell.cell_id.clone(),
     }
 }
 
-/// 从根块序列到段落所属块容器的容器步骤；环境与表格单元格可任意嵌套。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum ContainerStep {
-    Environment(NodeId),
-    TableCell(TableCellPath),
-}
-
-/// 段落所属的块容器路径；空路径表示文档根块序列。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(super) struct BlockContainerPath {
-    steps: Vec<ContainerStep>,
-}
-
-impl BlockContainerPath {
-    /// 从既有环境父链构造容器路径；新增路径步骤应优先使用文档树解析。
-    pub(super) fn from_environment_ids(environment_ids: &[NodeId]) -> Self {
-        Self {
-            steps: environment_ids
-                .iter()
-                .cloned()
-                .map(ContainerStep::Environment)
-                .collect(),
-        }
-    }
-
-    fn push(&mut self, step: ContainerStep) {
-        self.steps.push(step);
-    }
-
-    fn pop(&mut self) {
-        self.steps.pop();
-    }
-
-    /// 最内层表格单元格；用于推导段落 Story 与单元格相对几何。
-    pub(super) fn innermost_cell(&self) -> Option<&TableCellPath> {
-        self.steps.iter().rev().find_map(|step| match step {
-            ContainerStep::TableCell(cell) => Some(cell),
-            ContainerStep::Environment(_) => None,
-        })
-    }
-
-    /// 容器路径在历史估算中的近似字节数。
-    pub(super) fn estimated_bytes(&self) -> usize {
-        size_of::<BlockContainerPath>()
-            + self
-                .steps
-                .iter()
-                .map(|step| match step {
-                    ContainerStep::Environment(id) => id.as_str().len(),
-                    ContainerStep::TableCell(cell) => {
-                        cell.table_id.as_str().len()
-                            + cell.row_id.as_str().len()
-                            + cell.cell_id.as_str().len()
-                    }
-                })
-                .sum::<usize>()
-    }
-
-    /// 块环境嵌套层数；表格单元格不影响行内格式的块环境深度。
-    pub(super) fn environment_depth(&self) -> usize {
-        self.steps
-            .iter()
-            .filter(|step| matches!(step, ContainerStep::Environment(_)))
-            .count()
-    }
-
-    /// 容器内的全部环境 ID；块环境之外的表格单元格不改变环境父链语义。
-    pub(super) fn environment_ids(&self) -> Vec<NodeId> {
-        self.steps
-            .iter()
-            .filter_map(|step| match step {
-                ContainerStep::Environment(id) => Some(id.clone()),
-                ContainerStep::TableCell(_) => None,
-            })
-            .collect()
-    }
-
-    fn cell_story(&self) -> Option<StoryId> {
-        self.innermost_cell().map(TableCellPath::story)
-    }
-
-    /// 标题所属环境的 ID：标题容器路径的最后一步必须是该环境。
-    fn title_environment_id(&self) -> Option<&NodeId> {
-        match self.steps.last() {
-            Some(ContainerStep::Environment(id)) => Some(id),
-            _ => None,
-        }
-    }
-
-    /// 最内层单元格之前的容器；表格块本身位于该容器的块序列中。
-    pub(super) fn container_before_innermost_cell(&self) -> Option<Self> {
-        let cell_position = self
-            .steps
-            .iter()
-            .rposition(|step| matches!(step, ContainerStep::TableCell(_)))?;
-        Some(Self {
-            steps: self.steps[..cell_position].to_vec(),
-        })
-    }
-
-    /// 去掉最后一步容器；用于从标题环境内部回到其父块序列。
-    fn without_last(&self) -> Option<Self> {
-        let (_, remaining) = self.steps.split_last()?;
-        Some(Self {
-            steps: remaining.to_vec(),
-        })
-    }
+fn container_cell_story(container: &BlockContainerPath) -> Option<StoryId> {
+    container.innermost_cell().map(cell_story)
 }
 
 #[derive(Debug, Clone)]
@@ -159,7 +44,7 @@ impl ParagraphLocation {
         container: BlockContainerPath,
         document_path: Vec<usize>,
     ) -> Self {
-        let story = match container.cell_story() {
+        let story = match container_cell_story(&container) {
             Some(story) if container_is_inside_cell(&container) => story,
             _ => StoryId::Body,
         };
@@ -521,14 +406,10 @@ fn paragraph_environment_mut<'a>(
     blocks: &'a mut Vec<Block>,
     location: &ParagraphLocation,
 ) -> Option<&'a mut caret_doc::BlockEnvironment> {
-    let environment_id = location
-        .container
-        .steps
-        .last()
-        .and_then(|step| match step {
-            ContainerStep::Environment(id) => Some(id.clone()),
-            ContainerStep::TableCell(_) => None,
-        })?;
+    let environment_id = location.container.last_step().and_then(|step| match step {
+        ContainerStep::Environment(id) => Some(id.clone()),
+        ContainerStep::TableCell(_) => None,
+    })?;
     let parent = location.container.without_last()?;
     let parent_blocks = container_blocks_mut(blocks, &parent)?;
     parent_blocks.iter_mut().find_map(|block| match block {
@@ -605,97 +486,14 @@ fn container_blocks<'a>(
     blocks: &'a [Block],
     container: &BlockContainerPath,
 ) -> Option<&'a [Block]> {
-    let mut current = blocks;
-    for step in &container.steps {
-        current = match step {
-            ContainerStep::Environment(environment_id) => {
-                let mut matches = current.iter().filter_map(|block| match block {
-                    Block::Environment(environment) if &environment.id == environment_id => {
-                        Some(&environment.children)
-                    }
-                    _ => None,
-                });
-                let children = matches.next()?;
-                matches.next().is_none().then_some(())?;
-                children
-            }
-            ContainerStep::TableCell(target_cell) => {
-                let mut tables = current.iter().filter_map(|block| match block {
-                    Block::Table(table) if table.id == target_cell.table_id => Some(table),
-                    _ => None,
-                });
-                let table = tables.next()?;
-                tables.next().is_none().then_some(())?;
-                let mut rows = table.rows.iter().filter(|row| row.id == target_cell.row_id);
-                let row = rows.next()?;
-                rows.next().is_none().then_some(())?;
-                let mut cells = row
-                    .cells
-                    .iter()
-                    .filter(|candidate| candidate.id == target_cell.cell_id);
-                let matched = cells.next()?;
-                cells.next().is_none().then_some(())?;
-                &matched.blocks
-            }
-        };
-    }
-    Some(current)
+    caret_structure::block_list_by_container(blocks, container)
 }
 
 fn container_blocks_mut<'a>(
     blocks: &'a mut Vec<Block>,
     container: &BlockContainerPath,
 ) -> Option<&'a mut Vec<Block>> {
-    let mut current: &mut Vec<Block> = blocks;
-    for step in &container.steps {
-        match step {
-            ContainerStep::Environment(environment_id) => {
-                let mut matching_index = None;
-                for (index, block) in current.iter().enumerate() {
-                    if matches!(block, Block::Environment(environment) if &environment.id == environment_id)
-                        && matching_index.replace(index).is_some()
-                    {
-                        return None;
-                    }
-                }
-                let index = matching_index?;
-                let Block::Environment(environment) = current.get_mut(index)? else {
-                    return None;
-                };
-                current = &mut environment.children;
-            }
-            ContainerStep::TableCell(cell) => {
-                let mut matching_index = None;
-                for (index, block) in current.iter().enumerate() {
-                    if matches!(block, Block::Table(table) if table.id == cell.table_id)
-                        && matching_index.replace(index).is_some()
-                    {
-                        return None;
-                    }
-                }
-                let index = matching_index?;
-                let Block::Table(table) = current.get_mut(index)? else {
-                    return None;
-                };
-                let mut row_index = None;
-                for (index, row) in table.rows.iter().enumerate() {
-                    if row.id == cell.row_id && row_index.replace(index).is_some() {
-                        return None;
-                    }
-                }
-                let row = table.rows.get_mut(row_index?)?;
-                let mut cell_index = None;
-                for (index, candidate) in row.cells.iter().enumerate() {
-                    if candidate.id == cell.cell_id && cell_index.replace(index).is_some() {
-                        return None;
-                    }
-                }
-                let matched = row.cells.get_mut(cell_index?)?;
-                current = &mut matched.blocks;
-            }
-        }
-    }
-    Some(current)
+    caret_structure::block_list_by_container_mut(blocks, container)
 }
 
 fn block_list_at_path<'a>(blocks: &'a [Block], parent_path: &[usize]) -> Option<&'a [Block]> {
@@ -769,7 +567,7 @@ pub(super) fn validated_paragraph_location<'a>(
         }
         Some((paragraph, physical.parent_environment_ids, 0))
     } else {
-        let expected_story = location.container.cell_story().unwrap_or(StoryId::Body);
+        let expected_story = container_cell_story(&location.container).unwrap_or(StoryId::Body);
         if physical.kind != caret_structure::DocumentNodeKind::Paragraph
             || location.story != expected_story
         {

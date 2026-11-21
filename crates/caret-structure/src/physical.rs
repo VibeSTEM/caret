@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
+use crate::{BlockContainerPath, ContainerStep, TableCellPath};
 use caret_doc::{Block, Document, FlowContent, NodeId, ParagraphContent};
 use std::cmp::Ordering;
 
@@ -53,6 +54,8 @@ pub struct DocumentNodeLocation {
     pub parent_inline_environment_ids: Vec<NodeId>,
     /// 所属块序列中的真实下标；环境标题没有块序列 slot。
     pub sibling_index: Option<usize>,
+    /// 从根到直接父容器的块容器路径（环境与表格单元格）。
+    pub container: BlockContainerPath,
     order: DocumentOrderKey,
 }
 
@@ -74,7 +77,15 @@ pub fn find_document_node(document: &Document, id: &NodeId) -> Option<DocumentNo
 
 /// 在块序列中查找节点；ExplicitBreak 与 Opaque 保留真实 slot，但不产生身份。
 pub fn find_block_node(blocks: &[Block], id: &NodeId) -> Option<DocumentNodeLocation> {
-    find_in_blocks(blocks, id, &mut Vec::new(), &mut Vec::new())
+    find_in_blocks(
+        blocks,
+        id,
+        &mut TraversalState {
+            parents: &mut Vec::new(),
+            container: &mut BlockContainerPath::default(),
+            prefix: &mut Vec::new(),
+        },
+    )
 }
 
 /// 按父环境 ID 路径取得块序列；空路径返回根块序列。
@@ -221,14 +232,20 @@ fn edge_order_key(location: &DocumentNodeLocation, edge: DocumentNodeEdge) -> Op
     Some(key)
 }
 
+/// 物理树 DFS 的共享遍历状态：环境父链、容器路径与文档顺序前缀。
+struct TraversalState<'a> {
+    parents: &'a mut Vec<NodeId>,
+    container: &'a mut BlockContainerPath,
+    prefix: &'a mut Vec<usize>,
+}
+
 fn find_in_blocks(
     blocks: &[Block],
     id: &NodeId,
-    parents: &mut Vec<NodeId>,
-    prefix: &mut Vec<usize>,
+    state: &mut TraversalState<'_>,
 ) -> Option<DocumentNodeLocation> {
     for (slot, block) in blocks.iter().enumerate() {
-        prefix.push(slot * 2 + 1);
+        state.prefix.push(slot * 2 + 1);
         match block {
             Block::Table(table) => {
                 if &table.id == id {
@@ -237,29 +254,38 @@ fn find_in_blocks(
                         DocumentNodeKind::Table,
                         None,
                         false,
-                        parents,
+                        state,
                         Some(slot),
-                        prefix,
                     );
-                    prefix.pop();
+                    state.prefix.pop();
                     return Some(location);
                 }
                 let mut found = None;
                 'rows: for (row_index, row) in table.rows.iter().enumerate() {
-                    prefix.push(row_index * 2 + 1);
+                    state.prefix.push(row_index * 2 + 1);
                     for (cell_index, cell) in row.cells.iter().enumerate() {
-                        prefix.push(cell_index * 2 + 1);
-                        found = find_in_blocks(&cell.blocks, id, parents, prefix);
-                        prefix.pop();
+                        state.prefix.push(cell_index * 2 + 1);
+                        state
+                            .container
+                            .push(ContainerStep::TableCell(TableCellPath::new(
+                                table.id.clone(),
+                                row.id.clone(),
+                                cell.id.clone(),
+                                row_index,
+                                cell_index,
+                            )));
+                        found = find_in_blocks(&cell.blocks, id, state);
+                        state.container.pop();
+                        state.prefix.pop();
                         if found.is_some() {
-                            prefix.pop();
+                            state.prefix.pop();
                             break 'rows;
                         }
                     }
-                    prefix.pop();
+                    state.prefix.pop();
                 }
                 if found.is_some() {
-                    prefix.pop();
+                    state.prefix.pop();
                     return found;
                 }
             }
@@ -269,27 +295,25 @@ fn find_in_blocks(
                     DocumentNodeKind::Paragraph,
                     Some(paragraph.id.clone()),
                     false,
-                    parents,
+                    state,
                     Some(slot),
-                    prefix,
                 );
-                prefix.pop();
+                state.prefix.pop();
                 return Some(location);
             }
             Block::Paragraph(paragraph) => {
-                prefix.push(1);
+                state.prefix.push(1);
                 let found = find_inline_nodes(
                     &paragraph.inlines,
                     id,
-                    parents,
+                    state,
                     &mut Vec::new(),
-                    prefix,
                     &paragraph.id,
                     false,
                 );
-                prefix.pop();
+                state.prefix.pop();
                 if found.is_some() {
-                    prefix.pop();
+                    state.prefix.pop();
                     return found;
                 }
             }
@@ -299,11 +323,10 @@ fn find_in_blocks(
                     DocumentNodeKind::Equation,
                     None,
                     false,
-                    parents,
+                    state,
                     Some(slot),
-                    prefix,
                 );
-                prefix.pop();
+                state.prefix.pop();
                 return Some(location);
             }
             Block::Align(align) if &align.id == id => {
@@ -312,11 +335,10 @@ fn find_in_blocks(
                     DocumentNodeKind::Align,
                     None,
                     false,
-                    parents,
+                    state,
                     Some(slot),
-                    prefix,
                 );
-                prefix.pop();
+                state.prefix.pop();
                 return Some(location);
             }
             Block::Environment(environment) => {
@@ -326,64 +348,67 @@ fn find_in_blocks(
                         DocumentNodeKind::Environment,
                         None,
                         false,
-                        parents,
+                        state,
                         Some(slot),
-                        prefix,
                     );
-                    prefix.pop();
+                    state.prefix.pop();
                     return Some(location);
                 }
-                parents.push(environment.id.clone());
+                state.parents.push(environment.id.clone());
+                state
+                    .container
+                    .push(ContainerStep::Environment(environment.id.clone()));
                 if let Some(title) = &environment.title {
                     if &title.id == id {
-                        prefix.push(0);
+                        state.prefix.push(0);
                         let location = location(
                             title.id.clone(),
                             DocumentNodeKind::EnvironmentTitle,
                             Some(title.id.clone()),
                             true,
-                            parents,
+                            state,
                             None,
-                            prefix,
                         );
-                        prefix.pop();
-                        parents.pop();
-                        prefix.pop();
+                        state.prefix.pop();
+                        state.parents.pop();
+                        state.container.pop();
+                        state.prefix.pop();
                         return Some(location);
                     }
-                    prefix.push(0);
-                    prefix.push(1);
+                    state.prefix.push(0);
+                    state.prefix.push(1);
                     let found = find_inline_nodes(
                         &title.inlines,
                         id,
-                        parents,
+                        state,
                         &mut Vec::new(),
-                        prefix,
                         &title.id,
                         true,
                     );
-                    prefix.pop();
-                    prefix.pop();
+                    state.prefix.pop();
+                    state.prefix.pop();
                     if found.is_some() {
-                        parents.pop();
-                        prefix.pop();
+                        state.parents.pop();
+                        state.container.pop();
+                        state.prefix.pop();
                         return found;
                     }
                 }
-                prefix.push(1);
-                let found = find_in_blocks(&environment.children, id, parents, prefix);
-                prefix.pop();
-                parents.pop();
+                state.prefix.push(1);
+                let found = find_in_blocks(&environment.children, id, state);
+                state.prefix.pop();
+                state.parents.pop();
+                state.container.pop();
                 if found.is_some() {
-                    prefix.pop();
+                    state.prefix.pop();
                     return found;
                 }
-                prefix.pop();
+                state.prefix.pop();
                 continue;
             }
             Block::Equation(_) | Block::Align(_) | Block::ExplicitBreak(_) | Block::Opaque(_) => {}
         }
-        prefix.pop();
+        state.prefix.pop();
     }
     None
 }
@@ -393,33 +418,32 @@ fn location(
     kind: DocumentNodeKind,
     paragraph_id: Option<NodeId>,
     is_title: bool,
-    parents: &[NodeId],
+    state: &TraversalState<'_>,
     sibling_index: Option<usize>,
-    prefix: &[usize],
 ) -> DocumentNodeLocation {
     DocumentNodeLocation {
         id,
         kind,
         paragraph_id,
         is_title,
-        parent_environment_ids: parents.to_vec(),
+        parent_environment_ids: state.parents.to_vec(),
         parent_inline_environment_ids: Vec::new(),
         sibling_index,
-        order: DocumentOrderKey(prefix.to_vec()),
+        container: state.container.clone(),
+        order: DocumentOrderKey(state.prefix.to_vec()),
     }
 }
 
 fn find_inline_nodes(
     nodes: &[ParagraphContent],
     id: &NodeId,
-    block_parents: &[NodeId],
+    state: &mut TraversalState<'_>,
     inline_parents: &mut Vec<NodeId>,
-    prefix: &mut Vec<usize>,
     paragraph_id: &NodeId,
     is_title: bool,
 ) -> Option<DocumentNodeLocation> {
     for (slot, node) in nodes.iter().enumerate() {
-        prefix.push(slot * 2 + 1);
+        state.prefix.push(slot * 2 + 1);
         match node {
             FlowContent::Math(math) if &math.id == id => {
                 let mut location = location(
@@ -427,12 +451,11 @@ fn find_inline_nodes(
                     DocumentNodeKind::InlineMath,
                     Some(paragraph_id.clone()),
                     is_title,
-                    block_parents,
+                    state,
                     Some(slot),
-                    prefix,
                 );
                 location.parent_inline_environment_ids = inline_parents.clone();
-                prefix.pop();
+                state.prefix.pop();
                 return Some(location);
             }
             FlowContent::Environment(environment) => {
@@ -442,29 +465,27 @@ fn find_inline_nodes(
                         DocumentNodeKind::InlineEnvironment,
                         Some(paragraph_id.clone()),
                         is_title,
-                        block_parents,
+                        state,
                         Some(slot),
-                        prefix,
                     );
                     location.parent_inline_environment_ids = inline_parents.clone();
-                    prefix.pop();
+                    state.prefix.pop();
                     return Some(location);
                 }
                 inline_parents.push(environment.id.clone());
-                prefix.push(1);
+                state.prefix.push(1);
                 let found = find_inline_nodes(
                     &environment.children,
                     id,
-                    block_parents,
+                    state,
                     inline_parents,
-                    prefix,
                     paragraph_id,
                     is_title,
                 );
-                prefix.pop();
+                state.prefix.pop();
                 inline_parents.pop();
                 if found.is_some() {
-                    prefix.pop();
+                    state.prefix.pop();
                     return found;
                 }
             }
@@ -473,7 +494,62 @@ fn find_inline_nodes(
             | FlowContent::SoftBreak(_)
             | FlowContent::Opaque(_) => {}
         }
-        prefix.pop();
+        state.prefix.pop();
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use caret_doc::{
+        Block, BlockEnvironment, BlockEnvironmentKind, Document, NodeId, Paragraph, Table,
+        TableCell, TableRow,
+    };
+
+    #[test]
+    fn block_location_records_nested_environment_and_table_cell_container() {
+        let paragraph = Paragraph::empty(NodeId::generate());
+        let paragraph_id = paragraph.id.clone();
+        let table = Table {
+            id: NodeId::generate(),
+            rows: vec![TableRow {
+                id: NodeId::generate(),
+                cells: vec![TableCell {
+                    id: NodeId::generate(),
+                    blocks: vec![Block::Paragraph(paragraph)],
+                }],
+            }],
+        };
+        let table_id = table.id.clone();
+        let row_id = table.rows[0].id.clone();
+        let cell_id = table.rows[0].cells[0].id.clone();
+        let environment = BlockEnvironment {
+            id: NodeId::generate(),
+            kind: BlockEnvironmentKind::Section,
+            definition_id: None,
+            props: Default::default(),
+            title: None,
+            children: vec![Block::Table(table)],
+            extra: Default::default(),
+        };
+        let environment_id = environment.id.clone();
+        let mut document = Document::blank();
+        document.body = vec![Block::Environment(environment)];
+
+        let location = find_document_node(&document, &paragraph_id)
+            .unwrap_or_else(|| panic!("cell paragraph must be locatable"));
+        assert_eq!(location.parent_environment_ids, vec![environment_id]);
+        let cell = location
+            .container
+            .innermost_cell()
+            .unwrap_or_else(|| panic!("container must record the table cell"));
+        assert_eq!(cell.table_id, table_id);
+        assert_eq!(cell.row_id, row_id);
+        assert_eq!(cell.cell_id, cell_id);
+        assert_eq!(location.sibling_index, Some(0));
+        let cell_blocks = crate::block_list_by_container(&document.body, &location.container)
+            .unwrap_or_else(|| panic!("container path must resolve cell blocks"));
+        assert_eq!(cell_blocks.len(), 1);
+    }
 }
