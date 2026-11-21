@@ -33,6 +33,7 @@ class ShellDocumentInteractionTest final : public ShellTestBase {
     void clipboardCopyPasteUsesRustSelectionProjection();
     void richClipboardCopyPreservesMathStructure();
     void richClipboardPasteRoundTripsMathStructureAndUndo();
+    void richClipboardBlocksPasteRoundTripsDisplayMathAndUndo();
     void richClipboardRejectsInvalidFragmentPayload();
     void externalMathTextPasteRecognizesDelimiters();
     void selectionDragFromExistingSelectionPublishesCanvasRects();

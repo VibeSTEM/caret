@@ -1,6 +1,6 @@
 # 080 — Block/Inline 共享交互底座（Paragraph 为基线）
 
-- 状态：ready
+- 状态：in-progress
 - 依赖：071、074、077、081、082、083、091
 - 优先级：P1
 - 创建 / 更新：2026-11-09 / 2026-11-21
@@ -34,9 +34,9 @@ Caret 的 Block/Inline 编辑目前分散管理焦点位置、边界移动、选
 
 ## 前置条件与待决策
 
-- 071、074、081、082、083 已完成；077 为 `implemented`（代码与自动验证完成，仅桌面 caret 视觉确认待补）。
-- 091 富剪贴板 v1 已合入 main（PR #159，squash `5cf2d64e`）；依赖 083、092 均完成。剩余整链验收（复制/粘贴 MathTree/Align/InlineMath 保真、TeX 回退、一次 Undo、失败原子性、覆盖率与独立评审）可执行。
-- 解除阻塞：全部依赖已满足，本任务进入整链验收。Math 内部局部选区不属 080 验收范围（任务 105 跟进）。
+- 071、074、081、082、083、090、091 已完成并合入；077 为 `implemented`（代码与自动验证完成，仅桌面 caret 视觉确认待补，不阻塞 080）。
+- 091 富剪贴板 v1 已合入 main（PR #159，squash `5cf2d64e`）；依赖 083、092 均完成。整链验收已执行：复制/粘贴 MathTree/Align/InlineMath 保真、TeX 回退、一次 Undo、失败原子性、覆盖率与分域评审；独立最终评审进行中。
+- Math 内部局部选区、跨文档主题模板迁移、QML 剪贴板错误对话框与真实跨进程/跨平台剪贴板不属 080 验收范围（任务 105 跟进）。
 
 ## 实施步骤
 
@@ -60,8 +60,8 @@ Caret 的 Block/Inline 编辑目前分散管理焦点位置、边界移动、选
 - [x] 无重复权威状态、任意 Paragraph 隐藏锚点、逐类型补丁、U+FFFC 泄漏、静默对象丢失或失败后非法焦点（083 分域评审发现项已修复）。
 - [x] Paragraph、MathEdit、Section、Align 行/cell 的真实局部坐标和行为未被统一底座抹平；新 Block 只需 adapter 接入（子任务测试与 #151 跨宿主范围收敛）。
 - [x] Section、Equation、Align 的块外侧垂直导航和 Shift 选区共享视觉行候选/块边界仲裁；InlineMath 外部逐项扩选通过共享端点、范围消费与同代几何协议（#151 与 2026-11-21 定向回归）。
-- [ ] 相关行为测试、覆盖率门槛、分域检查及独立最终评审在整链（含剪贴板）上通过；未执行的桌面平台验收明确记录。当前仅子任务分别通过，整链待执行。
-- [ ] Caret 内复制粘贴保留 MathTree/Align 和 InlineMath 对象；外部应用读取可读 TeX 回退；显式 TeX 数学片段粘贴由 091 接入 092 的共享转换器。
+- [ ] 相关行为测试、覆盖率门槛、分域检查在整链（含剪贴板）上通过；独立最终评审为唯一未完成项（完成后勾选）。未执行的桌面平台验收已在验证表与已知限制中明确记录。
+- [x] Caret 内复制粘贴保留 MathTree/Align 和 InlineMath 对象；外部应用读取可读 TeX 回退；显式 TeX 数学片段粘贴由 091 接入 092 的共享转换器。新增 C++ 真实 `QClipboard` Blocks 用例逐项断言片段内 InlineMath `x`、Equation `y`、Align `a` 的 MathTree，粘贴后 InlineMath 占位 1→2、显示公式 2→4、新显示公式 ID 2 个且与源 ID 不冲突，一次 Undo/Redo 恢复整份快照；纯文本回退断言 `\(x\)`、`\[y\]`、`aligned` 且无 U+FFFC。
 
 ## 验证计划与结果
 
@@ -72,8 +72,13 @@ Caret 的 Block/Inline 编辑目前分散管理焦点位置、边界移动、选
 | 2026-11-21 | `cargo test --locked -p caret-engine editing::session::structure` / `editing::session::navigation` / `editing::session::math_edit::tests::selection_caret` / `editing::session::document_position` | 跨宿主删除/导航/选区/文档位置协议一致 | 通过：73 / 40 / 86 / 24 项 |
 | 2026-11-21 | `cargo test --locked -p caret-app vertical_navigation_leaves_math_block_boundary_for_adjacent_visual_paragraph` / `structural_selection_geometry_covers_equation_hosts_across_host_boundaries` / `backspace` / `inline_math` 过滤 | 块边界、跨宿主几何与空 inline 槽位回归 | 通过：1 / 1 / 14 / 36 项 |
 | 2026-11-21 | `cargo test --locked -p caret-engine empty_inline_math`、`cargo test --locked -p caret-app empty_inline_math` | 087 收尾：空 Inline 槽位/命中/删除/Undo/Redo/IME 回归 | 通过：9 / 5 项 |
-| — | 091 富剪贴板接入后的整链回归 | 复制/粘贴完整 MathTree/Align/InlineMath、TeX 回退与同代投影 | 未执行（091 v1 已合入；Math 内部选区由 105 跟进） |
-| — | 覆盖率门槛与整链 Terra/Sol 评审 | 通过 | 未执行（阻塞条件） |
+| 2026-11-21 | 整链定向回归：`cargo test --locked -p caret-engine`（structure 73、navigation 40、document_position 24、math_edit::tests::selection_caret 86、clipboard_fragment 29、empty_inline_math 9）；`-p caret-app`（empty_inline_math 5、backspace 14、inline_math 36、块边界 1、跨宿主几何 1） | 跨宿主删除/导航/选区/文档位置/剪贴板协议与几何一致 | 通过；另 `cargo test --locked -p caret-doc -p caret-math` 105/182 通过 |
+| 2026-11-21 | C++ 真实 `QClipboard` 整链：`richClipboardBlocksPasteRoundTripsDisplayMathAndUndo`（新增）+ `cargo build --locked -p caret-launcher` + `ctest --test-dir target/native/debug -R '^Qml.ShellLoad$'` | 跨段 Blocks 复制含 InlineMath/Equation/Align；text/plain 可读 TeX 且无 U+FFFC；粘贴后三类数学对象保留、ID 重映射无冲突、一次 Undo/Redo | 通过：Qml.ShellLoad 1/1（13.17s）；同套件其余剪贴板/撤销/跨宿主用例均通过 |
+| 2026-11-21 | 全量门禁：`cargo fmt --all -- --check`、`cargo format --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo test --workspace --locked`、`cargo lint --check` | 无回归 | 通过：workspace 1995 passed + native CTest 20/20；fmt/format/clippy/lint 通过（PR CI 复验记录随合并补记） |
+| 2026-11-21 | Nightly diagnostics [#44865061216](https://github.com/VibeSTEM/caret/actions/runs/44865061216)（main@`2c851b15`，产品代码与当前分支一致；本分支仅新增 C++ 测试与记录） | Rust coverage gate、native C++ 85% coverage gate、三平台 full workspace tests、三平台 sanitizer、quality、Miri 全部通过 | 通过：14/14 job 成功；覆盖率门槛证据来自该 run，非本分支本地 coverage |
+| 2026-11-21 | 两轮分域评审（跨宿主整链、剪贴板跨宿主集成） | 无功能阻断；需补强 C++ 断言与 080 记录 | 完成：评审报告确认 081/082/083/090/091 链路行为正确；新 C++ 用例已按建议补 MathTree 内容、InlineMath 占位、ID 重映射与 Undo/Redo 整快照断言；记录同步 |
+| 2026-11-21 | 未参与实现的 Sol/medium 只读最终评审 | 对最终完整 diff 可交付 | 进行中（完成后补记） |
+| — | 桌面平台验收：真实窗口交互/视觉、真实跨进程/跨平台系统剪贴板、外部应用互操作 | 可观察 | 未执行：077 桌面 caret 视觉确认待补；真实系统剪贴板/跨平台由任务 105 跟进；当前只有离屏 QML + 三平台 CI 无头矩阵 |
 
 ## 风险与回退
 
@@ -87,8 +92,9 @@ Caret 的 Block/Inline 编辑目前分散管理焦点位置、边界移动、选
 - 2026-11-09：本 PR 仅更新/整理 Markdown 文档，不包含代码改动或平台验证。
 - 2026-11-16：审计发现原有纯文本剪贴板会将公式降格为 U+FFFC，与结构复制契约冲突。将富剪贴板实现拆为 091；080 保留跨宿主最终集成验收。
 - 2026-11-18：桌面测试发现 Equation 外侧 Up/Down 走入公式边界重入路径，Shift 垂直扩展在视觉候选计算前只覆盖整公式；InlineMath 外部选区也只表达 U+FFFC。按维护者要求在 080/083 中补齐 Section 主导的垂直候选复用与 MathTree 内部跨宿主选区。
+- 2026-11-21：整链验收：新增 C++ `richClipboardBlocksPasteRoundTripsDisplayMathAndUndo` 覆盖跨段 Blocks 复制粘贴（InlineMath/Equation/Align 内容、ID 重映射、Undo/Redo），并补强 MathTree/占位/ID 断言；两轮分域评审确认无功能阻断。
 - 2026-11-21：跟进审计：081/082/083 已完成，083 的 InlineMath 跨宿主范围由 #151 合入；071/074 `done`、077 `implemented`。定向回归（engine structure/navigation/math selection/document_position；app 块边界、跨宿主几何、Backspace、inline math 及 087 空 inline 槽位）全部通过。剩余验收依赖 091 富剪贴板（依赖 083、092 均已完成，091 v1 已实现）：080 可在 091 合入后执行复制/粘贴整链、覆盖率与最终评审；Math 内部局部选区不属 080 验收范围（任务 105 跟进）。 勾选项当前依据 081/082/083 各自验收与 2026-11-21 定向回归，080 整链复核待 091 后再执行；087 收尾新增的 Qt 端到端空槽渲染用例不改变 080 剩余范围。
 
 ## 完成摘要
 
-未完成，状态 `ready`。081、082、083 已完成并合入，071/074 `done`、077 `implemented`；跨宿主位置/顺序/焦点/选区/事务/几何与空 Inline 槽位的定向回归在 2026-11-21 通过；091 v1 富剪贴板已合入 main（PR #159）。剩余范围是复制/粘贴整链验收（完整 MathTree/Align/InlineMath 保真、TeX 回退、一次 Undo、失败原子性），以及其后的整链覆盖率、分域与独立 final review。
+整链验收已完成：081/082/083 共享三态焦点、文档位置/全序、跨宿主选区与事务、同代几何，以及 090 拖选预览、091 v1 富剪贴板全部合入；Paragraph、Section/Custom、Equation/Align、InlineEnvironment/InlineMath 的跨宿主删除、替换、导航、选区、Undo/Redo 与剪贴板往返均有定向回归。新增 C++ 真实 `QClipboard` Blocks 用例验证完整 MathTree/Align/InlineMath 保真、TeX 回退无 U+FFFC、ID 重映射与一次 Undo/Redo；覆盖率门槛由 Nightly #44865061216 的 Rust 与 native 85% gate 提供；两轮分域评审通过。独立最终评审进行中，完成后本任务转 `done`。未执行的桌面平台/真实跨进程剪贴板验收与 105 跟进项已在验证表如实记录。
