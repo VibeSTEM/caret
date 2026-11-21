@@ -75,6 +75,7 @@
 - 2026-11-22：Gate2 完成：`LaidOutParagraph`/塑形请求/`LayoutInput` 改持共享 `BlockContainerPath`；cell 段落可反查 table/row/cell/block，布局复用键按容器比较；engine 957/workspace/clippy 通过。下一步 Gate3（页面放置单一权威/统一 clip/host 标记）。
 - 2026-11-22：Gate3：新增 `PageClip`，caret/选区/命中共享 contains/clamp；行内公式投影改从 `CaretLineLocation` 取行 x/y/clip；`ParagraphFragment.host` 标记 Body/TableCell，app 拖选只消费 Body host。cell glyph 与 caret 同源 x 有断言；workspace/clippy 通过。
 - 2026-11-22：Gate4 基础：表格单元格测量升级为块级 `MeasuredCellBlock`（高度/首基线/段距），`layout_table_grid` 统一产出每块放置几何，engine 删除第二份段落偏移；多段单元格布局有测试。为 Equation/Align/环境/嵌套表接入预留同一入口。
+- 2026-11-22：Gate4/5：单元格 Equation/Align/InlineMath 接入块级测量、网格放置、页面投影与 page_glyphs 绘制；移除 `edit.table_cell_math_unsupported` 门禁，cell 内内联/显示公式插入、继续输入、退出与 Undo 已工作；`measure_math_block`/`math_block_host_metrics` 与正文共用。剩余：cell 内环境/嵌套表、公式内部结构导航与命中跨 cell 限制、整表范围、辅助线、native/窗口验收与评审收口。
 
 ## 当前状态与后续切片
 
