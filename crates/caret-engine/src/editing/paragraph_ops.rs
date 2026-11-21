@@ -9,13 +9,35 @@ use super::{Direction, EditError, Pos, StoryId};
 use caret_doc::{Block, FlowContent, NodeId, Paragraph, ParagraphContent};
 use std::collections::HashMap;
 
+/// 表格单元格内的块流身份；路径下标供同一单元格内的文档顺序比较。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct TableCellPath {
+    pub(super) table_id: NodeId,
+    pub(super) row_id: NodeId,
+    pub(super) cell_id: NodeId,
+    pub(super) row_index: usize,
+    pub(super) cell_index: usize,
+}
+
+impl TableCellPath {
+    fn story(&self) -> StoryId {
+        StoryId::TableCell {
+            table_id: self.table_id.clone(),
+            row_id: self.row_id.clone(),
+            cell_id: self.cell_id.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct ParagraphLocation {
     pub(super) paragraph_id: NodeId,
     pub(super) story: StoryId,
+    /// 普通块：相对根块序列的完整路径；单元格块：相对单元格块序列的路径。
     pub(super) block_path: Vec<usize>,
     pub(super) parent_environment_ids: Vec<NodeId>,
     pub(super) is_title: bool,
+    pub(super) table_cell: Option<TableCellPath>,
 }
 
 impl ParagraphLocation {
@@ -30,6 +52,23 @@ impl ParagraphLocation {
             block_path,
             parent_environment_ids,
             is_title: false,
+            table_cell: None,
+        }
+    }
+
+    fn in_table_cell(
+        paragraph_id: NodeId,
+        block_path: Vec<usize>,
+        parent_environment_ids: Vec<NodeId>,
+        cell: TableCellPath,
+    ) -> Self {
+        Self {
+            story: cell.story(),
+            paragraph_id,
+            block_path,
+            parent_environment_ids,
+            is_title: false,
+            table_cell: Some(cell),
         }
     }
 }
@@ -58,7 +97,7 @@ pub(super) struct SectionTitleMergeResult {
 
 pub(super) fn build_paragraph_index(blocks: &[Block]) -> ParagraphIndex {
     let mut index = ParagraphIndex::new();
-    collect_locations(blocks, &mut Vec::new(), &mut Vec::new(), &mut index);
+    collect_locations(blocks, &mut Vec::new(), &mut Vec::new(), &mut index, None);
     index
 }
 
@@ -67,22 +106,26 @@ fn collect_locations(
     parent_path: &mut Vec<usize>,
     parent_environment_ids: &mut Vec<NodeId>,
     index: &mut ParagraphIndex,
+    table_cell: Option<&TableCellPath>,
 ) {
     for (block_index, block) in blocks.iter().enumerate() {
         parent_path.push(block_index);
         match block {
-            // 单元格段落的容器路径由 045 的 S1 切片接入；本切片先不把表内
-            // 段落误投成正文段落。
-            Block::Table(_) => {}
             Block::Paragraph(paragraph) => {
-                index.insert(
-                    paragraph.id.clone(),
-                    ParagraphLocation::body(
+                let location = match table_cell {
+                    Some(cell) => ParagraphLocation::in_table_cell(
+                        paragraph.id.clone(),
+                        parent_path.clone(),
+                        parent_environment_ids.clone(),
+                        cell.clone(),
+                    ),
+                    None => ParagraphLocation::body(
                         paragraph.id.clone(),
                         parent_path.clone(),
                         parent_environment_ids.clone(),
                     ),
-                );
+                };
+                index.insert(paragraph.id.clone(), location);
             }
             Block::Environment(environment) => {
                 if let Some(title) = &environment.title {
@@ -98,6 +141,7 @@ fn collect_locations(
                                 .chain(std::iter::once(environment.id.clone()))
                                 .collect(),
                             is_title: true,
+                            table_cell: table_cell.cloned(),
                         },
                     );
                 }
@@ -107,8 +151,31 @@ fn collect_locations(
                     parent_path,
                     parent_environment_ids,
                     index,
+                    table_cell,
                 );
                 parent_environment_ids.pop();
+            }
+            Block::Table(table) => {
+                for (row_index, row) in table.rows.iter().enumerate() {
+                    for (cell_index, cell) in row.cells.iter().enumerate() {
+                        let cell_path = TableCellPath {
+                            table_id: table.id.clone(),
+                            row_id: row.id.clone(),
+                            cell_id: cell.id.clone(),
+                            row_index,
+                            cell_index,
+                        };
+                        for (child_index, child) in cell.blocks.iter().enumerate() {
+                            collect_block_locations(
+                                child,
+                                &[child_index],
+                                parent_environment_ids,
+                                index,
+                                Some(&cell_path),
+                            );
+                        }
+                    }
+                }
             }
             Block::ExplicitBreak(_) | Block::Opaque(_) | Block::Equation(_) | Block::Align(_) => {}
         }
@@ -123,7 +190,8 @@ pub(super) fn update_index_after_split(
     location: &ParagraphLocation,
 ) {
     if location.is_title {
-        let Some(Block::Environment(environment)) = block_at_path(blocks, &location.block_path)
+        let Some(Block::Environment(environment)) =
+            block_at_location(blocks, location, &location.block_path)
         else {
             return;
         };
@@ -133,22 +201,19 @@ pub(super) fn update_index_after_split(
             &location.parent_environment_ids,
             1,
             index,
+            location.table_cell.as_ref(),
         );
         let mut right_path = location.block_path.clone();
         right_path.push(0);
         index.insert(
             right_id.clone(),
-            ParagraphLocation::body(
-                right_id.clone(),
-                right_path,
-                location.parent_environment_ids.clone(),
-            ),
+            split_location(right_id, right_path, location),
         );
     } else {
         let Some((&source_index, parent_path)) = location.block_path.split_last() else {
             return;
         };
-        let Some(siblings) = block_list_at_path(blocks, parent_path) else {
+        let Some(siblings) = block_list_at_location(blocks, location, parent_path) else {
             return;
         };
         collect_locations_from(
@@ -157,17 +222,34 @@ pub(super) fn update_index_after_split(
             &location.parent_environment_ids,
             source_index + 2,
             index,
+            location.table_cell.as_ref(),
         );
         let mut right_path = parent_path.to_vec();
         right_path.push(source_index + 1);
         index.insert(
             right_id.clone(),
-            ParagraphLocation::body(
-                right_id.clone(),
-                right_path,
-                location.parent_environment_ids.clone(),
-            ),
+            split_location(right_id, right_path, location),
         );
+    }
+}
+
+fn split_location(
+    right_id: &NodeId,
+    block_path: Vec<usize>,
+    location: &ParagraphLocation,
+) -> ParagraphLocation {
+    match &location.table_cell {
+        Some(cell) => ParagraphLocation::in_table_cell(
+            right_id.clone(),
+            block_path,
+            location.parent_environment_ids.clone(),
+            cell.clone(),
+        ),
+        None => ParagraphLocation::body(
+            right_id.clone(),
+            block_path,
+            location.parent_environment_ids.clone(),
+        ),
     }
 }
 
@@ -177,31 +259,23 @@ pub(super) fn update_index_after_merge(
     left_id: &NodeId,
     right_id: &NodeId,
 ) {
-    let Some((left_index, parent_path, parent_environment_ids)) =
-        index.get(left_id).and_then(|location| {
-            location
-                .block_path
-                .split_last()
-                .map(|(&left_index, parent_path)| {
-                    (
-                        left_index,
-                        parent_path.to_vec(),
-                        location.parent_environment_ids.clone(),
-                    )
-                })
-        })
-    else {
+    let Some(location) = index.get(left_id).cloned() else {
         return;
     };
-    let Some(siblings) = block_list_at_path(blocks, &parent_path) else {
+    let Some((&left_index, parent_path)) = location.block_path.split_last() else {
+        return;
+    };
+    let parent_path = parent_path.to_vec();
+    let Some(siblings) = block_list_at_location(blocks, &location, &parent_path) else {
         return;
     };
     collect_locations_from(
         siblings,
         &parent_path,
-        &parent_environment_ids,
+        &location.parent_environment_ids,
         left_index + 1,
         index,
+        location.table_cell.as_ref(),
     );
     index.remove(right_id);
 }
@@ -212,11 +286,12 @@ fn collect_locations_from(
     parent_environment_ids: &[NodeId],
     start_index: usize,
     index: &mut ParagraphIndex,
+    table_cell: Option<&TableCellPath>,
 ) {
     for (block_index, block) in blocks.iter().enumerate().skip(start_index) {
         let mut path = parent_path.to_vec();
         path.push(block_index);
-        collect_block_locations(block, &path, parent_environment_ids, index);
+        collect_block_locations(block, &path, parent_environment_ids, index, table_cell);
     }
 }
 
@@ -225,19 +300,24 @@ fn collect_block_locations(
     path: &[usize],
     parent_environment_ids: &[NodeId],
     index: &mut ParagraphIndex,
+    table_cell: Option<&TableCellPath>,
 ) {
     match block {
-        // 见 collect_locations：表内段落的索引在容器路径切片接入。
-        Block::Table(_) => {}
         Block::Paragraph(paragraph) => {
-            index.insert(
-                paragraph.id.clone(),
-                ParagraphLocation::body(
+            let location = match table_cell {
+                Some(cell) => ParagraphLocation::in_table_cell(
+                    paragraph.id.clone(),
+                    path.to_vec(),
+                    parent_environment_ids.to_vec(),
+                    cell.clone(),
+                ),
+                None => ParagraphLocation::body(
                     paragraph.id.clone(),
                     path.to_vec(),
                     parent_environment_ids.to_vec(),
                 ),
-            );
+            };
+            index.insert(paragraph.id.clone(), location);
         }
         Block::Environment(environment) => {
             if let Some(title) = &environment.title {
@@ -253,6 +333,7 @@ fn collect_block_locations(
                             .chain(std::iter::once(environment.id.clone()))
                             .collect(),
                         is_title: true,
+                        table_cell: table_cell.cloned(),
                     },
                 );
             }
@@ -264,7 +345,30 @@ fn collect_block_locations(
                 &mut child_path,
                 &mut child_parent_ids,
                 index,
+                table_cell,
             );
+        }
+        Block::Table(table) => {
+            for (row_index, row) in table.rows.iter().enumerate() {
+                for (cell_index, cell) in row.cells.iter().enumerate() {
+                    let cell_path = TableCellPath {
+                        table_id: table.id.clone(),
+                        row_id: row.id.clone(),
+                        cell_id: cell.id.clone(),
+                        row_index,
+                        cell_index,
+                    };
+                    for (child_index, child) in cell.blocks.iter().enumerate() {
+                        collect_block_locations(
+                            child,
+                            &[child_index],
+                            parent_environment_ids,
+                            index,
+                            Some(&cell_path),
+                        );
+                    }
+                }
+            }
         }
         Block::ExplicitBreak(_) | Block::Opaque(_) | Block::Equation(_) | Block::Align(_) => {}
     }
@@ -281,9 +385,71 @@ fn block_list_at_path<'a>(blocks: &'a [Block], parent_path: &[usize]) -> Option<
     Some(current)
 }
 
-fn block_at_path<'a>(blocks: &'a [Block], path: &[usize]) -> Option<&'a Block> {
+/// 按段落位置取得其所属块序列：普通块从根路径解析，单元格块先解析单元格容器。
+fn block_list_at_location<'a>(
+    blocks: &'a [Block],
+    location: &ParagraphLocation,
+    parent_path: &[usize],
+) -> Option<&'a [Block]> {
+    let Some(cell) = &location.table_cell else {
+        return block_list_at_path(blocks, parent_path);
+    };
+    let mut current = caret_structure::block_list_by_table_cell(
+        blocks,
+        &location.parent_environment_ids,
+        &cell.table_id,
+        &cell.row_id,
+        &cell.cell_id,
+    )?;
+    for block_index in parent_path {
+        let Block::Environment(environment) = current.get(*block_index)? else {
+            return None;
+        };
+        current = &environment.children;
+    }
+    Some(current)
+}
+
+fn block_at_location<'a>(
+    blocks: &'a [Block],
+    location: &ParagraphLocation,
+    path: &[usize],
+) -> Option<&'a Block> {
     let (block_index, parent_path) = path.split_last()?;
-    block_list_at_path(blocks, parent_path)?.get(*block_index)
+    block_list_at_location(blocks, location, parent_path)?.get(*block_index)
+}
+
+fn block_list_at_location_mut<'a>(
+    blocks: &'a mut Vec<Block>,
+    location: &ParagraphLocation,
+    parent_path: &[usize],
+) -> Option<&'a mut Vec<Block>> {
+    let Some(cell) = &location.table_cell else {
+        return block_list_at_path_mut(blocks, parent_path);
+    };
+    let mut current = caret_structure::block_list_by_table_cell_mut(
+        blocks,
+        &location.parent_environment_ids,
+        &cell.table_id,
+        &cell.row_id,
+        &cell.cell_id,
+    )?;
+    for block_index in parent_path {
+        let Block::Environment(environment) = current.get_mut(*block_index)? else {
+            return None;
+        };
+        current = &mut environment.children;
+    }
+    Some(current)
+}
+
+fn block_at_location_mut<'a>(
+    blocks: &'a mut Vec<Block>,
+    location: &ParagraphLocation,
+    path: &[usize],
+) -> Option<&'a mut Block> {
+    let (block_index, parent_path) = path.split_last()?;
+    block_list_at_location_mut(blocks, location, parent_path)?.get_mut(*block_index)
 }
 
 pub(super) fn paragraph_at_location<'a>(
@@ -313,8 +479,12 @@ pub(super) fn validated_paragraph_location<'a>(
         }
         Some((paragraph, physical.parent_environment_ids, 0))
     } else {
+        let expected_story = match &location.table_cell {
+            Some(cell) => cell.story(),
+            None => StoryId::Body,
+        };
         if physical.kind != caret_structure::DocumentNodeKind::Paragraph
-            || location.story != StoryId::Body
+            || location.story != expected_story
         {
             return None;
         }
@@ -339,18 +509,28 @@ pub(super) fn paragraph_at_location_any<'a>(
     blocks: &'a [Block],
     location: &ParagraphLocation,
 ) -> Option<&'a Paragraph> {
-    let mut current = blocks;
+    let mut current = match &location.table_cell {
+        Some(cell) => caret_structure::block_list_by_table_cell(
+            blocks,
+            &location.parent_environment_ids,
+            &cell.table_id,
+            &cell.row_id,
+            &cell.cell_id,
+        )?,
+        None => blocks,
+    };
     let mut parent_environment_ids = Vec::new();
     for (depth, block_index) in location.block_path.iter().enumerate() {
         let block = current.get(*block_index)?;
         if depth + 1 == location.block_path.len() {
             return match (block, location.is_title) {
-                (Block::Paragraph(paragraph), false) if location.story == StoryId::Body => {
-                    (location.parent_environment_ids == parent_environment_ids).then_some(paragraph)
+                (Block::Paragraph(paragraph), false)
+                    if location.parent_environment_ids == parent_environment_ids =>
+                {
+                    Some(paragraph)
                 }
                 (Block::Environment(environment), true)
-                    if location.story == StoryId::EnvironmentTitle(environment.id.clone())
-                        && environment.title.is_some() =>
+                    if location.story == StoryId::EnvironmentTitle(environment.id.clone()) =>
                 {
                     let mut expected_parent_ids = parent_environment_ids;
                     expected_parent_ids.push(environment.id.clone());
@@ -373,7 +553,7 @@ pub(super) fn paragraph_at_location_any<'a>(
 }
 
 pub(super) fn paragraph_at_location_mut<'a>(
-    blocks: &'a mut [Block],
+    blocks: &'a mut Vec<Block>,
     location: &ParagraphLocation,
 ) -> Option<&'a mut Paragraph> {
     fn visit<'a>(
@@ -381,7 +561,6 @@ pub(super) fn paragraph_at_location_mut<'a>(
         path: &[usize],
         is_title: bool,
         paragraph_id: &NodeId,
-        story: &StoryId,
         expected_parent_ids: &[NodeId],
         parent_ids: &mut Vec<NodeId>,
     ) -> Option<&'a mut Paragraph> {
@@ -390,26 +569,23 @@ pub(super) fn paragraph_at_location_mut<'a>(
         if rest.is_empty() {
             return match (block, is_title) {
                 (Block::Paragraph(paragraph), false)
-                    if *story == StoryId::Body
-                        && paragraph.id == *paragraph_id
+                    if paragraph.id == *paragraph_id
                         && expected_parent_ids == parent_ids.as_slice() =>
                 {
                     Some(paragraph)
                 }
                 (Block::Environment(environment), true)
-                    if *story == StoryId::EnvironmentTitle(environment.id.clone())
-                        && environment
-                            .title
-                            .as_ref()
-                            .is_some_and(|title| title.id == *paragraph_id)
-                        && expected_parent_ids
-                            == parent_ids
-                                .iter()
-                                .cloned()
-                                .chain(std::iter::once(environment.id.clone()))
-                                .collect::<Vec<_>>() =>
+                    if expected_parent_ids
+                        == parent_ids
+                            .iter()
+                            .cloned()
+                            .chain(std::iter::once(environment.id.clone()))
+                            .collect::<Vec<_>>() =>
                 {
-                    environment.title.as_mut()
+                    environment
+                        .title
+                        .as_mut()
+                        .filter(|title| title.id == *paragraph_id)
                 }
                 _ => None,
             };
@@ -422,7 +598,6 @@ pub(super) fn paragraph_at_location_mut<'a>(
                     rest,
                     is_title,
                     paragraph_id,
-                    story,
                     expected_parent_ids,
                     parent_ids,
                 );
@@ -433,15 +608,34 @@ pub(super) fn paragraph_at_location_mut<'a>(
         }
     }
 
-    visit(
-        blocks,
-        &location.block_path,
-        location.is_title,
-        &location.paragraph_id,
-        &location.story,
-        &location.parent_environment_ids,
-        &mut Vec::new(),
-    )
+    let mut parent_ids = Vec::new();
+    match &location.table_cell {
+        Some(cell) => {
+            let container = caret_structure::block_list_by_table_cell_mut(
+                blocks,
+                &location.parent_environment_ids,
+                &cell.table_id,
+                &cell.row_id,
+                &cell.cell_id,
+            )?;
+            visit(
+                container,
+                &location.block_path,
+                location.is_title,
+                &location.paragraph_id,
+                &location.parent_environment_ids,
+                &mut parent_ids,
+            )
+        }
+        None => visit(
+            blocks,
+            &location.block_path,
+            location.is_title,
+            &location.paragraph_id,
+            &location.parent_environment_ids,
+            &mut parent_ids,
+        ),
+    }
 }
 
 pub(super) fn first_paragraph(blocks: &[Block]) -> Option<(&Paragraph, StoryId)> {
@@ -485,6 +679,11 @@ pub(super) fn compare_positions(
     if left_location.story != left.story || right_location.story != right.story {
         return Err(EditError::WrongStory);
     }
+    let left_is_cell = matches!(left_location.story, StoryId::TableCell { .. });
+    let right_is_cell = matches!(right_location.story, StoryId::TableCell { .. });
+    if (left_is_cell || right_is_cell) && left_location.story != right_location.story {
+        return Err(EditError::WrongStory);
+    }
     let left_paragraph =
         paragraph_at_location(blocks, left_location).ok_or(EditError::InvalidPosition)?;
     if left.paragraph_id == right.paragraph_id {
@@ -516,7 +715,7 @@ pub(super) fn insert_paragraph_after(
     let Some((&target_index, parent_path)) = location.block_path.split_last() else {
         return false;
     };
-    let Some(parent) = block_list_at_path_mut(blocks, parent_path) else {
+    let Some(parent) = block_list_at_location_mut(blocks, location, parent_path) else {
         return false;
     };
     if !matches!(parent.get(target_index), Some(Block::Paragraph(_))) {
@@ -541,7 +740,7 @@ pub(super) fn replace_paragraph_with_many(
     let Some((&target_index, parent_path)) = location.block_path.split_last() else {
         return false;
     };
-    let Some(parent) = block_list_at_path_mut(blocks, parent_path) else {
+    let Some(parent) = block_list_at_location_mut(blocks, location, parent_path) else {
         return false;
     };
     if !matches!(parent.get(target_index), Some(Block::Paragraph(_))) {
@@ -556,7 +755,7 @@ pub(super) fn replace_paragraph_with_many(
 }
 
 pub(super) fn split_environment_title(
-    blocks: &mut [Block],
+    blocks: &mut Vec<Block>,
     location: &ParagraphLocation,
     left: &mut Option<Paragraph>,
     right: &mut Option<Paragraph>,
@@ -567,14 +766,14 @@ pub(super) fn split_environment_title(
     if !location.is_title {
         return false;
     }
-    let Some(environment) =
-        block_at_path_mut(blocks, &location.block_path).and_then(|block| match block {
+    let Some(environment) = block_at_location_mut(blocks, location, &location.block_path).and_then(
+        |block| match block {
             Block::Environment(environment) if &environment.id == environment_id => {
                 Some(environment)
             }
             _ => None,
-        })
-    else {
+        },
+    ) else {
         return false;
     };
     if environment.title.is_none() {
@@ -599,7 +798,7 @@ pub(super) fn merge_adjacent_paragraph(
     let Some((&index, parent_path)) = location.block_path.split_last() else {
         return Ok(None);
     };
-    let Some(blocks) = block_list_at_path_mut(blocks, parent_path) else {
+    let Some(blocks) = block_list_at_location_mut(blocks, location, parent_path) else {
         return Ok(None);
     };
     let (left_index, right_index) = match direction {
@@ -644,7 +843,7 @@ pub(super) fn merge_adjacent_paragraph(
 
 /// 将 Section 首个正文段落合并回独立标题，供段首退格删除标题边界。
 pub(super) fn merge_section_body_into_title(
-    blocks: &mut [Block],
+    blocks: &mut Vec<Block>,
     location: &ParagraphLocation,
 ) -> Result<Option<SectionTitleMergeResult>, EditError> {
     if location.is_title || location.story != StoryId::Body {
@@ -656,7 +855,9 @@ pub(super) fn merge_section_body_into_title(
     if index != 0 {
         return Ok(None);
     }
-    let Some(Block::Environment(environment)) = block_at_path_mut(blocks, parent_path) else {
+    let Some(Block::Environment(environment)) =
+        block_at_location_mut(blocks, location, parent_path)
+    else {
         return Ok(None);
     };
     if environment.kind != caret_doc::BlockEnvironmentKind::Section {
@@ -716,7 +917,7 @@ pub(super) fn merge_paragraph_after_empty_section_into_title(
     let Some(section_index) = paragraph_index.checked_sub(1) else {
         return Ok(None);
     };
-    let Some(siblings) = block_list_at_path_mut(blocks, parent_path) else {
+    let Some(siblings) = block_list_at_location_mut(blocks, location, parent_path) else {
         return Ok(None);
     };
     let Some(Block::Paragraph(paragraph)) = siblings.get(paragraph_index) else {
@@ -785,8 +986,8 @@ pub(super) fn merge_paragraph_range(
     if start_parent != end_parent || start_index >= end_index {
         return Err(EditError::CrossParagraphSelection);
     }
-    let siblings =
-        block_list_at_path(blocks, start_parent).ok_or(EditError::CrossParagraphSelection)?;
+    let siblings = block_list_at_location(blocks, start, start_parent)
+        .ok_or(EditError::CrossParagraphSelection)?;
     let selected = siblings
         .get(start_index..=end_index)
         .ok_or(EditError::CrossParagraphSelection)?;
@@ -842,8 +1043,8 @@ pub(super) fn merge_paragraph_range(
         .collect();
     let paragraph_id = merged.id.clone();
 
-    let siblings =
-        block_list_at_path_mut(blocks, start_parent).ok_or(EditError::CrossParagraphSelection)?;
+    let siblings = block_list_at_location_mut(blocks, start, start_parent)
+        .ok_or(EditError::CrossParagraphSelection)?;
     siblings.splice(start_index..=end_index, [Block::Paragraph(merged)]);
     Ok(ParagraphRangeMergeResult {
         paragraph_id,
@@ -879,18 +1080,4 @@ fn block_list_at_path_mut<'a>(
         blocks = &mut environment.children;
     }
     Some(blocks)
-}
-
-fn block_at_path_mut<'a>(mut blocks: &'a mut [Block], path: &[usize]) -> Option<&'a mut Block> {
-    for (depth, block_index) in path.iter().enumerate() {
-        let block = blocks.get_mut(*block_index)?;
-        if depth + 1 == path.len() {
-            return Some(block);
-        }
-        let Block::Environment(environment) = block else {
-            return None;
-        };
-        blocks = &mut environment.children;
-    }
-    None
 }

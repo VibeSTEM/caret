@@ -119,7 +119,7 @@ impl Session {
             .ok_or_else(|| EditError::UnknownParagraph(anchor.paragraph_id.to_string()))?;
 
         match &anchor.story {
-            StoryId::Body => {
+            StoryId::Body | StoryId::TableCell { .. } => {
                 if !insert_paragraph_after(
                     &mut self.document.body,
                     &location,

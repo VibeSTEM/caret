@@ -1268,13 +1268,14 @@ fn table_with(rows: serde_json::Value) -> Block {
         "id": "table-1",
         "rows": rows
     }))
-    .expect("table test fixture must parse")
+    .unwrap_or_else(|error| panic!("table test fixture must parse: {error}"))
 }
 
 #[test]
 fn table_block_round_trips_rows_cells_and_cell_blocks() {
     let value = table_block_json();
-    let block: Block = serde_json::from_value(value.clone()).expect("table block must parse");
+    let block: Block = serde_json::from_value(value.clone())
+        .unwrap_or_else(|error| panic!("table block must parse: {error}"));
     let Block::Table(table) = &block else {
         panic!("expected a table block");
     };
@@ -1284,13 +1285,15 @@ fn table_block_round_trips_rows_cells_and_cell_blocks() {
         table.rows[0].cells[0].blocks.len() + table.rows[0].cells[1].blocks.len(),
         2
     );
-    let encoded = serde_json::to_value(&block).expect("table block must serialize");
+    let encoded = serde_json::to_value(&block)
+        .unwrap_or_else(|error| panic!("table block must serialize: {error}"));
     // 表格自身不引入默认字段；单元格内段落沿用段落序列化默认值。
     assert_eq!(encoded["type"], "table");
     assert!(encoded["rows"].is_array());
     assert!(encoded["rows"][0]["cells"].is_array());
     assert!(encoded["rows"][0]["cells"][0]["blocks"].is_array());
-    let reparsed: Block = serde_json::from_value(encoded).expect("encoded table must parse");
+    let reparsed: Block = serde_json::from_value(encoded)
+        .unwrap_or_else(|error| panic!("encoded table must parse: {error}"));
     assert_eq!(reparsed, block);
 }
 
@@ -1303,8 +1306,9 @@ fn table_known_structures_reject_unknown_fields() {
     let mut cell_extra = table_block_json();
     cell_extra["rows"][0]["cells"][0]["vendorField"] = serde_json::json!(true);
     for value in [table_extra, row_extra, cell_extra] {
-        let error = serde_json::from_value::<Block>(value)
-            .expect_err("unknown table fields must be rejected");
+        let Some(error) = serde_json::from_value::<Block>(value).err() else {
+            panic!("unknown table fields must be rejected");
+        };
         assert!(
             error.to_string().contains("unknown fields"),
             "unexpected error: {error}"
@@ -1356,10 +1360,13 @@ fn table_validation_rejects_empty_cells_and_duplicate_ids() {
 
 #[test]
 fn valid_table_contributes_the_capability_and_validates() {
-    let block: Block = serde_json::from_value(table_block_json()).expect("table must parse");
+    let block: Block = serde_json::from_value(table_block_json())
+        .unwrap_or_else(|error| panic!("table must parse: {error}"));
     let mut document = Document::blank();
     document.body = vec![block];
-    document.validate().expect("valid table must validate");
+    document
+        .validate()
+        .unwrap_or_else(|error| panic!("valid table must validate: {error}"));
     assert!(
         document
             .required_features()

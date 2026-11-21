@@ -2685,3 +2685,174 @@ fn cross_paragraph_replacement_keeps_the_original_cut_when_graphemes_join() -> R
     assert_eq!(session.selection().focus.offset, "aX\u{301}".len());
     Ok(())
 }
+
+fn table_document_with_cells() -> (Document, NodeId, Vec<NodeId>) {
+    let table_value = serde_json::json!({
+        "type": "table",
+        "id": "table-1",
+        "rows": [{
+            "id": "row-1",
+            "cells": [
+                {"id": "cell-1", "blocks": [
+                    {"type": "paragraph", "id": "cell-paragraph-1", "inlines": [{
+                        "type": "text",
+                        "runs": [{"text": "one", "props": {}}]
+                    }]},
+                    {"type": "paragraph", "id": "cell-paragraph-2", "inlines": []}
+                ]},
+                {"id": "cell-2", "blocks": [
+                    {"type": "paragraph", "id": "cell-paragraph-3", "inlines": []}
+                ]}
+            ]
+        }]
+    });
+    let table: Block = serde_json::from_value(table_value)
+        .unwrap_or_else(|error| panic!("table fixture must parse: {error}"));
+    let table_id = match &table {
+        Block::Table(table) => table.id.clone(),
+        _ => panic!("expected a table block"),
+    };
+    let mut document = Document::blank();
+    document.body.push(table);
+    let paragraph_ids = ["cell-paragraph-1", "cell-paragraph-2", "cell-paragraph-3"]
+        .into_iter()
+        .map(|id| NodeId::parse(id).unwrap_or_else(|error| panic!("paragraph id: {error}")))
+        .collect();
+    (document, table_id, paragraph_ids)
+}
+
+#[test]
+fn table_cell_paragraphs_share_the_paragraph_index_and_cell_story() {
+    use super::paragraph_ops::{
+        build_paragraph_index, paragraph_at_location, paragraph_at_location_mut,
+    };
+
+    let (mut document, table_id, paragraphs) = table_document_with_cells();
+    let session = Session::new(document.clone())
+        .unwrap_or_else(|error| panic!("table document must open: {error}"));
+    for paragraph_id in &paragraphs {
+        let story = session
+            .story_for_paragraph(paragraph_id)
+            .unwrap_or_else(|| panic!("cell paragraph must have a story"));
+        let StoryId::TableCell {
+            table_id: story_table,
+            row_id,
+            cell_id,
+        } = story
+        else {
+            panic!("cell paragraph story must be a table cell");
+        };
+        assert_eq!(&story_table, &table_id);
+        assert_eq!(row_id.to_string(), "row-1");
+        assert!(cell_id.to_string() == "cell-1" || cell_id.to_string() == "cell-2");
+    }
+
+    let index = build_paragraph_index(&document.body);
+    for paragraph_id in &paragraphs {
+        let location = index
+            .get(paragraph_id)
+            .unwrap_or_else(|| panic!("cell paragraph must enter the paragraph index"));
+        assert!(location.table_cell.is_some());
+        let paragraph = paragraph_at_location(&document.body, location)
+            .unwrap_or_else(|| panic!("cell paragraph must resolve through its container"));
+        assert_eq!(&paragraph.id, paragraph_id);
+    }
+
+    let first_location = index
+        .get(&paragraphs[0])
+        .unwrap_or_else(|| panic!("indexed"))
+        .clone();
+    let paragraph = paragraph_at_location_mut(&mut document.body, &first_location)
+        .unwrap_or_else(|| panic!("cell paragraph must be mutable through its container"));
+    paragraph
+        .props
+        .insert("tableEdited".to_owned(), serde_json::json!(true));
+    document
+        .validate()
+        .unwrap_or_else(|error| panic!("cell edit must keep the document valid: {error}"));
+}
+
+#[test]
+fn table_cell_positions_compare_inside_one_cell_and_reject_cross_cell() {
+    use super::paragraph_ops::{build_paragraph_index, compare_positions};
+
+    let (document, _table_id, paragraphs) = table_document_with_cells();
+    let index = build_paragraph_index(&document.body);
+    let cell_story = |cell_index: usize| -> StoryId {
+        for block in &document.body {
+            if let Block::Table(table) = block {
+                return StoryId::TableCell {
+                    table_id: table.id.clone(),
+                    row_id: table.rows[0].id.clone(),
+                    cell_id: table.rows[0].cells[cell_index].id.clone(),
+                };
+            }
+        }
+        panic!("table block is missing");
+    };
+    let position = |paragraph_id: &NodeId, story: &StoryId| Pos {
+        story: story.clone(),
+        paragraph_id: paragraph_id.clone(),
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
+    let story = cell_story(0);
+    let first = position(&paragraphs[0], &story);
+    let second = position(&paragraphs[1], &story);
+    assert!(matches!(
+        compare_positions(&document.body, &index, &first, &second),
+        Ok(std::cmp::Ordering::Less)
+    ));
+    let other_cell = cell_story(1);
+    let third = position(&paragraphs[2], &other_cell);
+    assert!(matches!(
+        compare_positions(&document.body, &index, &first, &third),
+        Err(EditError::WrongStory)
+    ));
+}
+
+#[test]
+fn table_cell_split_uses_the_shared_paragraph_transaction() {
+    use super::paragraph_ops::{
+        build_paragraph_index, insert_paragraph_after, paragraph_at_location,
+        update_index_after_split,
+    };
+
+    let (mut document, table_id, paragraphs) = table_document_with_cells();
+    let mut index = build_paragraph_index(&document.body);
+    let location = index
+        .get(&paragraphs[0])
+        .unwrap_or_else(|| panic!("indexed"))
+        .clone();
+    let left = paragraph_at_location(&document.body, &location)
+        .unwrap_or_else(|| panic!("cell paragraph"))
+        .clone();
+    let mut right = left.clone();
+    right.id = NodeId::generate();
+    let right_id = right.id.clone();
+    let mut left_slot = Some(left);
+    let mut right_slot = Some(right);
+    assert!(insert_paragraph_after(
+        &mut document.body,
+        &location,
+        &mut left_slot,
+        &mut right_slot
+    ));
+    update_index_after_split(&document.body, &mut index, &right_id, &location);
+    let right_location = index
+        .get(&right_id)
+        .unwrap_or_else(|| panic!("split paragraph indexed"));
+    assert!(right_location.table_cell.is_some());
+    assert_eq!(right_location.paragraph_id, right_id);
+    let row_id = NodeId::parse("row-1").unwrap_or_else(|error| panic!("row id: {error}"));
+    let cell_id = NodeId::parse("cell-1").unwrap_or_else(|error| panic!("cell id: {error}"));
+    let cell_blocks = caret_structure::block_list_by_table_cell(
+        &document.body,
+        &[],
+        &table_id,
+        &row_id,
+        &cell_id,
+    )
+    .unwrap_or_else(|| panic!("cell blocks must resolve"));
+    assert_eq!(cell_blocks.len(), 3);
+}

@@ -169,6 +169,14 @@ pub enum StoryView {
         #[serde(rename = "environmentId")]
         environment_id: String,
     },
+    TableCell {
+        #[serde(rename = "tableId")]
+        table_id: String,
+        #[serde(rename = "rowId")]
+        row_id: String,
+        #[serde(rename = "cellId")]
+        cell_id: String,
+    },
 }
 
 /// 文字命中位置，同时保留逻辑亲和性、视觉亲和性和输入代际。
@@ -432,6 +440,15 @@ impl From<&PageHit> for DocumentPositionView {
             StoryId::Body => StoryView::Body,
             StoryId::EnvironmentTitle(environment_id) => StoryView::EnvironmentTitle {
                 environment_id: environment_id.to_string(),
+            },
+            StoryId::TableCell {
+                table_id,
+                row_id,
+                cell_id,
+            } => StoryView::TableCell {
+                table_id: table_id.to_string(),
+                row_id: row_id.to_string(),
+                cell_id: cell_id.to_string(),
             },
         };
         Self {

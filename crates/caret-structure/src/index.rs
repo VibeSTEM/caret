@@ -34,6 +34,8 @@ pub enum StructureKind {
     Equation,
     /// 多行对齐公式块。
     Align,
+    /// 表格块；单元格段落以表格为父链进入索引。
+    Table,
 }
 
 /// 面向通用界面展示的结构形态，不暴露具体结构语义名称。
@@ -54,6 +56,7 @@ impl StructureKind {
             Self::Heading { .. } => StructureClass::SingleLine,
             Self::Equation => StructureClass::SingleLine,
             Self::Section | Self::Custom | Self::Align => StructureClass::MultiLine,
+            Self::Table => StructureClass::Table,
         }
     }
 
@@ -268,8 +271,31 @@ impl StructureIndex {
 
     fn collect_block(&mut self, block: &Block, parent_indices: &mut Vec<usize>) {
         match block {
-            // 表格结构索引与单元格段落 ordinal 由 045 的容器路径切片接入。
-            Block::Table(_) => {}
+            Block::Table(table) => {
+                let start = self.paragraph_ordinals.len();
+                let entry_index = self.structures.len();
+                self.structures.push(IndexedStructure {
+                    id: table.id.clone(),
+                    paragraph_id: None,
+                    title_environment_id: None,
+                    kind: StructureKind::Table,
+                    parent_index: parent_indices.last().copied(),
+                    range: StructureRange {
+                        paragraph_ordinals: start..start,
+                    },
+                });
+                self.structure_lookup.insert(table.id.clone(), entry_index);
+                parent_indices.push(entry_index);
+                for row in &table.rows {
+                    for cell in &row.cells {
+                        self.collect_blocks(&cell.blocks, parent_indices);
+                    }
+                }
+                parent_indices.pop();
+                if let Some(entry) = self.structures.get_mut(entry_index) {
+                    entry.range.paragraph_ordinals.end = self.paragraph_ordinals.len();
+                }
+            }
             Block::Paragraph(paragraph) => {
                 self.push_paragraph(
                     &ParagraphAtom::new(paragraph),

@@ -1845,6 +1845,11 @@ fn story_id_bytes(story: &StoryId) -> usize {
     match story {
         StoryId::Body => 0,
         StoryId::EnvironmentTitle(id) => node_id_bytes(id),
+        StoryId::TableCell {
+            table_id,
+            row_id,
+            cell_id,
+        } => node_id_bytes(table_id) + node_id_bytes(row_id) + node_id_bytes(cell_id),
     }
 }
 

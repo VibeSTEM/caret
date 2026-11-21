@@ -12,6 +12,12 @@ use super::host_caret::{HostCaretLocalPosition, HostCaretPosition};
 pub enum StoryId {
     Body,
     EnvironmentTitle(NodeId),
+    /// 表格单元格内的块流；行/单元格身份加入 Story，跨 cell 文本操作天然被拒绝。
+    TableCell {
+        table_id: NodeId,
+        row_id: NodeId,
+        cell_id: NodeId,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
