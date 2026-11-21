@@ -48,7 +48,8 @@ namespace caret::keyboard {
     const bool arrow = key == Qt::Key_Up || key == Qt::Key_Down || key == Qt::Key_Left ||
                        key == Qt::Key_Right;
 #ifdef Q_OS_MACOS
-    return modifiers == (Qt::ControlModifier | Qt::AltModifier | Qt::ShiftModifier) && arrow;
+    return modifiers == (physicalControlModifier() | Qt::AltModifier | Qt::ShiftModifier) &&
+           arrow;
 #else
     return modifiers == Qt::AltModifier && arrow;
 #endif

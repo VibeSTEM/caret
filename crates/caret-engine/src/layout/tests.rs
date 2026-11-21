@@ -5685,6 +5685,13 @@ fn table_cell_display_equation_is_measured_projected_and_drawn() {
     assert_eq!(placement.math_id, equation_id);
     assert!(placement.object_x_pt >= page.margin_left_pt);
     assert!(placement.baseline_y_pt > page.margin_top_pt);
+    let geometry = snapshot
+        .math_block_geometry(std::slice::from_ref(&equation_id))
+        .unwrap_or_else(|| panic!("cell equation must publish block geometry"));
+    assert_eq!(geometry.len(), 1);
+    assert!(geometry[0].x1_pt > geometry[0].x0_pt);
+    assert!(geometry[0].y1_pt > geometry[0].y0_pt);
+    assert!(geometry[0].x1_pt <= page.width_pt);
     let glyphs = snapshot
         .page_glyphs(0)
         .unwrap_or_else(|error| panic!("cell equation glyphs must extract: {error}"));
@@ -5720,6 +5727,12 @@ fn table_cell_align_is_measured_and_projected() {
     let page = &snapshot.pages[0];
     assert_eq!(page.table_math_placements.len(), 1);
     assert_eq!(page.table_math_placements[0].math_id, align_id);
+    assert!(
+        snapshot
+            .math_block_geometry(std::slice::from_ref(&align_id))
+            .is_some(),
+        "cell align must publish block geometry"
+    );
     snapshot
         .page_glyphs(0)
         .unwrap_or_else(|error| panic!("cell align glyphs must extract: {error}"));

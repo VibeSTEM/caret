@@ -920,6 +920,7 @@ fn collect_math_projections(
                     math_id: fragment.math_id.clone(),
                     page_index,
                     object_x_pt: page.margin_left_pt + f64::from(fragment.x_offset_pt),
+                    clip_x_pt: None,
                     baseline_y_pt: page.margin_top_pt
                         + f64::from(fragment.y_offset_pt)
                         + f64::from(fragment.baseline_pt),
@@ -980,6 +981,7 @@ fn collect_math_projections(
                 caret_baseline_y_pt: placement.caret_baseline_y_pt,
                 caret_height_pt: placement.caret_height_pt,
                 clip_y_pt: placement.clip_y_pt,
+                clip_x_pt: placement.clip_x_pt,
                 row_clips: Vec::new(),
                 row_baselines: Vec::new(),
                 inline_index: None,
@@ -1028,6 +1030,7 @@ fn collect_math_projections(
                             math_id: math_id.clone(),
                             page_index,
                             object_x_pt: line_x + f64::from(inline_box.x),
+                            clip_x_pt: None,
                             baseline_y_pt,
                             caret_line_top_pt: line_top,
                             caret_baseline_y_pt: line_top

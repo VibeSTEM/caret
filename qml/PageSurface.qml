@@ -252,7 +252,7 @@ Item {
             selectionColor: Theme.colorSelected
             blockHighlightRects: LayoutViewModel.blockHighlightRects
             tableGuidelines: LayoutViewModel.tableGuidelines
-            tableGuidelineColor: Qt.rgba(1.0, 1.0, 1.0, 0.9)
+            tableGuidelineColor: Theme.colorTableGuideline
             inlineHighlightRects: LayoutViewModel.inlineHighlightRects
             blockHighlightColor: Theme.colorBlockEnvironmentHighlight
             inlineHighlightColor: Theme.colorInlineEnvironmentHighlight

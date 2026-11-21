@@ -203,6 +203,11 @@ pub(crate) struct TableMathPlacement {
     pub(crate) math_id: NodeId,
     /// 公式盒左边缘的页面局部 x 坐标。
     pub(crate) object_x_pt: f64,
+    pub(crate) width_pt: f64,
+    pub(crate) ascent_pt: f64,
+    pub(crate) descent_pt: f64,
+    /// 单元格内容盒的页面局部 x 范围，供块边界停靠使用。
+    pub(crate) clip_x_pt: Option<[f64; 2]>,
     /// 公式基线的页面局部 y 坐标。
     pub(crate) baseline_y_pt: f64,
     pub(crate) caret_line_top_pt: f64,
@@ -314,6 +319,7 @@ pub(crate) struct MathPageProjection {
     pub(crate) caret_baseline_y_pt: f64,
     pub(crate) caret_height_pt: f64,
     pub(crate) clip_y_pt: Option<[f64; 2]>,
+    pub(crate) clip_x_pt: Option<[f64; 2]>,
     pub(crate) row_clips: Vec<MathPageRowClip>,
     pub(crate) row_baselines: Vec<MathPageRowBaseline>,
     inline_index: Option<usize>,

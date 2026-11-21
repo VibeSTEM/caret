@@ -241,8 +241,12 @@ void append_dashed_rect(QSGNode* parent, const QRectF& rect, QColor color) {
             continue;
         }
         const QPointF direction = delta / length;
+        const qreal stride = dash_pt + gap_pt;
+        const int segment_count = static_cast<int>(std::ceil(length / stride));
         QVector<QPointF> dashes;
-        for (qreal offset = 0.0; offset < length; offset += dash_pt + gap_pt) {
+        dashes.reserve(static_cast<qsizetype>(segment_count) * 2);
+        for (int segment = 0; segment < segment_count; ++segment) {
+            const qreal offset = static_cast<qreal>(segment) * stride;
             const qreal end = std::min(offset + dash_pt, length);
             dashes.push_back(first + direction * offset);
             dashes.push_back(first + direction * end);

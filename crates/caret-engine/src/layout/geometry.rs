@@ -183,9 +183,11 @@ impl DocumentLayoutSnapshot {
             crate::editing::Direction::Forward => projections.last()?,
         };
         let page = self.pages.get(projection.page_index)?;
-        let x_pt = match direction {
-            crate::editing::Direction::Backward => page.margin_left_pt,
-            crate::editing::Direction::Forward => page.width_pt - page.margin_right_pt,
+        let x_pt = match (direction, projection.clip_x_pt) {
+            (crate::editing::Direction::Backward, Some([x0, _])) => x0,
+            (crate::editing::Direction::Forward, Some([_, x1])) => x1,
+            (crate::editing::Direction::Backward, None) => page.margin_left_pt,
+            (crate::editing::Direction::Forward, None) => page.width_pt - page.margin_right_pt,
         };
         let row_baseline = match direction {
             crate::editing::Direction::Backward => projection.row_baselines.first(),
@@ -221,22 +223,23 @@ impl DocumentLayoutSnapshot {
         if environment_edge.is_some() {
             return environment_edge;
         }
-        let has_projection = self
+        let projection = self
             .math_projection_index
             .by_id
             .get(block_id)?
             .iter()
             .filter_map(|index| self.math_projection_index.projections.get(*index))
-            .any(|projection| {
+            .find(|projection| {
                 projection.page_index == page_index && projection.inline_index.is_none()
-            });
-        if !has_projection {
-            return None;
-        }
+            })?;
         let page = self.pages.get(page_index)?;
-        match direction {
-            crate::editing::Direction::Backward => Some(page.margin_left_pt),
-            crate::editing::Direction::Forward => Some(page.width_pt - page.margin_right_pt),
+        match (direction, projection.clip_x_pt) {
+            (crate::editing::Direction::Backward, Some([x0, _])) => Some(x0),
+            (crate::editing::Direction::Forward, Some([_, x1])) => Some(x1),
+            (crate::editing::Direction::Backward, None) => Some(page.margin_left_pt),
+            (crate::editing::Direction::Forward, None) => {
+                Some(page.width_pt - page.margin_right_pt)
+            }
         }
     }
 
@@ -713,6 +716,10 @@ impl DocumentLayoutSnapshot {
                 let y0_pt = page.margin_top_pt + f64::from(fragment.y_offset_pt) + row.top_pt;
                 let x1_pt = x0_pt + cell_geometry.content_width_pt;
                 let y1_pt = y0_pt + row.height_pt;
+                let x0_pt = x0_pt.clamp(0.0, page.width_pt);
+                let x1_pt = x1_pt.clamp(0.0, page.width_pt);
+                let y0_pt = y0_pt.clamp(0.0, page.height_pt);
+                let y1_pt = y1_pt.clamp(0.0, page.height_pt);
                 if !x0_pt.is_finite()
                     || !y0_pt.is_finite()
                     || !x1_pt.is_finite()
@@ -822,6 +829,36 @@ impl DocumentLayoutSnapshot {
                 }
                 // 只有真正产出矩形后才标记该 ID 已定位，退化片段不能让整体误判为成功。
                 // 当前布局契约保证片段高度为正且裁切区间非空，见函数文档。
+                found[index] = true;
+                rectangles.push(PageSelectionRect {
+                    page_index,
+                    x0_pt,
+                    y0_pt,
+                    x1_pt,
+                    y1_pt,
+                });
+            }
+            for placement in &page.table_math_placements {
+                let Some(index) = block_ids
+                    .iter()
+                    .position(|block_id| block_id == &placement.math_id)
+                else {
+                    continue;
+                };
+                let x0_pt = placement.object_x_pt.clamp(0.0, page.width_pt);
+                let x1_pt =
+                    (placement.object_x_pt + placement.width_pt).clamp(x0_pt, page.width_pt);
+                let mut y0_pt =
+                    (placement.baseline_y_pt - placement.ascent_pt).clamp(0.0, page.height_pt);
+                let mut y1_pt =
+                    (placement.baseline_y_pt + placement.descent_pt).clamp(0.0, page.height_pt);
+                if let Some([clip_y0, clip_y1]) = placement.clip_y_pt {
+                    y0_pt = y0_pt.max(clip_y0);
+                    y1_pt = y1_pt.min(clip_y1);
+                }
+                if y1_pt <= y0_pt || x1_pt <= x0_pt {
+                    continue;
+                }
                 found[index] = true;
                 rectangles.push(PageSelectionRect {
                     page_index,

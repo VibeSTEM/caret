@@ -756,7 +756,7 @@ void ShellDocumentInteractionTest::documentCanvasRoutesCommandKeysAndKeepsNormal
     QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("insert-table"));
 #ifdef Q_OS_MACOS
     QTest::keyClick(&window, Qt::Key_Up,
-                    Qt::ControlModifier | Qt::AltModifier | Qt::ShiftModifier);
+                    Qt::MetaModifier | Qt::AltModifier | Qt::ShiftModifier);
     QCOMPARE(editor_keys.size(), 1);
     QCOMPARE(editor_keys.takeFirst().at(0).toString(),
              QStringLiteral("table-insert-row-before"));

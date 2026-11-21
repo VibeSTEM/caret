@@ -432,6 +432,10 @@ pub(super) fn expand_table_fragments(
                                 page.table_math_placements.push(TableMathPlacement {
                                     math_id: math.math_id.clone(),
                                     object_x_pt: content_x_pt + f64::from(math.x_offset_pt),
+                                    width_pt: math.layout.width,
+                                    ascent_pt: math.layout.ascent,
+                                    descent_pt: math.layout.descent,
+                                    clip_x_pt: Some([clip[0], clip[2]]),
                                     baseline_y_pt: block_top_pt + math.baseline_pt,
                                     caret_line_top_pt: block_top_pt,
                                     caret_baseline_y_pt: block_top_pt + math.baseline_pt,

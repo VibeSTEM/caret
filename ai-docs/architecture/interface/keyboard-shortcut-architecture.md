@@ -50,11 +50,11 @@ Qt QKeyEvent → 平台键映射 → 编辑器意图
 | `home.rs` / `end.rs` | Home / End 与 Shift 变体；已接入 | 命令行/数学文本/正文视觉行边界；修饰变体随对应实体键管理 |
 | `page_up.rs` / `page_down.rs` | PageUp / PageDown；后续结构任务 | 同类结构导航，按对应结构任务接入时再实现 |
 | `mod_space.rs` | Mod+Space；已接入 | 扩大结构选区；普通 Space 是文本输入，不是编辑器快捷键 |
-| `alt_t.rs` | Alt+T；未实现，快捷键表中的表格规划 | 插入表格；仅在 045/046 接入后实现 |
+| `table_keys.rs` | Shift+Tab、Alt+T、行列插入/删除；组合输入/命令输入/公式编辑优先 | 表格内移动/插入/删除；仅普通文档焦点执行 |
 | `mod_c.rs` / `mod_v.rs` | Mod+C / Mod+V；已接入 | 复制/粘贴的会话语义与作用域；系统剪贴板读写由 app 适配层提供 |
 | `mod_z.rs` | Mod+Z / Mod+Shift+Z；已接入 | 画布焦点下的 Undo/Redo Session 优先级、公式源码草稿本地历史与文档历史；工具栏仍使用 undo()/redo() 命令 API |
 
-当前逐键入口覆盖[唯一键位清单](keyboard-shortcuts.md)中所有已支持的画布编辑器快捷键；表格等尚未实现的规划键只记录目标文件和依赖，功能本身留在 045/046 等后续任务。未来新增编辑器快捷键也按具体快捷键或独立语义家族加入同一目录，不在 app、QML 或领域模块另建仲裁入口。目标结构是 `keyboards.rs` 只做模块注册和 `run_editor_key` 分派；本键状态优先级与具体动作由逐键 handler 负责。只有同一候选校验/提交确实被多个键以相同不变量调用时，才放进 `keyboards/helpers.rs` 与 `keyboards/helpers/`，辅助模块不得重新决定上下文优先级。app 保有并计算页面布局模型和视觉几何，engine 不复制或重算这些数据。候选无效时必须在任何焦点/文档迁移前拒绝，保证失败原子性。
+当前逐键入口覆盖[唯一键位清单](keyboard-shortcuts.md)中所有已支持的画布编辑器快捷键；表格结构键集中在 `table_keys.rs`，统一让位组合输入、命令输入和公式编辑。未来新增编辑器快捷键也按具体快捷键或独立语义家族加入同一目录，不在 app、QML 或领域模块另建仲裁入口。目标结构是 `keyboards.rs` 只做模块注册和 `run_editor_key` 分派；本键状态优先级与具体动作由逐键 handler 负责。只有同一候选校验/提交确实被多个键以相同不变量调用时，才放进 `keyboards/helpers.rs` 与 `keyboards/helpers/`，辅助模块不得重新决定上下文优先级。app 保有并计算页面布局模型和视觉几何，engine 不复制或重算这些数据。候选无效时必须在任何焦点/文档迁移前拒绝，保证失败原子性。
 
 只改变扩选/修饰状态的变体（如 Shift+方向键）随基础键处理；形成独立语义动作的修饰快捷键（如 Mod+Backspace、Mod+Z）可有独立文件，仍由单一 Session 键盘入口分派。Qt 负责物理键和平台修饰映射；IME 预编辑仍由 Qt 输入适配先处理。
 

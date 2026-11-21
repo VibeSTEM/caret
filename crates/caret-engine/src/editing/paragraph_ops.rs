@@ -590,6 +590,29 @@ pub(super) fn paragraph_parent_path(
         .map(|(_, parent_environment_ids, sibling_index)| (parent_environment_ids, sibling_index))
 }
 
+/// 容器对应的可编辑 Story：最内层单元格优先，否则正文 Story。
+pub(super) fn story_for_container(container: &BlockContainerPath) -> StoryId {
+    container
+        .innermost_cell()
+        .map_or(StoryId::Body, |cell| StoryId::TableCell {
+            table_id: cell.table_id.clone(),
+            row_id: cell.row_id.clone(),
+            cell_id: cell.cell_id.clone(),
+        })
+}
+
+/// 段落所在块序列的容器路径与同级下标；标题返回其环境父容器的标题槽。
+pub(super) fn paragraph_parent_container_path(
+    blocks: &[Block],
+    location: &ParagraphLocation,
+) -> Option<(BlockContainerPath, usize)> {
+    validated_paragraph_location(blocks, location)?;
+    if location.is_title {
+        return Some((location.container.without_last()?, 0));
+    }
+    Some((location.container.clone(), *location.block_path.last()?))
+}
+
 pub(super) fn paragraph_at_location_any<'a>(
     blocks: &'a [Block],
     location: &ParagraphLocation,

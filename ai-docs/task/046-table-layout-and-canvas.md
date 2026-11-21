@@ -76,10 +76,10 @@
 - 2026-11-22：Gate3：新增 `PageClip`，caret/选区/命中共享 contains/clamp；行内公式投影改从 `CaretLineLocation` 取行 x/y/clip；`ParagraphFragment.host` 标记 Body/TableCell，app 拖选只消费 Body host。cell glyph 与 caret 同源 x 有断言；workspace/clippy 通过。
 - 2026-11-22：Gate4 基础：表格单元格测量升级为块级 `MeasuredCellBlock`（高度/首基线/段距），`layout_table_grid` 统一产出每块放置几何，engine 删除第二份段落偏移；多段单元格布局有测试。为 Equation/Align/环境/嵌套表接入预留同一入口。
 - 2026-11-22：Gate4/5：单元格 Equation/Align/InlineMath 接入块级测量、网格放置、页面投影与 page_glyphs 绘制；移除 `edit.table_cell_math_unsupported` 门禁，cell 内内联/显示公式插入、继续输入、退出与 Undo 已工作；`measure_math_block`/`math_block_host_metrics` 与正文共用。剩余：cell 内环境/嵌套表、公式内部结构导航与命中跨 cell 限制、整表范围、辅助线、native/窗口验收与评审收口。
-- 2026-11-22：单元格环境标题/正文布局接入（环境容器路径、标题 Story、块级测量复用）；表格编辑态白色虚线辅助线：engine `table_guidelines`、app 两类快照 `tableGuidelines`、native codec 严格校验、LayoutViewModel/DocumentCanvas 属性与 QSG dash 绘制、QML 绑定。native 键位测试（Shift+Tab/Alt+T/行列键）与 C++ 辅助线校验测试通过。
+- 2026-11-22：单元格环境标题/正文布局接入（环境容器路径、标题 Story、块级测量复用）；表格编辑态虚线辅助线：engine `table_guidelines`（页面边界裁剪）、app 两类快照 `tableGuidelines`、native codec 严格校验、LayoutViewModel/DocumentCanvas 属性与 QSG dash 绘制、QML 绑定 `Theme.colorTableGuideline`（默认浅色主题深灰、深色主题白）。native 键位测试（Shift+Tab/Alt+T/行列键）与 C++ 辅助线校验测试通过。
 - 2026-11-22：性能基线：新增 50×8（400 cell）整表布局 Criterion 场景 `rust/table_layout`，记录输入/配置，不设时限门槛。
 - 2026-11-22：完成剩余实现切片：单元格环境布局、native 表格键位、编辑态虚线辅助线（engine→app→native/QML）、辅助线严格校验与 50×8 性能基线。待办：整表复制/结构删除与跨 cell 范围（当前显式拒绝，按 012 集成计划后续接入）、真实窗口人工验收、领域评审 + 独立 final review、PR/CI。
-- 2026-11-22：实现收口：列宽 v1 等分（最小列宽约束）、行高由块级测量决定、行原子分页、单元格内 Paragraph/Equation/Align/InlineMath/环境标题与正文布局、cell 公式编辑（插入/输入/退出/Undo）、表格插入/行列命令/导航入口、编辑态虚线辅助线与 native 严格快照契约均已落地；50×8 布局基线 8.97–9.33 ms。
+- 2026-11-22：实现收口：列宽 v1 等分（最小列宽约束）、行高由块级测量决定、行原子分页、单元格内 Paragraph/Equation/Align/InlineMath/环境标题与正文布局、cell 公式编辑（插入/输入/退出/继续输入/Undo）、cell 公式块几何/高亮、表格插入/行列命令/导航入口、编辑态主题化虚线辅助线与 native 严格快照契约均已落地；50×8 布局基线 8.97–9.33 ms。
 
 ## 性能基线与验证记录
 
@@ -100,8 +100,8 @@
 已完成 S1（可插入→布局→绘制→命中/光标，命令面板与 native 表键入口）：`caret-layout::table` 网格几何、分页表格片段、engine 表格测量/放置、cell 段落行位置与矩形裁剪、page_glyphs 文本与边框、hit/caret/range 同源几何、`\table` 与 Alt+T/Shift+Tab/行列插入/删除行列意图、codec `table` kind。engine 954、caret-app 354、workspace 测试与 clippy 通过。
 
 剩余（按优先级）：
-1. **单元格内公式布局与编辑/导航**：`shape_table` 目前对 Equation/Align/InlineMath 单元格或环境/嵌套表返回 `layout.unsupported_content`；需先把 `find_block_path`/`find_inline_math_in_blocks`/`paragraph_beside_block`/composition 公式定位统一为容器路径（共享 `BlockContainerPath`），再开放 cell 内公式编辑（移除 `edit.table_cell_math_unsupported` 门禁），并补 `collect_math_hosts`/`collect_math_projections` 的 cell 递归、命中/高亮/选区矩形裁剪。
-2. **表格几何快照与编辑辅助线**：向 app/native 暴露表格片段/单元格矩形（命中可选），在布局快照中加入 `tableGuidelines`（焦点相关虚线，主题 token + QSG 虚线层），完成白色虚线在浅色主题的可对比策略（需维护者确认产品意图）。
+1. **单元格内公式布局与编辑/导航**（已完成）：Equation/Align/InlineMath 与块环境走容器路径测量、投影、绘制和编辑；块级公式边界光标使用单元格裁剪 x，Escape 后的继续输入留在单元格。
+2. **表格几何快照与编辑辅助线**（已完成）：`tableGuidelines` 走布局/交互快照与 native 严格校验，颜色使用主题 token；长单元格超高行与嵌套表仍为记录的限制。
 3. **整表复制/结构删除与跨 cell 选择**：结构范围对象、剪贴板投影与文本回退；当前仍显式 `edit.table_content_unsupported`。
 4. **单元格环境/嵌套表/ExplicitBreak 语义**：环境标题/子块布局、嵌套表（模型允许 24 层）、cell 内分页符策略；当前显式拒绝。
 5. **分页细化**：行原子分页已可跨页并记录负原点；单元格内多段跨页拆分、行高/列宽策略（auto/固定）、宽内容裁剪测试与性能基线。

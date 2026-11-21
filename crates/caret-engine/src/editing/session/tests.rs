@@ -2548,6 +2548,27 @@ fn table_cell_enter_splits_inside_the_cell_transaction() {
 }
 
 #[test]
+fn table_structure_keys_are_ignored_while_context_owns_input() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("session creation failed: {error}"));
+    run_ok(&mut session, Command::EditorKey(EditorKey::Backslash));
+    assert!(session.command_line.is_some());
+    let body_before = session.document().body.clone();
+    run_ok(&mut session, Command::EditorKey(EditorKey::InsertTable));
+    assert_eq!(session.document().body, body_before);
+    run_ok(&mut session, Command::EditorKey(EditorKey::Escape));
+    assert!(!session.command_line.is_some());
+
+    run_ok(&mut session, Command::InsertInlineMath("x".to_owned()));
+    run_ok(&mut session, Command::EnterMath(Direction::Backward));
+    assert!(session.math_edit.is_some());
+    let body_before = session.document().body.clone();
+    run_ok(&mut session, Command::EditorKey(EditorKey::InsertTable));
+    run_ok(&mut session, Command::EditorKey(EditorKey::ShiftTab));
+    assert_eq!(session.document().body, body_before);
+}
+
+#[test]
 fn table_cell_display_math_insertion_uses_the_cell_container() {
     let (document, table_id, row_id, cell_id, paragraph_id) = table_document_for_session();
     let mut session =
@@ -2592,10 +2613,24 @@ fn table_cell_display_math_insertion_uses_the_cell_container() {
     session
         .run(Command::EditorKey(EditorKey::Escape))
         .unwrap_or_else(|error| panic!("cell equation exit must succeed: {error}"));
+    assert!(
+        matches!(session.selection.focus.story, StoryId::TableCell { .. }),
+        "cell equation exit focus: {:?}",
+        session.selection.focus
+    );
+    let body_blocks_before = session.document().body.len();
+    session
+        .run(Command::InsertText("y".to_owned()))
+        .unwrap_or_else(|error| panic!("typing after cell equation exit must succeed: {error}"));
     assert!(matches!(
         session.selection.focus.story,
         StoryId::TableCell { .. }
     ));
+    assert_eq!(
+        session.document().body.len(),
+        body_blocks_before,
+        "cell equation exit must not create body blocks"
+    );
     for _ in 0..3 {
         if !caret_structure::block_list_by_table_cell(
             &session.document.body,

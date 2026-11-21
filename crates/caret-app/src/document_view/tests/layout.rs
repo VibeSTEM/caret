@@ -3308,6 +3308,27 @@ fn paragraph_text_into(paragraph: &Paragraph, out: &mut String) {
 }
 
 #[test]
+fn cell_display_equation_publishes_layout_and_accepts_typing()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.handle_editor_key_json("insert-table")?;
+    runtime.command_line_command_json("begin", String::new())?;
+    runtime.command_line_command_json("type", "equation".to_owned())?;
+    runtime.command_line_command_json("select", "0".to_owned())?;
+    let accepted: Value = serde_json::from_str(&runtime.handle_editor_key_json("enter")?)?;
+    assert!(
+        !accepted["pages"].as_array().is_none_or(Vec::is_empty),
+        "cell equation insertion must publish pages"
+    );
+    let typed: Value = serde_json::from_str(&runtime.insert_text_json("x".to_owned())?)?;
+    assert!(!typed["pages"].as_array().is_none_or(Vec::is_empty));
+    runtime
+        .handle_editor_key_json("escape")
+        .unwrap_or_else(|error| panic!("cell equation exit must publish layout: {error}"));
+    Ok(())
+}
+
+#[test]
 fn inserted_table_renders_cell_paragraphs_and_navigates() -> Result<(), Box<dyn std::error::Error>>
 {
     let mut runtime = DocumentViewRuntime::new_blank()?;

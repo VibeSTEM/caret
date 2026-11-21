@@ -21,6 +21,7 @@ mod mod_v;
 mod mod_z;
 mod right_arrow;
 mod tab;
+mod table_keys;
 mod up_arrow;
 
 use super::Session;
@@ -63,18 +64,12 @@ impl Session {
             EditorKey::Escape => self.handle_escape(),
             EditorKey::Enter => self.handle_enter(false),
             EditorKey::Tab => self.handle_tab(),
-            EditorKey::ShiftTab => {
-                if let Some(effect) = self.table_tab_backward()? {
-                    Ok(effect)
-                } else {
-                    Ok(Effect::default())
-                }
-            }
-            EditorKey::InsertTable => self.insert_table(),
-            EditorKey::TableInsertRow(direction) => self.insert_table_row(direction),
-            EditorKey::TableDeleteRow => self.delete_table_row(),
-            EditorKey::TableInsertColumn(direction) => self.insert_table_column(direction),
-            EditorKey::TableDeleteColumn => self.delete_table_column(),
+            EditorKey::ShiftTab
+            | EditorKey::InsertTable
+            | EditorKey::TableInsertRow(_)
+            | EditorKey::TableDeleteRow
+            | EditorKey::TableInsertColumn(_)
+            | EditorKey::TableDeleteColumn => self.handle_table_key(key),
             EditorKey::ShiftEnter => self.handle_enter(true),
             EditorKey::Backspace => self.handle_backspace(),
             EditorKey::Delete => self.handle_delete(),

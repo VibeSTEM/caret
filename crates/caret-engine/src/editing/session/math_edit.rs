@@ -35,7 +35,6 @@ mod text_run_property;
 mod text_run_split;
 mod tree_edit;
 mod tree_position;
-use super::super::paragraph_ops::paragraph_parent_path;
 use super::super::text_map::{OBJECT_REPLACEMENT, TextMap, inline_length, split_inline_nodes};
 use super::super::{
     Affinity, Command, CommandLine, Direction, EditError, Effect, HostCaretKind, HostCaretPosition,
