@@ -29,6 +29,6 @@ Caret 是轻量的所见即所得结构化编辑器。用户看到的就是排�
 
 `Document` 是唯一权威数据。布局、结构索引和屏幕上的高亮框都是派生的。补全查询和当前环境高亮不写进文档。失效边界见[增量排版](editor/incremental-layout.md)和[结构导航](editor/structure-navigation.md)。
 
-编辑宿主与内容层级由[文档树与结构](editor/document-model/document-structure.md)权威定义：Block 是统一宿主类别，Paragraph 是结构最简单的 Block 变体；Inline 是 Paragraph 与显式支持行内流的 Block 内部内容。共享 Block 交互协议见[块宿主交互](editor/document-model/block-interaction.md)，环境候选和载体视图见[环境视图](editor/document-model/environment-views.md)，位置/导航投影由[文档位置](editor/document-model/document-position.md)和[结构导航](editor/structure-navigation.md)定义。Table、Figure 等尚未实现的宿主只记录扩展契约，不代表已有可编辑实现。
+编辑宿主与内容层级由[文档树与结构](editor/document-model/document-structure.md)权威定义：Block 是统一宿主类别，Paragraph 是结构最简单的 Block 变体；Inline 是 Paragraph 与显式支持行内流的 Block 内部内容。共享 Block 交互协议见[块宿主交互](editor/document-model/block-interaction.md)，环境候选和载体视图见[环境视图](editor/document-model/environment-views.md)，位置/导航投影由[文档位置](editor/document-model/document-position.md)和[结构导航](editor/structure-navigation.md)定义。Table 已实现模型/持久化与共享编辑事务（画布几何由 046 接入）；Figure 等尚未实现的宿主只记录扩展契约。
 
 分层的依赖方向见[分层规范](../standards/layering.md)。编辑器 crate 的成员以[仓库结构](core/repository-layout.md)为准。

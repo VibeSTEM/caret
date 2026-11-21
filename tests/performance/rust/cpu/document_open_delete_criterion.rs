@@ -156,7 +156,11 @@ fn document_character_count(blocks: &[Block]) -> usize {
                     .unwrap_or(0)
                     + document_character_count(&environment.children)
             }
-            Block::ExplicitBreak(_) | Block::Opaque(_) | Block::Equation(_) | Block::Align(_) => 0,
+            Block::Table(_)
+            | Block::ExplicitBreak(_)
+            | Block::Opaque(_)
+            | Block::Equation(_)
+            | Block::Align(_) => 0,
         })
         .sum()
 }

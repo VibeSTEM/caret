@@ -26,6 +26,9 @@ impl Session {
         if self.math_edit.is_some() {
             return Ok(Effect::default());
         }
+        if let Some(effect) = self.table_tab_forward()? {
+            return Ok(effect);
+        }
         self.run(Command::InsertTwoCharacterWidthSpace)
     }
 }

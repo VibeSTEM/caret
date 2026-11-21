@@ -18,6 +18,7 @@ use super::super::{
 };
 use super::Session;
 use super::history::{DocumentEditSnapshot, DocumentPatch, ParagraphState, SessionHistoryState};
+use crate::editing::paragraph_ops::BlockContainerPath;
 use caret_doc::{
     Align, Block, ClipboardFragment, ClipboardFragmentShape, Equation, InlineMath, MathTree,
     NodeId, Paragraph, ParagraphContent, ParagraphLineSpacing, TextFlow,
@@ -451,6 +452,51 @@ impl Session {
         }))
     }
 
+    /// 只拒绝与复制范围相交的表格；含表文档内与表格无关的正文复制保持可用。
+    fn table_intersects_copy_range(
+        &self,
+        table_id: &NodeId,
+        context: &CopyContext<'_>,
+    ) -> Result<bool, EditError> {
+        let (Some(start), Some(end)) = (context.start_ordinal, context.end_ordinal) else {
+            return Ok(true);
+        };
+        let Some(entry) = self.structure_index.get(table_id) else {
+            return Ok(true);
+        };
+        let range = &entry.range.paragraph_ordinals;
+        if range.start == range.end {
+            let (Some(start_position), Some(end_position)) = (context.start, context.end) else {
+                return Ok(true);
+            };
+            let before_start = caret_structure::compare_document_node_edges(
+                &self.document,
+                table_id,
+                caret_structure::DocumentNodeEdge::After,
+                &start_position.paragraph_id,
+                caret_structure::DocumentNodeEdge::Before,
+            );
+            let table_before_start = matches!(
+                before_start,
+                Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+            );
+            let after_end = caret_structure::compare_document_node_edges(
+                &self.document,
+                table_id,
+                caret_structure::DocumentNodeEdge::Before,
+                &end_position.paragraph_id,
+                caret_structure::DocumentNodeEdge::After,
+            );
+            let table_after_end = matches!(
+                after_end,
+                Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
+            );
+            Ok(!(table_before_start || table_after_end))
+        } else {
+            Ok(range.start <= end && range.end > start)
+        }
+    }
+
     fn collect_copy_units(
         &self,
         blocks: &[Block],
@@ -461,6 +507,12 @@ impl Session {
         for (index, block) in blocks.iter().enumerate() {
             path.push(index);
             match block {
+                Block::Table(table) => {
+                    if self.table_intersects_copy_range(&table.id, context)? {
+                        return Err(EditError::UnsupportedTableContent);
+                    }
+                    continue;
+                }
                 Block::Paragraph(paragraph) => {
                     if let Some(unit) = self.copy_paragraph_unit(paragraph, context)? {
                         units.push(unit);
@@ -614,10 +666,8 @@ impl Session {
             .paragraph_index
             .get(&end.paragraph_id)
             .ok_or(EditError::InvalidPosition)?;
-        Ok(
-            path > start_location.block_path.as_slice()
-                && path < end_location.block_path.as_slice(),
-        )
+        Ok(path > start_location.document_path.as_slice()
+            && path < end_location.document_path.as_slice())
     }
 }
 
@@ -732,6 +782,7 @@ fn validate_copy_block(block: &Block) -> Result<(), EditError> {
             }
             Ok(())
         }
+        Block::Table(_) => Err(EditError::UnsupportedTableContent),
         Block::ExplicitBreak(explicit_break) => ensure_empty_extra(&explicit_break.extra),
         Block::Opaque(_) => Err(EditError::UnsupportedOpaqueContent),
     }
@@ -784,6 +835,7 @@ fn block_clipboard_text(block: &Block) -> Result<String, EditError> {
             }
             Ok(parts.join("\n"))
         }
+        Block::Table(_) => Err(EditError::UnsupportedTableContent),
         Block::ExplicitBreak(_) => Ok(String::new()),
         Block::Opaque(_) => Err(EditError::UnsupportedOpaqueContent),
     }
@@ -1065,7 +1117,7 @@ impl Session {
         self.finalize_structure_edit(
             index,
             DocumentPatch::BlockRange {
-                parent_environment_ids,
+                container: BlockContainerPath::from_environment_ids(&parent_environment_ids),
                 sibling_index,
                 before: vec![before_block],
                 after,
@@ -1121,6 +1173,7 @@ fn body_has_paragraph(blocks: &[Block]) -> bool {
             body_has_paragraph(&environment.children)
                 || environment.title.as_ref().is_some_and(|_| true)
         }
+        Block::Table(_) => false,
         Block::Equation(_) | Block::Align(_) | Block::ExplicitBreak(_) | Block::Opaque(_) => false,
     })
 }
@@ -1814,20 +1867,19 @@ impl Session {
                 let mut before: Option<(&ParagraphLocation, usize)> = None;
                 let mut after: Option<(&ParagraphLocation, usize)> = None;
                 for location in paragraph_index.values() {
-                    if location.block_path.as_slice() < block_path.as_slice() {
+                    if location.document_path.as_slice() < block_path.as_slice() {
                         let paragraph = paragraph_at_location(&document.body, location)
                             .ok_or(EditError::InvalidPosition)?;
                         let length = TextMap::new(paragraph)?.text.len();
-                        if before
-                            .as_ref()
-                            .is_none_or(|(current, _)| location.block_path > current.block_path)
-                        {
+                        if before.as_ref().is_none_or(|(current, _)| {
+                            location.document_path > current.document_path
+                        }) {
                             before = Some((location, length));
                         }
-                    } else if location.block_path.as_slice() > block_path.as_slice()
-                        && after
-                            .as_ref()
-                            .is_none_or(|(current, _)| location.block_path < current.block_path)
+                    } else if location.document_path.as_slice() > block_path.as_slice()
+                        && after.as_ref().is_none_or(|(current, _)| {
+                            location.document_path < current.document_path
+                        })
                     {
                         after = Some((location, 0));
                     }
@@ -1918,7 +1970,11 @@ fn first_paragraph_hint(blocks: &[Block]) -> Result<Option<PasteCaretHint>, Edit
                     return Ok(Some(result));
                 }
             }
-            Block::Equation(_) | Block::Align(_) | Block::ExplicitBreak(_) | Block::Opaque(_) => {}
+            Block::Equation(_)
+            | Block::Align(_)
+            | Block::Table(_)
+            | Block::ExplicitBreak(_)
+            | Block::Opaque(_) => {}
         }
     }
     Ok(None)
@@ -1941,7 +1997,11 @@ fn last_paragraph_hint(blocks: &[Block]) -> Result<Option<PasteCaretHint>, EditE
                     }));
                 }
             }
-            Block::Equation(_) | Block::Align(_) | Block::ExplicitBreak(_) | Block::Opaque(_) => {}
+            Block::Equation(_)
+            | Block::Align(_)
+            | Block::Table(_)
+            | Block::ExplicitBreak(_)
+            | Block::Opaque(_) => {}
         }
     }
     Ok(None)
@@ -1971,6 +2031,7 @@ fn caret_hint_for_blocks(blocks: &[Block]) -> Result<Option<PasteCaretHint>, Edi
         Block::Align(align) => Some(PasteCaretHint::Block {
             block_id: align.id.clone(),
         }),
+        Block::Table(_) => return Err(EditError::UnsupportedTableContent),
         Block::ExplicitBreak(_) => None,
         Block::Opaque(_) => return Err(EditError::UnsupportedOpaqueContent),
     };
@@ -2007,7 +2068,11 @@ fn last_paragraph_in_environment(
                     return Ok(Some(result));
                 }
             }
-            Block::Equation(_) | Block::Align(_) | Block::ExplicitBreak(_) | Block::Opaque(_) => {}
+            Block::Equation(_)
+            | Block::Align(_)
+            | Block::Table(_)
+            | Block::ExplicitBreak(_)
+            | Block::Opaque(_) => {}
         }
     }
     if let Some(title) = &environment.title {

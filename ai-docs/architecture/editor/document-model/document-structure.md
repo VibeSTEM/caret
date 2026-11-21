@@ -1,10 +1,10 @@
 # 文档树与结构
 
-更新日期：2026-11-09。本文是持久化 DTO、文档树、页面层级及 Block/Inline 内容层次的唯一权威定义。Paragraph 是 `Block` 的一个具体变体，也是结构最简单的块；其他 Block 可拥有更复杂的容器或内部位置。语义草图与具体 Rust/JSON schema 分别说明概念和字段，不照搬 OOXML，也不承诺 DOCX 兼容；内容节点的职责链路见[内容节点代码链路](content-code-path.md)；块环境标题、编号、模板和结构编辑见[块环境模型](document-environments.md)；共享 Block 交互协议及 Paragraph 基线见[块宿主交互](block-interaction.md)。位置与上限见[文档位置](document-position.md)，导航投影见[结构导航](../structure-navigation.md)，载体视图见[环境视图](environment-views.md)，文件格式与写入边界见[`.cdoc` 格式](document-storage.md)。
+更新日期：2026-11-22。本文是持久化 DTO、文档树、页面层级及 Block/Inline 内容层次的唯一权威定义。Paragraph 是 `Block` 的一个具体变体，也是结构最简单的块；其他 Block 可拥有更复杂的容器或内部位置。语义草图与具体 Rust/JSON schema 分别说明概念和字段，不照搬 OOXML，也不承诺 DOCX 兼容；内容节点的职责链路见[内容节点代码链路](content-code-path.md)；块环境标题、编号、模板和结构编辑见[块环境模型](document-environments.md)；共享 Block 交互协议及 Paragraph 基线见[块宿主交互](block-interaction.md)。位置与上限见[文档位置](document-position.md)，导航投影见[结构导航](../structure-navigation.md)，载体视图见[环境视图](environment-views.md)，文件格式与写入边界见[`.cdoc` 格式](document-storage.md)。
 
 ## 持久化树
 
-文档树形 DTO 是 `Document { body: Vec<Block>, page_sections, global_settings }`；`Block` 包含 Paragraph、BlockEnvironment、Equation、Align、ExplicitBreak 和 Opaque。`Paragraph.inlines` 是 `Vec<ParagraphContent>`，文本、行内公式、行内环境、软换行和不透明内容由不同分支承载。块环境与行内环境是不同的 Rust 类型，均没有统一的带 `scope` 字段的 `EnvironmentNode` DTO。Heading 由 Paragraph 的属性识别。Table、Figure 等领域节点由对应模型规范定义。
+文档树形 DTO 是 `Document { body: Vec<Block>, page_sections, global_settings }`；`Block` 包含 Paragraph、BlockEnvironment、Equation、Align、Table、ExplicitBreak 和 Opaque。`Paragraph.inlines` 是 `Vec<ParagraphContent>`，文本、行内公式、行内环境、软换行和不透明内容由不同分支承载。块环境与行内环境是不同的 Rust 类型，均没有统一的带 `scope` 字段的 `EnvironmentNode` DTO。Heading 由 Paragraph 的属性识别。Table、Figure 等领域节点由对应模型规范定义。
 
 `ParagraphContent` 是段落和行内环境使用的有序内容项，包含 `Text(TextFlow)`、`Math(InlineMath)`、`Environment(InlineEnvironment<ParagraphContent>)`、`SoftBreak` 与 `Opaque`。正文与公式文本岛共用 `TextFlow`、Run、字素位置、IME 和行内格式语义；MathFlow 宿主负责固定槽位位置与公式事务。Code 分支由代码模型规范定义。`Paragraph` block 继续持有段落级语言、布局和直接属性；公式文本项的结构和编辑语义见[数学公式](../math.md#公式中的普通文本)。受支持的内容 schema 不为早期临时 inline/TextContent 格式提供转换器。Section 标题仍是 Paragraph block wrapper，Section 正文仍是 `Vec<Block>`。
 
@@ -22,11 +22,12 @@
 
 | 节点层级 | 所属容器 | 内容 |
 | --- | --- | --- |
-| `Block` | 页面内容的有序块流 | `Paragraph`、块级 `EnvironmentNode`、`Equation`、`Align`、显式分页；块环境通过有序 `children` 持有可嵌套块内容 |
+| `Block` | 页面内容的有序块流或单元格块序列 | `Paragraph`、块级 `EnvironmentNode`、`Equation`、`Align`、`Table`、显式分页；块环境通过有序 `children` 持有可嵌套块内容 |
+| `Table` | 块流或块环境的 `children` | 有序 `rows`，每行有序 `cells`，每个单元格通过 `blocks` 持有与正文同构的通用块序列；首版不支持单元格合并 |
 | `ParagraphContent` | Paragraph block 或行内格式环境的有序子项 | `Text(TextFlow)`、`Math(InlineMath)`、`Environment(InlineEnvironment<ParagraphContent>)`、`SoftBreak`、未知行内项 |
 | `TextFlow` | `ParagraphContent::Text` 或 Math `Text(TextFlow)` | 有序 Run 片段及其属性、语言；不含 Math 节点或块级布局。已知 Run 上的未知字段按 `.cdoc` 当前 schema 报错 |
 
-页面角色组织 Block 流；Paragraph block 持有 `Vec<ParagraphContent>` 并负责段落级排版。Section 等容器 Block 持有 `Vec<Block>`，可通过 Paragraph 子项承载行内内容；其他 Block（例如 Align 或未来的 Table/Figure）只有在其内部模型显式提供 ParagraphContent、MathContent 或等价 inline-capable 流时才承载 Inline。Inline 可复用在 Paragraph 及这些内层流中，但不能越过宿主定义直接插进任意 Block 序列。公式文本项和正文 `ParagraphContent::Text` 共用同一种 `TextFlow`，但公式文本项不获得段落折行、段落前后间距或块级身份。`InlineEnvironment<Child>` 的子项类型由宿主流决定：正文包装使用 `ParagraphContent`，数学流包装使用 `MathContent`。正文格式树编辑与 InlineMath 根层提升由各自宿主适配器处理；共用 TextFlow 文本/格式操作、Run 范围替换和字素原语，不将两种节点枚举抹平成无类型数据。数学节点的分子、分母、上下标等固定槽位各自持有 `MathFlow`；槽内文本和 MathNode 不得提升到 Paragraph 层，只有 InlineMath 根流及其格式包装子树中的 TextFlow 可按 Paragraph 宿主规则提升为相邻 ParagraphContent。Run 边界和行内环境边界不改变宿主 UTF-8 偏移或跨节点字素分段。InlineMath 创建及从源码导入时执行根层提升；具体事务规则见[数学公式](../math.md#宿主边界与拆分)。
+页面角色组织 Block 流；Paragraph block 持有 `Vec<ParagraphContent>` 并负责段落级排版。Section 等容器 Block 持有 `Vec<Block>`，可通过 Paragraph 子项承载行内内容；其他 Block（例如 Align 或 Table/Figure 等容器块）只有在其内部模型显式提供 ParagraphContent、MathContent 或等价 inline-capable 流时才承载 Inline。Inline 可复用在 Paragraph 及这些内层流中，但不能越过宿主定义直接插进任意 Block 序列。公式文本项和正文 `ParagraphContent::Text` 共用同一种 `TextFlow`，但公式文本项不获得段落折行、段落前后间距或块级身份。`InlineEnvironment<Child>` 的子项类型由宿主流决定：正文包装使用 `ParagraphContent`，数学流包装使用 `MathContent`。正文格式树编辑与 InlineMath 根层提升由各自宿主适配器处理；共用 TextFlow 文本/格式操作、Run 范围替换和字素原语，不将两种节点枚举抹平成无类型数据。数学节点的分子、分母、上下标等固定槽位各自持有 `MathFlow`；槽内文本和 MathNode 不得提升到 Paragraph 层，只有 InlineMath 根流及其格式包装子树中的 TextFlow 可按 Paragraph 宿主规则提升为相邻 ParagraphContent。Run 边界和行内环境边界不改变宿主 UTF-8 偏移或跨节点字素分段。InlineMath 创建及从源码导入时执行根层提升；具体事务规则见[数学公式](../math.md#宿主边界与拆分)。
 
 共享结构消除重复文本与格式语义，不自动构成性能保证。正文 TextFlow 与 MathFlow TextFlow 共用范围编辑、格式树拆分合并和字素原语；各自宿主适配器解析物理路径、校验元数据并提交对应历史事务。MathEdit 只为固定操作数槽位与公式焦点管理提供宿主策略；临时 TeX 草稿和位置映射仅用于源码编辑，不参与普通文本操作或文档持久化。实现成本是否下降、局部事务是否减少分配，需用代表性基准验证，不能据此宣称性能收益。
 
@@ -41,6 +42,7 @@ Rust 文件按数据职责和编辑职责对应：
 ```text
 crates/caret-doc/src/model.rs           文档根 DTO 与公开导出
 crates/caret-doc/src/model/block.rs     Block、块环境、显式分页
+crates/caret-doc/src/model/table.rs     Table、行、单元格与单元格块序列
 crates/caret-doc/src/model/paragraph.rs Paragraph 与段落直接布局覆盖
 crates/caret-doc/src/model/run.rs       Run 与 Run 直接属性
 crates/caret-doc/src/model/inline.rs    TextFlow、ParagraphContent / MathContent 与软换行
@@ -62,14 +64,14 @@ crates/caret-structure/src/physical.rs  物理节点父链、slot 与文档顺�
 | `Paragraph` | 普通段落 | 正文段落，可按宽度折行 |
 | `SingleLine` | Heading、Equation；后续 `Title` | 一个语义块，不承诺视觉排版只占一行；`Title` 只表达标题，Equation 按单行公式语义处理 |
 | `MultiLine` | 块环境、Align | 一个容纳多个子项或显式多行内容的语义块 |
-| `Table` | 后续 Table | 独立的非文本结构 |
+| `Table` | Table（已实现） | 独立结构块；行/单元格见文档树与结构 |
 | `Figure` | 后续 Figure | 独立的非文本结构 |
 
 页面角色与内容块形态是正交层级。页面角色组织页级内容；Paragraph 承载行内内容并决定段落折行，`SingleLine` 只是语义分类，不保证窄页面上只有一条视觉行。
 
 `Title` 属于 `SingleLine` 内容块；`TitlePage` 是 `PageContent` 的一种 role，不是物理页或 `PageSection`。TitlePage 与 BodyPage 共用块模型，页级约束由分页布局兑现；标题页与显式分节能力尚未接入时，不应据此宣称已经可编辑或可导航。`PageSection` 只表示纸张、方向和边距等分页配置，与用户可见的环境分开。
 
-Heading、Section、Custom 等具体领域语义由结构索引保留，快照提供稳定语义 kind，界面按当前 UI 语言翻译；通用类别仅用于布局/导航分类，不替代状态栏的语义标签。`Title` 后续映射为 `SingleLine`；`TitlePage` 是更高层的 `PageContent` 页面角色；Equation 已映射为 `SingleLine`，Align 已映射为 `MultiLine`；Table/Figure 在对应节点接入索引后映射。`InlineMath` 留在 Paragraph 内，不单独进入块结构栈。索引如何维护这些语义见[结构导航](../structure-navigation.md)。
+Heading、Section、Custom 等具体领域语义由结构索引保留，快照提供稳定语义 kind，界面按当前 UI 语言翻译；通用类别仅用于布局/导航分类，不替代状态栏的语义标签。`Title` 后续映射为 `SingleLine`；`TitlePage` 是更高层的 `PageContent` 页面角色；Equation 已映射为 `SingleLine`，Align 已映射为 `MultiLine`；Table 已进入结构索引并映射为 `Table`；Figure 在对应节点接入后映射。`InlineMath` 留在 Paragraph 内，不单独进入块结构栈。索引如何维护这些语义见[结构导航](../structure-navigation.md)。
 
 页面组合的语义草案（不是当前 DTO 字段或 `.cdoc` JSON schema）：
 
@@ -110,7 +112,7 @@ MathContent = Math(MathNode) | Text(TextFlow) | Environment(InlineEnvironment<Ma
 MathNode { id, kind, text?, attributes, children: Vec<MathFlow> }
 ```
 
-图中列的是目标 `caret-doc` DTO；已知 DTO 不保存未知字段载体，只有 `Opaque` 保存未知节点类型的原始数据。`CodeSpan`、`Title`、`Table`、`Figure` 和页面组合均为规划概念，不能视为已持久化节点。每个 DTO 的可选字段默认值与 JSON 编解码细节以对应 Rust 结构定义为准。
+图中列的是目标 `caret-doc` DTO；已知 DTO 不保存未知字段载体，只有 `Opaque` 保存未知节点类型的原始数据。`CodeSpan`、`Title`、`Figure` 和页面组合仍为规划概念；`Table` 已持久化并进入文档树。每个 DTO 的可选字段默认值与 JSON 编解码细节以对应 Rust 结构定义为准。
 
 
 块环境编辑规则见[块环境模型](document-environments.md)；行内载体和两层环境适配见[环境视图](environment-views.md)；格式解析和直接属性规则见[文字格式语义](../text-formatting.md)。

@@ -1,6 +1,6 @@
 # `.cdoc` 存储格式
 
-更新日期：2026-11-20。本文是原生文件信封、兼容和原子写入语义的权威定义。持久化节点结构见[文档树与结构](document-structure.md)；文档范围和任务状态见[架构总览](../../README.md)与[任务索引](../../../task-index.md)。
+更新日期：2026-11-22。本文是原生文件信封、兼容和原子写入语义的权威定义。持久化节点结构见[文档树与结构](document-structure.md)；文档范围和任务状态见[架构总览](../../README.md)与[任务索引](../../../task-index.md)。
 
 `requiredFeatures` 使用稳定的 `caret.` 命名空间。下表定义各能力的语义与声明规则；已发布的能力 ID 语义不可变。
 
@@ -27,6 +27,7 @@
 | `caret.text.default-font-size` | 文档默认字号 |
 | `caret.text.language-tags` | BCP 47 文档/段落/Run 语言标签 |
 | `caret.text.underline` | Run 直接下划线属性 |
+| `caret.table.v1` | `Table`/`TableRow`/`TableCell` 结构与单元格通用块序列 |
 | `caret.theme.snapshot` | `.cdoc` 内嵌文档排版主题快照 |
 
 `requiredFeatures` 按字节序去重排序；除编码器始终声明的基础能力外，只列文档实际使用的能力。读取器发现未知能力时只读打开；能力 ID 的语义在发布后不可变，语义不兼容时使用新 ID 或提升 `.cdoc` 主版本。
@@ -47,6 +48,10 @@ Page 与 Inline 自定义环境分别使用 scope 专属的必需能力标识；
 | `caret.math.content-flow.v2` | MathTree schema v3 使用 MathFlow，包含 MathNode、TextFlow 与数学环境包装分支；TeX 草稿与源码映射不属于持久节点 | 含 MathTree 的文档声明，包括不含 TextFlow 的纯数学树 |
 
 读取器不把旧的临时 inline、字符串 `TextContent` 或 MathTree schema v2 转换成新 schema，也不提供迁移器；这些已知废弃格式在文档打开边界拒绝加载，不能作为不透明节点或只读预览保留。未知但可安全隔离的节点仍可进入不透明预览，未知必需能力则使文档只读打开。新数学 schema 由版本与必需能力共同标识；缺少声明或仍带旧源码字段的树按格式错误拒绝，旧字段不得通过 `extra` 回写。
+
+### 表格能力
+
+`caret.table.v1` 覆盖 `Table`、行、单元格以及单元格 `blocks` 中的通用块序列；单元格内容与正文同构，可递归包含 Paragraph、BlockEnvironment、Equation、Align 与嵌套 Table。表格节点、行、单元格都持有 `NodeId`，并在解码时严格拒绝未知字段；行数、列数、单元格非空、矩形行列与表格嵌套上限由文档校验拒绝，不降级为 Opaque。含表格的文档必须显式声明 `caret.table.v1`；不认识的旧程序按未知节点类型进入只读安全预览。第一版不序列化单元格合并、列宽、行高、边框或布局缓存。
 
 ## `.cdoc`
 

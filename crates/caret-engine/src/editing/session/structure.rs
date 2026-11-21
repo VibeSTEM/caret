@@ -10,8 +10,9 @@ use super::super::{
 };
 use super::Session;
 use super::history::{self, DocumentEditSnapshot, DocumentPatch, SessionHistoryState};
+use crate::editing::paragraph_ops::BlockContainerPath;
 use crate::editing::paragraph_ops::{
-    ParagraphLocation, compare_positions, paragraph_at_location, paragraph_parent_path,
+    compare_positions, paragraph_at_location, paragraph_parent_path,
 };
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, NodeId, Paragraph, Run, SoftBreak, TextFlow,
@@ -294,7 +295,7 @@ impl Session {
         self.finalize_structure_edit_with_boundary(
             super::super::paragraph_ops::build_paragraph_index(&self.document.body),
             DocumentPatch::BlockRange {
-                parent_environment_ids: parent_ids,
+                container: BlockContainerPath::from_environment_ids(&parent_ids),
                 sibling_index: paragraph_index,
                 before: vec![Block::Paragraph(removed_paragraph)],
                 after: Vec::new(),
@@ -474,6 +475,11 @@ impl Session {
     pub(super) fn run_structure(&mut self, command: Command) -> Result<Effect, EditError> {
         if self.composition.is_some() || self.command_line.is_some() {
             return Ok(Effect::default());
+        }
+        if let Command::MoveStructure(direction) = &command
+            && let Some(effect) = self.move_table_cell(*direction)?
+        {
+            return Ok(effect);
         }
         if matches!(&command, Command::ExitStructure)
             && self.selection.anchor != self.selection.focus
@@ -946,7 +952,11 @@ fn environment_has_content(environment: &BlockEnvironment) -> Result<bool, EditE
                 return Ok(true);
             }
             Block::Environment(child) if environment_has_content(child)? => return Ok(true),
-            Block::Equation(_) | Block::Align(_) | Block::ExplicitBreak(_) | Block::Opaque(_) => {
+            Block::Equation(_)
+            | Block::Align(_)
+            | Block::Table(_)
+            | Block::ExplicitBreak(_)
+            | Block::Opaque(_) => {
                 return Ok(true);
             }
             Block::Paragraph(_) | Block::Environment(_) => {}
@@ -986,45 +996,6 @@ fn block_list_by_parent_ids_mut<'a>(
     environment_ids: &[NodeId],
 ) -> Option<&'a mut Vec<Block>> {
     caret_structure::block_list_by_environment_ids_mut(blocks, environment_ids)
-}
-
-fn replace_block_at_location(
-    blocks: &mut Vec<Block>,
-    location: &ParagraphLocation,
-    replacement: Block,
-) -> bool {
-    fn visit(blocks: &mut Vec<Block>, path: &[usize], replacement: Block) -> bool {
-        let Some((&index, parent_path)) = path.split_last() else {
-            return false;
-        };
-        let siblings = if parent_path.is_empty() {
-            blocks
-        } else {
-            let Some(Block::Environment(parent)) = block_mut_at_path(blocks, parent_path) else {
-                return false;
-            };
-            &mut parent.children
-        };
-        let Some(_) = siblings.get(index) else {
-            return false;
-        };
-        siblings[index] = replacement;
-        true
-    }
-
-    visit(blocks, &location.block_path, replacement)
-}
-
-fn block_mut_at_path<'a>(blocks: &'a mut [Block], path: &[usize]) -> Option<&'a mut Block> {
-    let (&index, parent_path) = path.split_last()?;
-    if parent_path.is_empty() {
-        return blocks.get_mut(index);
-    }
-    let parent = block_mut_at_path(blocks, parent_path)?;
-    let Block::Environment(environment) = parent else {
-        return None;
-    };
-    environment.children.get_mut(index)
 }
 
 #[cfg(test)]

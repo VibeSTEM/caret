@@ -29,9 +29,10 @@ pub use model::{
     MathAlignRow, MathAtomClass, MathContent, MathDelimiterSize, MathFlow, MathMatrixAlignment,
     MathMatrixCellSize, MathMatrixColumnGap, MathMatrixStyle, MathNode, MathNodeKind, MathPathStep,
     MathTree, Media, ModelError, NodeId, OpaqueNode, PageSection, Paragraph, ParagraphContent,
-    ParagraphLayoutOverrides, ParagraphLayoutStyle, ParagraphLineSpacing, Run, SoftBreak, TextFlow,
-    ThemeSnapshot, default_font_size_centipoints, is_valid_language_tag, is_valid_math_delimiter,
-    math_accent_by_command, math_accent_by_value, math_matrix_style,
+    ParagraphLayoutOverrides, ParagraphLayoutStyle, ParagraphLineSpacing, Run, SoftBreak, Table,
+    TableCell, TableRow, TextFlow, ThemeSnapshot, default_font_size_centipoints,
+    is_valid_language_tag, is_valid_math_delimiter, math_accent_by_command, math_accent_by_value,
+    math_matrix_style,
 };
 pub use page_geometry::{
     Orientation, PageGeometry, PageGeometryError, PageMargins, PaperSize, millimeters_to_points,

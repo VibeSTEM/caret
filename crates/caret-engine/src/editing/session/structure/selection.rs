@@ -8,6 +8,7 @@ use super::super::formatting::PendingInlineStyle;
 use super::super::math_edit::find_block_path;
 use super::super::{DocumentRangeEndpoint, MathEdit, StructureSelection};
 use super::*;
+use crate::editing::paragraph_ops::BlockContainerPath;
 use crate::editing::paragraph_ops::{
     ParagraphIndex, ParagraphLocation, build_paragraph_index, merge_paragraph_range,
     paragraph_at_location_mut,
@@ -843,7 +844,9 @@ impl Session {
                         && matches!(block, Block::Equation(_) | Block::Align(_)) =>
                 {
                     patches.push(DocumentPatch::BlockRange {
-                        parent_environment_ids,
+                        container: BlockContainerPath::from_environment_ids(
+                            &parent_environment_ids,
+                        ),
                         sibling_index,
                         before: vec![block.clone()],
                         after: Vec::new(),
@@ -1051,7 +1054,12 @@ fn find_inline_math_in_blocks_mut<'a>(
                     return Some(math);
                 }
             }
-            Block::Equation(_) | Block::Align(_) | Block::ExplicitBreak(_) | Block::Opaque(_) => {}
+            // 单元格内公式定位随 046 的容器感知公式定位器接入。
+            Block::Table(_)
+            | Block::Equation(_)
+            | Block::Align(_)
+            | Block::ExplicitBreak(_)
+            | Block::Opaque(_) => {}
         }
     }
     None
@@ -1078,6 +1086,7 @@ fn find_inline_math_paragraph_id(blocks: &[Block], math_id: &NodeId) -> Option<N
                 }
             }
             Block::Paragraph(_)
+            | Block::Table(_)
             | Block::Equation(_)
             | Block::Align(_)
             | Block::ExplicitBreak(_)

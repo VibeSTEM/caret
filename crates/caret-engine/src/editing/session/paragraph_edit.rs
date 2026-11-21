@@ -4,13 +4,30 @@
 // 署名：Yuki Lu
 
 use super::super::paragraph_ops::{
-    build_paragraph_index, insert_paragraph_after, replace_paragraph_with_many,
+    ParagraphLocation, build_paragraph_index, insert_paragraph_after, replace_paragraph_with_many,
     split_environment_title, update_index_after_split,
 };
 use super::super::text_map::{TextMap, split_inline_nodes};
 use super::super::{Affinity, EditError, Effect, Pos, PositionMap, Selection, StoryId};
 use super::Session;
 use caret_doc::NodeId;
+
+/// Enter 拆分后右侧段落的 Story：标题拆出的正文回到所属容器 Story
+///（单元格内为 TableCell，否则 Body），其余沿用原 Story。
+fn split_right_story(story: &StoryId, location: &ParagraphLocation) -> StoryId {
+    match story {
+        StoryId::EnvironmentTitle(_) => location
+            .container
+            .innermost_cell()
+            .map(|cell| StoryId::TableCell {
+                table_id: cell.table_id.clone(),
+                row_id: cell.row_id.clone(),
+                cell_id: cell.cell_id.clone(),
+            })
+            .unwrap_or(StoryId::Body),
+        other => other.clone(),
+    }
+}
 
 impl Session {
     pub(super) fn split_paragraph(&mut self) -> Result<Effect, EditError> {
@@ -47,8 +64,9 @@ impl Session {
             }
             self.paragraph_index = build_paragraph_index(&self.document.body);
             self.text_map_cache.clear();
+            let right_story = split_right_story(&start.story, &location);
             let position = Pos {
-                story: StoryId::Body,
+                story: right_story.clone(),
                 paragraph_id: right_id.clone(),
                 offset: 0,
                 affinity: Affinity::Downstream,
@@ -74,8 +92,8 @@ impl Session {
                         source_id: target.paragraph_id,
                         right_id,
                         split_offset: start.offset,
-                        source_story: StoryId::Body,
-                        right_story: StoryId::Body,
+                        source_story: start.story.clone(),
+                        right_story,
                     },
                 ])),
                 ..Effect::default()
@@ -117,9 +135,10 @@ impl Session {
             .get(&anchor.paragraph_id)
             .cloned()
             .ok_or_else(|| EditError::UnknownParagraph(anchor.paragraph_id.to_string()))?;
+        let right_story = split_right_story(&anchor.story, &location);
 
         match &anchor.story {
-            StoryId::Body => {
+            StoryId::Body | StoryId::TableCell { .. } => {
                 if !insert_paragraph_after(
                     &mut self.document.body,
                     &location,
@@ -148,7 +167,7 @@ impl Session {
             &location,
         );
         let pos = Pos {
-            story: StoryId::Body,
+            story: right_story.clone(),
             paragraph_id: right_id.clone(),
             offset: 0,
             affinity: Affinity::Downstream,
@@ -169,7 +188,7 @@ impl Session {
                     right_id,
                     split_offset,
                     source_story,
-                    right_story: StoryId::Body,
+                    right_story: right_story.clone(),
                 }
             } else {
                 PositionMap::Composite(vec![
@@ -185,8 +204,8 @@ impl Session {
                         source_id,
                         right_id,
                         split_offset,
-                        source_story,
-                        right_story: StoryId::Body,
+                        source_story: source_story.clone(),
+                        right_story: right_story.clone(),
                     },
                 ])
             }),

@@ -65,6 +65,7 @@ fn collect_paragraph_texts(blocks: &[Block], texts: &mut Vec<String>) {
     for block in blocks {
         match block {
             Block::Paragraph(paragraph) => texts.push(paragraph_text_of(paragraph)),
+            Block::Table(_) => {}
             Block::Environment(environment) => {
                 if let Some(title) = &environment.title {
                     texts.push(paragraph_text_of(title));
@@ -1003,9 +1004,11 @@ fn caret_paragraph_text(session: &Session) -> (String, usize) {
             Block::Environment(environment) => {
                 find_paragraph(&environment.children, &focus.paragraph_id)
             }
-            Block::Equation(_) | Block::Align(_) | Block::ExplicitBreak(_) | Block::Opaque(_) => {
-                None
-            }
+            Block::Table(_)
+            | Block::Equation(_)
+            | Block::Align(_)
+            | Block::ExplicitBreak(_)
+            | Block::Opaque(_) => None,
         })
         .unwrap_or_else(|| panic!("caret paragraph {} is missing", focus.paragraph_id));
     (paragraph_text_of(paragraph), focus.offset)
@@ -1016,6 +1019,7 @@ fn find_paragraph<'a>(blocks: &'a [Block], id: &NodeId) -> Option<&'a Paragraph>
         match block {
             Block::Paragraph(paragraph) if &paragraph.id == id => return Some(paragraph),
             Block::Paragraph(_) => {}
+            Block::Table(_) => {}
             Block::Environment(environment) => {
                 if let Some(found) = find_paragraph(&environment.children, id) {
                     return Some(found);

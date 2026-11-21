@@ -490,6 +490,11 @@ message_163:
   tr: 文字字型「%1」未安裝，已使用備援字型。
   st: finished
 
+message_164:
+  src: Table
+  tr: 表格
+  st: finished
+
 [WindowTitleBar]
 message_078:
   src: Untitled

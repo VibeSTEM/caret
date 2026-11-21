@@ -490,6 +490,11 @@ message_163:
   tr: "Text font \"%1\" is not installed; using fallback fonts."
   st: finished
 
+message_164:
+  src: Table
+  tr: Table
+  st: finished
+
 [WindowTitleBar]
 message_078:
   src: Untitled

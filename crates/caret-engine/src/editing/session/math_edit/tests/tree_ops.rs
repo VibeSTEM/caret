@@ -239,7 +239,7 @@ fn align_candidate_is_disabled_when_insertion_would_exceed_document_depth() -> R
         session
             .paragraph_index
             .get(&paragraph_id)
-            .map(|location| location.block_path.len()),
+            .map(|location| location.document_path.len()),
         Some(caret_doc::MAX_DOCUMENT_NESTING_DEPTH + 1)
     );
     assert!(!session.can_insert_display_math(true));

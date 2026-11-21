@@ -3,8 +3,8 @@
 use super::*;
 use crate::{
     DocumentNodeEdge, DocumentNodeKind, block_list_by_environment_ids,
-    block_list_by_environment_ids_mut, compare_document_node_edges, find_block_node,
-    find_document_node,
+    block_list_by_environment_ids_mut, block_list_by_table_cell, compare_document_node_edges,
+    find_block_node, find_document_node,
 };
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, InlineEnvironment,
@@ -723,4 +723,100 @@ fn text_flow(run: Run) -> caret_doc::ParagraphContent {
         runs: vec![run],
         extra: Default::default(),
     })
+}
+
+fn table_block() -> (Block, NodeId, NodeId, NodeId, Vec<NodeId>) {
+    let value = serde_json::json!({
+        "type": "table",
+        "id": "table-1",
+        "rows": [{
+            "id": "row-1",
+            "cells": [
+                {"id": "cell-1", "blocks": [
+                    {"type": "paragraph", "id": "cell-paragraph-1", "inlines": []},
+                    {"type": "paragraph", "id": "cell-paragraph-2", "inlines": []}
+                ]},
+                {"id": "cell-2", "blocks": [
+                    {"type": "paragraph", "id": "cell-paragraph-3", "inlines": []}
+                ]}
+            ]
+        }]
+    });
+    let block: Block = serde_json::from_value(value)
+        .unwrap_or_else(|error| panic!("table fixture must parse: {error}"));
+    let (table_id, row_id, cell_id) = {
+        let Block::Table(table) = &block else {
+            panic!("expected a table block");
+        };
+        (
+            table.id.clone(),
+            table.rows[0].id.clone(),
+            table.rows[0].cells[0].id.clone(),
+        )
+    };
+    let paragraph_ids = ["cell-paragraph-1", "cell-paragraph-2", "cell-paragraph-3"]
+        .into_iter()
+        .map(|id| NodeId::parse(id).unwrap_or_else(|error| panic!("paragraph id: {error}")))
+        .collect();
+    (block, table_id, row_id, cell_id, paragraph_ids)
+}
+
+#[test]
+fn table_structure_and_cell_paragraphs_are_indexed_in_document_order() {
+    let (table, table_id, row_id, cell_id, paragraphs) = table_block();
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(paragraph("body", None)), table];
+
+    let index = StructureIndex::build(&document);
+    let entry = index
+        .get(&table_id)
+        .unwrap_or_else(|| panic!("table must be indexed"));
+    assert_eq!(entry.kind, StructureKind::Table);
+    assert_eq!(entry.kind.class(), StructureClass::Table);
+
+    let mut ordinals = Vec::new();
+    for paragraph_id in &paragraphs {
+        let ordinal = index
+            .paragraph_ordinal(paragraph_id)
+            .unwrap_or_else(|| panic!("cell paragraph must enter the ordinal sequence"));
+        ordinals.push(ordinal);
+        let stack = index.stack_for_id(paragraph_id);
+        assert!(
+            stack.iter().any(|entry| entry.id == table_id),
+            "cell paragraph stack must include its table"
+        );
+    }
+    assert!(ordinals.windows(2).all(|pair| pair[0] < pair[1]));
+
+    let table_node =
+        find_document_node(&document, &table_id).unwrap_or_else(|| panic!("table node"));
+    assert_eq!(table_node.kind, DocumentNodeKind::Table);
+    let cell_paragraph =
+        find_document_node(&document, &paragraphs[0]).unwrap_or_else(|| panic!("cell paragraph"));
+    assert_eq!(cell_paragraph.kind, DocumentNodeKind::Paragraph);
+    assert_eq!(cell_paragraph.sibling_index, Some(0));
+    assert_eq!(
+        compare_document_node_edges(
+            &document,
+            &table_id,
+            DocumentNodeEdge::Before,
+            &paragraphs[0],
+            DocumentNodeEdge::Before,
+        ),
+        Some(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        compare_document_node_edges(
+            &document,
+            &table_id,
+            DocumentNodeEdge::After,
+            &paragraphs[2],
+            DocumentNodeEdge::After,
+        ),
+        Some(std::cmp::Ordering::Greater)
+    );
+
+    let cell_blocks = block_list_by_table_cell(&document.body, &[], &table_id, &row_id, &cell_id)
+        .unwrap_or_else(|| panic!("cell blocks must resolve by stable ids"));
+    assert_eq!(cell_blocks.len(), 2);
 }

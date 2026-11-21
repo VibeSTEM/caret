@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
+use super::super::paragraph_ops::BlockContainerPath;
 use std::{collections::BTreeMap, ops::Range, sync::Arc};
 
 use super::super::grapheme::GraphemeMap;
@@ -115,7 +116,7 @@ pub(super) fn math_text_flow_boundary_is_shared(
 }
 
 struct DisplayMathInsertPlan {
-    parent_environment_ids: Vec<NodeId>,
+    container: BlockContainerPath,
     sibling_index: usize,
     before: Block,
     after: Vec<Block>,
@@ -1582,7 +1583,12 @@ fn first_entry_in_blocks(blocks: &[Block]) -> Option<Pos> {
                     return Some(position);
                 }
             }
-            Block::Equation(_) | Block::Align(_) | Block::ExplicitBreak(_) | Block::Opaque(_) => {}
+            // 表格内部首个/末个位置随 046 的单元格导航接入。
+            Block::Table(_)
+            | Block::Equation(_)
+            | Block::Align(_)
+            | Block::ExplicitBreak(_)
+            | Block::Opaque(_) => {}
         }
     }
     None
@@ -1605,7 +1611,11 @@ fn last_entry_in_blocks(blocks: &[Block]) -> Option<Pos> {
                     return Some(position);
                 }
             }
-            Block::Equation(_) | Block::Align(_) | Block::ExplicitBreak(_) | Block::Opaque(_) => {}
+            Block::Table(_)
+            | Block::Equation(_)
+            | Block::Align(_)
+            | Block::ExplicitBreak(_)
+            | Block::Opaque(_) => {}
         }
     }
     None

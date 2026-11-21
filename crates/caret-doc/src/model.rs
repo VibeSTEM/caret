@@ -19,6 +19,7 @@ mod inline_environment;
 mod math;
 mod paragraph;
 mod run;
+mod table;
 mod validation;
 
 pub(crate) use features::math_node_requires_syntax;
@@ -44,6 +45,7 @@ pub use math::{
 pub(crate) use math::{math_node_attributes_supported, math_node_structure_supported};
 pub use paragraph::{Paragraph, ParagraphLayoutOverrides};
 pub use run::Run;
+pub use table::{Table, TableCell, TableRow};
 
 /// 文档字体设置的统一默认标记；具体字体由字体角色解析。
 pub const DEFAULT_FONT_FAMILY: &str = "<default>";

@@ -44,6 +44,7 @@ pub(crate) fn block_from_value(value: Value) -> Result<Block, ModelError> {
                 _ => Ok(Block::Opaque(OpaqueNode { raw: value })),
             }
         }
+        Some("table") => parse_table(value),
         Some("explicitBreak") => serde_json::from_value(without_fields(value, &["type"])?)
             .map(Block::ExplicitBreak)
             .map_err(|error| ModelError::InvalidDocument(error.to_string())),
@@ -635,6 +636,76 @@ fn raw_capability_flow_primary_kind(flow: &Value) -> super::MathNodeKind {
     }
 }
 
+fn parse_table(value: Value) -> Result<Block, ModelError> {
+    let mut object = value
+        .as_object()
+        .cloned()
+        .ok_or_else(|| ModelError::InvalidDocument("table node must be an object".to_owned()))?;
+    object.remove("type");
+    let id = parse_id_field(&mut object)?;
+    let rows = take_nodes(&mut object, "rows", parse_table_row)?;
+    reject_unknown_table_fields(&object, "table")?;
+    Ok(Block::Table(Table { id, rows }))
+}
+
+fn parse_table_row(value: Value) -> Result<TableRow, ModelError> {
+    let mut object = value.as_object().cloned().ok_or_else(|| {
+        ModelError::InvalidDocument("table row node must be an object".to_owned())
+    })?;
+    let id = parse_id_field(&mut object)?;
+    let cells = take_nodes(&mut object, "cells", parse_table_cell)?;
+    reject_unknown_table_fields(&object, "table row")?;
+    Ok(TableRow { id, cells })
+}
+
+fn parse_table_cell(value: Value) -> Result<TableCell, ModelError> {
+    let mut object = value.as_object().cloned().ok_or_else(|| {
+        ModelError::InvalidDocument("table cell node must be an object".to_owned())
+    })?;
+    let id = parse_id_field(&mut object)?;
+    let blocks = take_nodes(&mut object, "blocks", block_from_value)?;
+    reject_unknown_table_fields(&object, "table cell")?;
+    Ok(TableCell { id, blocks })
+}
+
+fn reject_unknown_table_fields(object: &Map<String, Value>, node: &str) -> Result<(), ModelError> {
+    if object.is_empty() {
+        return Ok(());
+    }
+    let fields = object.keys().cloned().collect::<Vec<_>>().join(", ");
+    Err(ModelError::InvalidDocument(format!(
+        "{node} has unknown fields: {fields}"
+    )))
+}
+
+/// 表格按行、单元格与单元格块序列递归编码；未知字段在解码时已经拒绝。
+fn table_to_value(table: &Table) -> Result<Value, ModelError> {
+    let mut rows = Vec::with_capacity(table.rows.len());
+    for row in &table.rows {
+        let mut cells = Vec::with_capacity(row.cells.len());
+        for cell in &row.cells {
+            let blocks = cell
+                .blocks
+                .iter()
+                .map(block_to_value)
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut cell_object = Map::new();
+            cell_object.insert("id".to_owned(), Value::String(cell.id.0.clone()));
+            cell_object.insert("blocks".to_owned(), Value::Array(blocks));
+            cells.push(Value::Object(cell_object));
+        }
+        let mut row_object = Map::new();
+        row_object.insert("id".to_owned(), Value::String(row.id.0.clone()));
+        row_object.insert("cells".to_owned(), Value::Array(cells));
+        rows.push(Value::Object(row_object));
+    }
+    let mut object = Map::new();
+    object.insert("type".to_owned(), Value::String("table".to_owned()));
+    object.insert("id".to_owned(), Value::String(table.id.0.clone()));
+    object.insert("rows".to_owned(), Value::Array(rows));
+    Ok(Value::Object(object))
+}
+
 fn parse_block_environment(value: Value) -> Result<Block, ModelError> {
     let mut object = value.as_object().cloned().ok_or_else(|| {
         ModelError::InvalidDocument("environment node must be an object".to_owned())
@@ -778,6 +849,7 @@ pub(crate) fn block_to_value(block: &Block) -> Result<Value, ModelError> {
             },
             block_to_value,
         ),
+        Block::Table(value) => table_to_value(value),
         Block::ExplicitBreak(value) => with_type("explicitBreak", value),
         Block::Opaque(value) => Ok(value.raw.clone()),
     }

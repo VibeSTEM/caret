@@ -93,6 +93,7 @@ fn rejected_snapshot_does_not_split_the_next_typing_undo_group() -> Result<(), S
                 Block::Equation(_)
                 | Block::Align(_)
                 | Block::Environment(_)
+                | Block::Table(_)
                 | Block::ExplicitBreak(_)
                 | Block::Opaque(_) => None,
             })

@@ -177,6 +177,21 @@ pub(super) fn raw_math_capabilities(raw: &Value) -> BTreeSet<&'static str> {
                     }
                 }
             }
+            Some("table") => {
+                if let Some(rows) = object.get("rows").and_then(Value::as_array) {
+                    for cell in rows
+                        .iter()
+                        .filter_map(|row| row.get("cells").and_then(Value::as_array))
+                        .flatten()
+                    {
+                        if let Some(blocks) = cell.get("blocks").and_then(Value::as_array) {
+                            for child in blocks {
+                                visit_block(child, required);
+                            }
+                        }
+                    }
+                }
+            }
             Some("environment")
                 if object.get("scope").and_then(Value::as_str) == Some("block")
                     && matches!(

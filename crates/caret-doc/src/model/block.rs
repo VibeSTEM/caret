@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use super::{Align, Equation, NodeId, OpaqueNode, Paragraph};
+use super::{Align, Equation, NodeId, OpaqueNode, Paragraph, Table};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -15,6 +15,7 @@ pub enum Block {
     Equation(Equation),
     Align(Align),
     Environment(BlockEnvironment),
+    Table(Table),
     ExplicitBreak(ExplicitBreak),
     Opaque(OpaqueNode),
 }

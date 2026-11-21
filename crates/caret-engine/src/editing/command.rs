@@ -20,6 +20,13 @@ pub(crate) mod command_ids {
     pub(crate) const TEXT_INSERT_TWO_CHARACTER_WIDTH_SPACE: &str =
         "text.insert.two_character_width_space";
     pub(crate) const INSERT_INLINE_MATH: &str = "insert.inline_math";
+    pub(crate) const INSERT_TABLE: &str = "insert.table";
+    pub(crate) const TABLE_INSERT_ROW_BEFORE: &str = "table.insert_row_before";
+    pub(crate) const TABLE_INSERT_ROW_AFTER: &str = "table.insert_row_after";
+    pub(crate) const TABLE_DELETE_ROW: &str = "table.delete_row";
+    pub(crate) const TABLE_INSERT_COL_BEFORE: &str = "table.insert_col_before";
+    pub(crate) const TABLE_INSERT_COL_AFTER: &str = "table.insert_col_after";
+    pub(crate) const TABLE_DELETE_COL: &str = "table.delete_col";
     pub(crate) const INSERT_EQUATION: &str = "insert.equation";
     pub(crate) const INSERT_ALIGN: &str = "insert.align";
     pub(crate) const STRUCT_SECTION_CREATE: &str = "struct.section.create";
@@ -42,6 +49,8 @@ pub enum EditorKey {
     Escape,
     Enter,
     Tab,
+    /// Shift+Tab；表格内移动到上一格，046 前不作为普通文档键暴露。
+    ShiftTab,
     ShiftEnter,
     Backspace,
     Backslash,
@@ -157,6 +166,12 @@ pub enum Command {
     RemoveRunPropertyPreservingContent(EnvironmentKind),
     ExpandStructureSelection,
     ExitStructure,
+    /// 在当前块之后插入默认 2×2 表格并聚焦首个单元格（046 前不暴露 UI）。
+    InsertTable,
+    TableInsertRow(Direction),
+    TableDeleteRow,
+    TableInsertColumn(Direction),
+    TableDeleteColumn,
     CreateBlockEnvironment(BlockEnvironmentKind),
     ToggleInlineFormat(InlineEnvironmentKind),
     ToggleRunUnderline,
@@ -213,6 +228,13 @@ impl Command {
             Self::EnterMath(_) => "math.enter",
             Self::SetMathTextSelection { .. } => "math.text_selection.set",
             Self::InsertParagraphBreak => command_ids::TEXT_SPLIT_PARAGRAPH,
+            Self::InsertTable => command_ids::INSERT_TABLE,
+            Self::TableInsertRow(Direction::Forward) => command_ids::TABLE_INSERT_ROW_AFTER,
+            Self::TableInsertRow(Direction::Backward) => command_ids::TABLE_INSERT_ROW_BEFORE,
+            Self::TableDeleteRow => command_ids::TABLE_DELETE_ROW,
+            Self::TableInsertColumn(Direction::Forward) => command_ids::TABLE_INSERT_COL_AFTER,
+            Self::TableInsertColumn(Direction::Backward) => command_ids::TABLE_INSERT_COL_BEFORE,
+            Self::TableDeleteColumn => command_ids::TABLE_DELETE_COL,
             Self::Delete(_) => "text.delete",
             Self::MoveCaret(_) => "caret.move",
             Self::MoveStructure(Direction::Forward) => "struct.next",
@@ -247,6 +269,7 @@ impl Command {
             Self::EditorKey(EditorKey::Escape) => "interaction.escape",
             Self::EditorKey(EditorKey::Enter) => "interaction.enter",
             Self::EditorKey(EditorKey::Tab) => "interaction.tab",
+            Self::EditorKey(EditorKey::ShiftTab) => "interaction.shift_tab",
             Self::EditorKey(EditorKey::ShiftEnter) => "interaction.shift_enter",
             Self::EditorKey(EditorKey::ModBackspace) => "interaction.mod_backspace",
             Self::EditorKey(EditorKey::LeftArrow { .. }) => "navigation.left",

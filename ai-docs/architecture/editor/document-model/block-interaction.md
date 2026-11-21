@@ -70,9 +70,10 @@ Shift+方向键使用相同的位置比较和范围构造，不单独绕过共�
 | Section/Custom | 标题、子块顺序、解除/删除语义与容器几何 | 块相邻、跨宿主导航、结构选区、事务和恢复 |
 | Equation | MathTree/MathText 位置与 MathFragment 几何 | 块顺序、边界转换、跨块选区和删除恢复 |
 | Align | MathTree、逻辑行/cell 路径和 Align 几何 | 块顺序、宿主范围、历史与跨块选区 |
-| Table/Figure（未来） | 单元格、图形锚点或领域内容位置 | Block 身份、文档顺序、焦点/选区/删除/历史共用协议 |
+| Table | 单元格块序列、行列身份与单元格内部位置（画布/几何由 046 接入） | Block 身份、文档顺序、焦点/选区/删除/历史共用协议 |
+| Figure（未来） | 图形锚点或领域内容位置 | 同上 |
 
-Table、Figure 是未来 Block 扩展例子；本表不代表节点或编辑能力已经实现。新增 Block 必须沿该协议接入，不复制 Paragraph 或其他 Block 的交互仲裁。
+Table 已按该协议接入（模型/编辑在 045，画布几何在 046）；Figure 仍是未来扩展。新增 Block 必须沿该协议接入，不复制 Paragraph 或其他 Block 的交互仲裁。
 
 ## 实现承载
 

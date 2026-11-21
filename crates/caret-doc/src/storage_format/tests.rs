@@ -2239,3 +2239,94 @@ fn raw_capability_scan_keeps_its_legacy_node_boundaries() -> Result<(), Box<dyn 
     ));
     Ok(())
 }
+
+fn table_envelope_body() -> Value {
+    json!({
+        "type": "table",
+        "id": "table-1",
+        "rows": [{
+            "id": "row-1",
+            "cells": [
+                {
+                    "id": "cell-1",
+                    "blocks": [{
+                        "type": "paragraph",
+                        "id": "paragraph-1",
+                        "inlines": [{
+                            "type": "text",
+                            "runs": [{"text": "cell", "props": {}}]
+                        }]
+                    }]
+                },
+                {
+                    "id": "cell-2",
+                    "blocks": [{
+                        "type": "paragraph",
+                        "id": "paragraph-2",
+                        "inlines": []
+                    }]
+                }
+            ]
+        }]
+    })
+}
+
+#[test]
+fn table_capability_is_declared_and_round_trips_through_cdoc()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut document = Document::blank();
+    let table: Block = serde_json::from_value(table_envelope_body())?;
+    document.body = vec![
+        Block::Paragraph(crate::Paragraph::empty(NodeId::generate())),
+        table,
+    ];
+    let file = CdocFile::new(document)?;
+    assert!(
+        file.required_features()
+            .iter()
+            .any(|feature| feature == "caret.table.v1")
+    );
+    let bytes = file.to_bytes()?;
+    let opened = open(&bytes)?;
+    let OpenedDocument::Editable(opened_file) = opened else {
+        panic!("declared table capability must open as editable");
+    };
+    assert!(
+        matches!(
+            opened_file.document().body.as_slice(),
+            [Block::Paragraph(_), Block::Table(_)]
+        ),
+        "table must survive the save/open round trip"
+    );
+    Ok(())
+}
+
+#[test]
+fn missing_table_capability_falls_back_to_read_only_preview()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut envelope = blank_envelope()?;
+    envelope["document"]["body"] = json!([table_envelope_body()]);
+    let opened = open(envelope.to_string().as_bytes())?;
+    let OpenedDocument::SafePreview(preview) = opened else {
+        panic!("undeclared table capability must fall back to safe preview");
+    };
+    assert!(preview.reasons.iter().any(|reason| matches!(
+        reason,
+        PreviewReason::MissingRequiredFeature(feature) if feature == "caret.table.v1"
+    )));
+    Ok(())
+}
+
+#[test]
+fn table_unknown_fields_are_format_errors_not_opaque_preview()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut envelope = blank_envelope()?;
+    let mut table = table_envelope_body();
+    table["vendorField"] = json!(true);
+    envelope["document"]["body"] = json!([table]);
+    assert!(matches!(
+        open(envelope.to_string().as_bytes()),
+        Err(DocumentError::InvalidDocument(_))
+    ));
+    Ok(())
+}

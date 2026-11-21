@@ -23,6 +23,13 @@ impl Session {
             {
                 return Ok(Effect::default());
             }
+            if self.table_context().is_some() {
+                // 表格内纵向结构键只按行移动；到边界且相邻块不可停靠时保持 no-op，
+                // 不回退到会被横向表格拦截复用的 MoveStructure。
+                return Ok(self
+                    .move_table_row(direction)?
+                    .unwrap_or_else(Effect::default));
+            }
             return self.run(Command::MoveStructure(direction));
         }
         if self.composition.is_some() {

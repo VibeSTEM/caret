@@ -250,6 +250,9 @@ impl Session {
         if self.composition.is_some() {
             return Err(EditError::CompositionPending);
         }
+        if self.table_context().is_some() {
+            return Err(EditError::UnsupportedTableCellMath);
+        }
         let projection = caret_math::parse_projection(source, caret_math::MathInputKind::Inline)
             .map_err(|error| EditError::InvalidMath(error.to_string()))?;
         let (projected, source_projection) = projection.into_parts();

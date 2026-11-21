@@ -4,7 +4,8 @@ use super::*;
 use crate::editing::{DocumentRangeEndpoint, EditorKey, EnvironmentSource, StructureSelection};
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, DocumentFontTarget, InlineEnvironment,
-    InlineEnvironmentKind, NodeId, Paragraph, ParagraphContent, Run, TextFlow,
+    InlineEnvironmentKind, NodeId, Paragraph, ParagraphContent, Run, Table, TableCell, TableRow,
+    TextFlow,
 };
 use std::collections::BTreeMap;
 use unicode_segmentation::UnicodeSegmentation;
@@ -2397,4 +2398,749 @@ fn install_structure_selection_rejects_empty_coverage_without_side_effects() {
     assert_eq!(session.selected_math_blocks(), math_blocks_before);
     assert_eq!(session.document_generation(), generation_before);
     assert_eq!(session.can_undo(), can_undo_before);
+}
+
+fn table_document_for_session() -> (Document, NodeId, NodeId, NodeId, NodeId) {
+    let value = serde_json::json!({
+        "type": "table",
+        "id": "table-1",
+        "rows": [{
+            "id": "row-1",
+            "cells": [{
+                "id": "cell-1",
+                "blocks": [{
+                    "type": "paragraph",
+                    "id": "cell-paragraph-1",
+                    "inlines": [{
+                        "type": "text",
+                        "runs": [{"text": "one", "props": {}}]
+                    }]
+                }]
+            }]
+        }]
+    });
+    let table: Block = serde_json::from_value(value)
+        .unwrap_or_else(|error| panic!("table fixture must parse: {error}"));
+    let mut document = Document::blank();
+    document.body.push(table);
+    (
+        document,
+        NodeId::parse("table-1").unwrap_or_else(|error| panic!("table id: {error}")),
+        NodeId::parse("row-1").unwrap_or_else(|error| panic!("row id: {error}")),
+        NodeId::parse("cell-1").unwrap_or_else(|error| panic!("cell id: {error}")),
+        NodeId::parse("cell-paragraph-1").unwrap_or_else(|error| panic!("paragraph id: {error}")),
+    )
+}
+
+#[test]
+fn table_cell_text_editing_uses_the_shared_history_and_document_validation() {
+    let (document, table_id, row_id, cell_id, paragraph_id) = table_document_for_session();
+    let mut session =
+        Session::new(document).unwrap_or_else(|error| panic!("table document must open: {error}"));
+    let story = StoryId::TableCell {
+        table_id: table_id.clone(),
+        row_id,
+        cell_id,
+    };
+    let anchor = Pos {
+        story: story.clone(),
+        paragraph_id: paragraph_id.clone(),
+        offset: 1,
+        affinity: Affinity::Downstream,
+    };
+    let focus = Pos {
+        offset: 3,
+        affinity: Affinity::Upstream,
+        ..anchor.clone()
+    };
+    session
+        .set_selection(Some(Selection { anchor, focus }))
+        .unwrap_or_else(|error| panic!("cell selection must be valid: {error}"));
+    session
+        .run(Command::InsertText("X".to_owned()))
+        .unwrap_or_else(|error| panic!("cell replacement must succeed: {error}"));
+    let location = session
+        .paragraph_index
+        .get(&paragraph_id)
+        .unwrap_or_else(|| panic!("cell paragraph must stay indexed"))
+        .clone();
+    let paragraph =
+        super::super::paragraph_ops::paragraph_at_location(&session.document.body, &location)
+            .unwrap_or_else(|| panic!("cell paragraph must resolve"));
+    assert_eq!(
+        TextMap::new(paragraph)
+            .unwrap_or_else(|error| panic!("cell text map failed: {error}"))
+            .text,
+        "oX"
+    );
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("cell undo must succeed: {error}"));
+    let paragraph =
+        super::super::paragraph_ops::paragraph_at_location(&session.document.body, &location)
+            .unwrap_or_else(|| panic!("cell paragraph must resolve after undo"));
+    assert_eq!(
+        TextMap::new(paragraph)
+            .unwrap_or_else(|error| panic!("cell text map failed: {error}"))
+            .text,
+        "one"
+    );
+}
+
+#[test]
+fn table_cell_enter_splits_inside_the_cell_transaction() {
+    let (document, table_id, row_id, cell_id, paragraph_id) = table_document_for_session();
+    let mut session =
+        Session::new(document).unwrap_or_else(|error| panic!("table document must open: {error}"));
+    let story = StoryId::TableCell {
+        table_id: table_id.clone(),
+        row_id: row_id.clone(),
+        cell_id: cell_id.clone(),
+    };
+    let position = Pos {
+        story,
+        paragraph_id,
+        offset: 3,
+        affinity: Affinity::Downstream,
+    };
+    session
+        .set_selection(Some(Selection {
+            anchor: position.clone(),
+            focus: position,
+        }))
+        .unwrap_or_else(|error| panic!("cell caret must be valid: {error}"));
+    session
+        .run(Command::InsertParagraphBreak)
+        .unwrap_or_else(|error| panic!("cell paragraph break must succeed: {error}"));
+    let cell_blocks = caret_structure::block_list_by_table_cell(
+        &session.document.body,
+        &[],
+        &table_id,
+        &row_id,
+        &cell_id,
+    )
+    .unwrap_or_else(|| panic!("cell blocks must resolve"));
+    assert_eq!(cell_blocks.len(), 2);
+    let generation_after_split = session.document_generation();
+    session
+        .run(Command::InsertText("X".to_owned()))
+        .unwrap_or_else(|error| panic!("typing after cell split must succeed: {error}"));
+    assert!(matches!(
+        session.selection.focus.story,
+        StoryId::TableCell { .. }
+    ));
+    assert_eq!(session.document_generation(), generation_after_split + 1);
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("typing undo must succeed: {error}"));
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("cell split undo must succeed: {error}"));
+    let cell_blocks = caret_structure::block_list_by_table_cell(
+        &session.document.body,
+        &[],
+        &table_id,
+        &row_id,
+        &cell_id,
+    )
+    .unwrap_or_else(|| panic!("cell blocks must resolve"));
+    assert_eq!(cell_blocks.len(), 1);
+}
+
+#[test]
+fn table_cell_display_math_insertion_is_rejected_until_046() {
+    let (document, _table_id, _row_id, _cell_id, paragraph_id) = table_document_for_session();
+    let before = document.clone();
+    let mut session =
+        Session::new(document).unwrap_or_else(|error| panic!("table document must open: {error}"));
+    let story = StoryId::TableCell {
+        table_id: _table_id.clone(),
+        row_id: _row_id.clone(),
+        cell_id: _cell_id.clone(),
+    };
+    let position = Pos {
+        story,
+        paragraph_id,
+        offset: 3,
+        affinity: Affinity::Downstream,
+    };
+    session
+        .set_selection(Some(Selection {
+            anchor: position.clone(),
+            focus: position,
+        }))
+        .unwrap_or_else(|error| panic!("cell caret must be valid: {error}"));
+    assert!(matches!(
+        session.insert_display_math(false),
+        Err(EditError::UnsupportedTableCellMath)
+    ));
+    assert_eq!(session.document(), &before);
+}
+
+fn table_from_session(session: &Session) -> &Table {
+    session
+        .document
+        .body
+        .iter()
+        .find_map(|block| match block {
+            Block::Table(table) => Some(table),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("document must contain a table"))
+}
+
+#[test]
+fn insert_table_command_creates_default_grid_and_undoes_once() {
+    let mut document = Document::blank();
+    let paragraph_id = match &mut document.body[0] {
+        Block::Paragraph(paragraph) => {
+            paragraph.inlines = vec![text_flow(Run {
+                text: "x".to_owned(),
+                language: None,
+                props: Default::default(),
+                extra: Default::default(),
+            })];
+            paragraph.id.clone()
+        }
+        _ => panic!("blank document starts with a paragraph"),
+    };
+    let mut session =
+        Session::new(document).unwrap_or_else(|error| panic!("blank session must open: {error}"));
+    let position = Pos {
+        story: StoryId::Body,
+        paragraph_id,
+        offset: 1,
+        affinity: Affinity::Downstream,
+    };
+    session
+        .set_selection(Some(Selection {
+            anchor: position.clone(),
+            focus: position,
+        }))
+        .unwrap_or_else(|error| panic!("caret must be valid: {error}"));
+    session
+        .run(Command::InsertTable)
+        .unwrap_or_else(|error| panic!("insert table must succeed: {error}"));
+    let table = table_from_session(&session);
+    assert_eq!(table.rows.len(), 2);
+    assert_eq!(table.rows[0].cells.len(), 2);
+    for row in &table.rows {
+        for cell in &row.cells {
+            assert_eq!(cell.blocks.len(), 1);
+        }
+    }
+    let focus = &session.selection.focus;
+    assert!(matches!(focus.story, StoryId::TableCell { .. }));
+    assert_eq!(
+        session.story_for_paragraph(&focus.paragraph_id),
+        Some(focus.story.clone())
+    );
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("insert table undo must succeed: {error}"));
+    assert!(
+        !session
+            .document
+            .body
+            .iter()
+            .any(|block| matches!(block, Block::Table(_)))
+    );
+}
+
+#[test]
+fn table_tab_and_shift_tab_move_between_cells_and_grow_the_last_row() {
+    let mut document = Document::blank();
+    let mut session = Session::new(document.clone())
+        .unwrap_or_else(|error| panic!("blank session must open: {error}"));
+    let _ = &mut document;
+    let position = session.selection.focus.clone();
+    session
+        .set_selection(Some(Selection {
+            anchor: position.clone(),
+            focus: position,
+        }))
+        .unwrap_or_else(|error| panic!("caret must be valid: {error}"));
+    session
+        .run(Command::InsertTable)
+        .unwrap_or_else(|error| panic!("insert table must succeed: {error}"));
+    let before = session.selection.focus.clone();
+    let generation = session.document_generation();
+    let effect = session
+        .run(Command::EditorKey(EditorKey::Tab))
+        .unwrap_or_else(|error| panic!("tab must succeed: {error}"));
+    assert!(effect.selection_changed);
+    assert_eq!(session.document_generation(), generation);
+    assert_ne!(session.selection.focus.paragraph_id, before.paragraph_id);
+    session
+        .run(Command::EditorKey(EditorKey::ShiftTab))
+        .unwrap_or_else(|error| panic!("shift-tab must succeed: {error}"));
+    assert_eq!(session.document_generation(), generation);
+    assert_eq!(session.selection.focus.paragraph_id, before.paragraph_id);
+
+    // 移动到最后一个单元格后，Tab 增加一行并落到新行的首格。
+    for _ in 0..4 {
+        session
+            .run(Command::EditorKey(EditorKey::Tab))
+            .unwrap_or_else(|error| panic!("tab must succeed: {error}"));
+    }
+    let table = table_from_session(&session);
+    assert_eq!(table.rows.len(), 3);
+    assert_eq!(session.document_generation(), generation + 1);
+}
+
+#[test]
+fn table_row_and_column_commands_are_atomic_and_undoable() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session must open: {error}"));
+    session
+        .run(Command::InsertTable)
+        .unwrap_or_else(|error| panic!("insert table must succeed: {error}"));
+
+    session
+        .run(Command::TableInsertRow(crate::editing::Direction::Forward))
+        .unwrap_or_else(|error| panic!("insert row must succeed: {error}"));
+    assert_eq!(table_from_session(&session).rows.len(), 3);
+    session
+        .run(Command::TableDeleteRow)
+        .unwrap_or_else(|error| panic!("delete row must succeed: {error}"));
+    assert_eq!(table_from_session(&session).rows.len(), 2);
+
+    session
+        .run(Command::TableInsertColumn(
+            crate::editing::Direction::Forward,
+        ))
+        .unwrap_or_else(|error| panic!("insert column must succeed: {error}"));
+    assert_eq!(table_from_session(&session).rows[0].cells.len(), 3);
+    session
+        .run(Command::TableDeleteColumn)
+        .unwrap_or_else(|error| panic!("delete column must succeed: {error}"));
+    assert_eq!(table_from_session(&session).rows[0].cells.len(), 2);
+
+    for _ in 0..4 {
+        session
+            .run(Command::Undo)
+            .unwrap_or_else(|error| panic!("table command undo must succeed: {error}"));
+    }
+    assert_eq!(table_from_session(&session).rows.len(), 2);
+    assert_eq!(table_from_session(&session).rows[0].cells.len(), 2);
+}
+
+#[test]
+fn section_body_into_title_merge_keeps_environment_view_resolvable() {
+    use caret_doc::{BlockEnvironment, BlockEnvironmentKind};
+    let title_id = NodeId::generate();
+    let body_id = NodeId::generate();
+    let environment_id = NodeId::generate();
+    let mut title = Paragraph::empty(title_id.clone());
+    title.inlines = vec![text_flow(Run {
+        text: "Heading".to_owned(),
+        language: None,
+        props: Default::default(),
+        extra: Default::default(),
+    })];
+    let mut body = Paragraph::empty(body_id.clone());
+    body.inlines = vec![text_flow(Run {
+        text: "body".to_owned(),
+        language: None,
+        props: Default::default(),
+        extra: Default::default(),
+    })];
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(Paragraph::empty(NodeId::generate())),
+        Block::Environment(BlockEnvironment {
+            id: environment_id,
+            kind: BlockEnvironmentKind::Section,
+            definition_id: None,
+            props: Default::default(),
+            title: Some(title),
+            children: vec![Block::Paragraph(body)],
+            extra: Default::default(),
+        }),
+    ];
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("section document must open: {error}"));
+    let position = Pos {
+        story: StoryId::Body,
+        paragraph_id: body_id,
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
+    session
+        .set_selection(Some(Selection {
+            anchor: position.clone(),
+            focus: position,
+        }))
+        .unwrap_or_else(|error| panic!("body caret must be valid: {error}"));
+    session
+        .run(Command::Delete(crate::editing::Direction::Backward))
+        .unwrap_or_else(|error| panic!("title merge must succeed: {error}"));
+    let focus = session.selection.focus.clone();
+    assert!(
+        session.paragraph_index.contains_key(&focus.paragraph_id),
+        "merged focus paragraph must stay indexed: {focus:?}"
+    );
+    session
+        .current_environment_view()
+        .unwrap_or_else(|error| panic!("environment view must resolve after merge: {error}"));
+}
+
+#[test]
+fn section_creation_then_enter_keeps_environment_view_resolvable() {
+    use caret_doc::InlineEnvironmentKind;
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session must open: {error}"));
+    session
+        .run(Command::InsertText("Heading".to_owned()))
+        .unwrap_or_else(|error| panic!("heading text must insert: {error}"));
+    session
+        .run(Command::BeginCommandLine)
+        .unwrap_or_else(|error| panic!("command line must begin: {error}"));
+    session
+        .run(Command::TypeCommandLine("section".to_owned()))
+        .unwrap_or_else(|error| panic!("command line must type: {error}"));
+    session
+        .run(Command::AcceptCommandLine)
+        .unwrap_or_else(|error| panic!("command line must accept: {error}"));
+    session
+        .run(Command::EditorKey(EditorKey::Enter))
+        .unwrap_or_else(|error| panic!("enter must succeed: {error}"));
+    let focus = session.selection.focus.clone();
+    assert!(
+        session.paragraph_index.contains_key(&focus.paragraph_id),
+        "focus paragraph must be indexed: {focus:?}"
+    );
+    session
+        .current_environment_view()
+        .unwrap_or_else(|error| panic!("environment view must resolve: {error}"));
+    let _ = InlineEnvironmentKind::Bold;
+}
+
+#[test]
+fn table_cell_math_editing_is_explicitly_rejected_until_046() {
+    let (document, _table_id, _row_id, _cell_id, paragraph_id) = table_document_for_session();
+    let before = document.clone();
+    let mut session =
+        Session::new(document).unwrap_or_else(|error| panic!("table document must open: {error}"));
+    let story = StoryId::TableCell {
+        table_id: _table_id.clone(),
+        row_id: _row_id.clone(),
+        cell_id: _cell_id.clone(),
+    };
+    let position = Pos {
+        story,
+        paragraph_id,
+        offset: 3,
+        affinity: Affinity::Downstream,
+    };
+    session
+        .set_selection(Some(Selection {
+            anchor: position.clone(),
+            focus: position,
+        }))
+        .unwrap_or_else(|error| panic!("cell caret must be valid: {error}"));
+    assert!(matches!(
+        session.run(Command::InsertInlineMath("x".to_owned())),
+        Err(EditError::UnsupportedTableCellMath)
+    ));
+    assert!(matches!(
+        session.insert_display_math(true),
+        Err(EditError::UnsupportedTableCellMath)
+    ));
+    assert_eq!(session.document(), &before);
+}
+
+#[test]
+fn table_column_limit_failure_keeps_document_and_generation_unchanged() {
+    let cells = (0..63)
+        .map(|_| TableCell {
+            id: NodeId::generate(),
+            blocks: vec![Block::Paragraph(Paragraph::empty(NodeId::generate()))],
+        })
+        .collect::<Vec<_>>();
+    let row = TableRow {
+        id: NodeId::generate(),
+        cells,
+    };
+    let table = Table {
+        id: NodeId::generate(),
+        rows: vec![row],
+    };
+    let table_id = table.id.clone();
+    let row_id = table.rows[0].id.clone();
+    let cell_id = table.rows[0].cells[0].id.clone();
+    let paragraph_id = match &table.rows[0].cells[0].blocks[0] {
+        Block::Paragraph(paragraph) => paragraph.id.clone(),
+        _ => panic!("cell fixture must hold a paragraph"),
+    };
+    let mut document = Document::blank();
+    document.body.push(Block::Table(table));
+    let mut session =
+        Session::new(document).unwrap_or_else(|error| panic!("table document must open: {error}"));
+    let position = Pos {
+        story: StoryId::TableCell {
+            table_id: table_id.clone(),
+            row_id,
+            cell_id,
+        },
+        paragraph_id,
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
+    session
+        .set_selection(Some(Selection {
+            anchor: position.clone(),
+            focus: position,
+        }))
+        .unwrap_or_else(|error| panic!("cell caret must be valid: {error}"));
+    let before = session.document().clone();
+    let generation = session.document_generation();
+    assert!(matches!(
+        session.run(Command::TableInsertColumn(
+            crate::editing::Direction::Forward
+        )),
+        Err(EditError::InvalidDocument(_))
+    ));
+    assert_eq!(session.document(), &before);
+    assert_eq!(session.document_generation(), generation);
+    assert!(!session.can_undo());
+}
+
+fn paragraph_with(text: &str) -> Paragraph {
+    let mut paragraph = Paragraph::empty(NodeId::generate());
+    paragraph.inlines = vec![text_flow(Run {
+        text: text.to_owned(),
+        language: None,
+        props: Default::default(),
+        extra: Default::default(),
+    })];
+    paragraph
+}
+
+fn cell_with(blocks: Vec<Block>) -> TableCell {
+    TableCell {
+        id: NodeId::generate(),
+        blocks,
+    }
+}
+
+fn table_only_document(cell_blocks: Vec<Block>) -> (Document, NodeId, NodeId, NodeId) {
+    let cell = cell_with(cell_blocks);
+    let row = TableRow {
+        id: NodeId::generate(),
+        cells: vec![cell.clone()],
+    };
+    let table = Table {
+        id: NodeId::generate(),
+        rows: vec![row.clone()],
+    };
+    let table_id = table.id.clone();
+    let row_id = row.id.clone();
+    let cell_id = cell.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![Block::Table(table)];
+    (document, table_id, row_id, cell_id)
+}
+
+#[test]
+fn table_only_document_opens_and_accepts_typing() {
+    let (document, table_id, row_id, cell_id) =
+        table_only_document(vec![Block::Paragraph(paragraph_with("cell"))]);
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("table-only document must open: {error}"));
+    assert!(matches!(
+        session.selection.focus.story,
+        StoryId::TableCell { .. }
+    ));
+    session
+        .run(Command::InsertText("X".to_owned()))
+        .unwrap_or_else(|error| panic!("typing in table-only document must succeed: {error}"));
+    let cell_blocks = caret_structure::block_list_by_table_cell(
+        &session.document.body,
+        &[],
+        &table_id,
+        &row_id,
+        &cell_id,
+    )
+    .unwrap_or_else(|| panic!("cell blocks must resolve"));
+    assert_eq!(cell_blocks.len(), 1);
+}
+
+#[test]
+fn table_structure_navigation_does_not_touch_history_or_generation() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session must open: {error}"));
+    session
+        .run(Command::InsertTable)
+        .unwrap_or_else(|error| panic!("insert table must succeed: {error}"));
+    let generation = session.document_generation();
+    let effect = session
+        .run(Command::MoveStructure(crate::editing::Direction::Forward))
+        .unwrap_or_else(|error| panic!("cell structure move must succeed: {error}"));
+    assert!(effect.selection_changed);
+    assert!(!effect.document_changed);
+    assert_eq!(session.document_generation(), generation);
+    // 结构移动没有制造历史步：一次 Undo 仍应撤销插入表格。
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("undo must succeed: {error}"));
+    assert!(
+        !session
+            .document
+            .body
+            .iter()
+            .any(|block| matches!(block, Block::Table(_)))
+    );
+}
+
+#[test]
+fn table_vertical_boundary_with_non_paragraph_neighbour_is_noop() {
+    let (mut document, ..) = table_only_document(vec![Block::Paragraph(paragraph_with("cell"))]);
+    document
+        .body
+        .push(Block::ExplicitBreak(caret_doc::ExplicitBreak {
+            kind: "page".to_owned(),
+            extra: Default::default(),
+        }));
+    let mut session =
+        Session::new(document).unwrap_or_else(|error| panic!("table document must open: {error}"));
+    let before_focus = session.selection.focus.clone();
+    let generation = session.document_generation();
+    session
+        .run(Command::EditorKey(EditorKey::DownArrow {
+            candidate: None,
+            extend: false,
+            structure: true,
+        }))
+        .unwrap_or_else(|error| panic!("structure down must be no-op: {error}"));
+    assert_eq!(session.selection.focus, before_focus);
+    assert_eq!(session.document_generation(), generation);
+}
+
+#[test]
+fn table_copy_of_unrelated_paragraphs_succeeds_but_spanning_selection_rejects() {
+    let (mut document, ..) = table_only_document(vec![Block::Paragraph(paragraph_with("cell"))]);
+    let first = paragraph_with("first");
+    let second = paragraph_with("second");
+    let trailing = paragraph_with("trailing");
+    let first_id = first.id.clone();
+    let second_id = second.id.clone();
+    let trailing_id = trailing.id.clone();
+    document.body = vec![
+        Block::Paragraph(first),
+        Block::Paragraph(second),
+        document.body[0].clone(),
+        Block::Paragraph(trailing),
+    ];
+    let mut session =
+        Session::new(document).unwrap_or_else(|error| panic!("table document must open: {error}"));
+    let position = |paragraph_id: &NodeId, offset: usize| Pos {
+        story: StoryId::Body,
+        paragraph_id: paragraph_id.clone(),
+        offset,
+        affinity: Affinity::Downstream,
+    };
+    session
+        .set_selection(Some(Selection {
+            anchor: position(&first_id, 0),
+            focus: position(&second_id, 1),
+        }))
+        .unwrap_or_else(|error| panic!("selection before table must be valid: {error}"));
+    let copied = session
+        .copy_clipboard_fragment()
+        .unwrap_or_else(|error| panic!("copy before table must succeed: {error}"))
+        .unwrap_or_else(|| panic!("copy must produce a fragment"));
+    assert_eq!(copied.fragment.blocks.len(), 2);
+    assert!(
+        !copied
+            .fragment
+            .blocks
+            .iter()
+            .any(|block| matches!(block, Block::Table(_)))
+    );
+
+    session
+        .set_selection(Some(Selection {
+            anchor: position(&first_id, 0),
+            focus: position(&trailing_id, 0),
+        }))
+        .unwrap_or_else(|error| panic!("spanning selection must be valid: {error}"));
+    assert!(matches!(
+        session.copy_clipboard_fragment(),
+        Err(EditError::UnsupportedTableContent)
+    ));
+}
+
+#[test]
+fn table_cell_environment_title_split_keeps_cell_story() {
+    use caret_doc::{BlockEnvironment, BlockEnvironmentKind};
+    let title = paragraph_with("Title");
+    let title_id = title.id.clone();
+    let environment_id = NodeId::generate();
+    let environment = BlockEnvironment {
+        id: environment_id.clone(),
+        kind: BlockEnvironmentKind::Section,
+        definition_id: None,
+        props: Default::default(),
+        title: Some(title),
+        children: vec![Block::Paragraph(paragraph_with("body"))],
+        extra: Default::default(),
+    };
+    let (document, ..) = table_only_document(vec![Block::Environment(environment)]);
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("cell environment document must open: {error}"));
+    let position = Pos {
+        story: StoryId::EnvironmentTitle(environment_id),
+        paragraph_id: title_id,
+        offset: 5,
+        affinity: Affinity::Downstream,
+    };
+    session
+        .set_selection(Some(Selection {
+            anchor: position.clone(),
+            focus: position,
+        }))
+        .unwrap_or_else(|error| panic!("cell title caret must be valid: {error}"));
+    session
+        .run(Command::InsertParagraphBreak)
+        .unwrap_or_else(|error| panic!("cell title split must succeed: {error}"));
+    assert!(
+        matches!(session.selection.focus.story, StoryId::TableCell { .. }),
+        "split focus must inherit the cell story"
+    );
+    session
+        .run(Command::InsertText("X".to_owned()))
+        .unwrap_or_else(|error| panic!("typing after cell title split must succeed: {error}"));
+}
+
+#[test]
+fn table_cell_inline_math_enter_is_rejected() {
+    let inline = serde_json::json!({"type":"paragraph","id":"cell-paragraph","inlines":[
+        {"type":"text","runs":[{"text":"x","props":{}}]},
+        {"type":"inlineMath","id":"inline-1","mathTree":{
+            "schemaVersion": caret_doc::MATH_TREE_SCHEMA_VERSION,
+            "root": {"id":"math-root","content": []}
+        }}
+    ]});
+    let paragraph: Paragraph = serde_json::from_value(inline)
+        .unwrap_or_else(|error| panic!("inline math paragraph must parse: {error}"));
+    let (document, ..) = table_only_document(vec![Block::Paragraph(paragraph.clone())]);
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("cell inline math document must open: {error}"));
+    let position = Pos {
+        story: session.selection.focus.story.clone(),
+        paragraph_id: paragraph.id.clone(),
+        offset: 4,
+        affinity: Affinity::Upstream,
+    };
+    session
+        .set_selection(Some(Selection {
+            anchor: position.clone(),
+            focus: position,
+        }))
+        .unwrap_or_else(|error| panic!("cell inline math caret must be valid: {error}"));
+    assert!(matches!(
+        session.run(Command::EnterMath(crate::editing::Direction::Backward)),
+        Err(EditError::UnsupportedTableCellMath)
+    ));
 }

@@ -386,6 +386,9 @@ impl Session {
             Block::Environment(environment) => Some(range_block_unit(&environment.id)),
             Block::Equation(equation) => Some(range_block_unit(&equation.id)),
             Block::Align(align) => Some(range_block_unit(&align.id)),
+            // 表格作为结构范围对象（整表选择/删除/复制）随 046 接入；当前先拒绝而不是
+            // 让结构范围跳过整张表后产生半覆盖删除。
+            Block::Table(_) => None,
             Block::ExplicitBreak(_) | Block::Opaque(_) => None,
         }
     }
@@ -410,6 +413,15 @@ impl Session {
     ) -> Result<(), EditError> {
         for block in blocks {
             match block {
+                Block::Table(table) => {
+                    // 表格尚未作为范围对象；只有范围真正覆盖整表时拒绝，避免
+                    // 含表文档的无关结构选区被一刀切禁用。
+                    let unit = range_block_unit(&table.id);
+                    if matches!(self.block_unit_is_covered(start, end, &unit), Ok(true)) {
+                        return Err(EditError::UnsupportedTableContent);
+                    }
+                    continue;
+                }
                 Block::Environment(environment) => {
                     let Some(unit) = self.block_range_unit(block) else {
                         continue;

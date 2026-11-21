@@ -1,6 +1,6 @@
 # 表格
 
-更新日期：2026-11-09。本文是表格目标模型、单元格内容、导航和增量布局的唯一权威；当前文档 DTO 尚未实现 Table 节点。总体验收见[012](../../task/012-impl-table.md)，实现拆分和公式交叉边界见[公式与表格专题索引](math-and-table.md)。表格作为 Block 接入共享位置、选区、删除和历史协议的要求见[块宿主交互](document-model/block-interaction.md)。
+更新日期：2026-11-22。本文是表格目标模型、单元格内容、导航和增量布局的唯一权威；`Table`/行/单元格 DTO、`.cdoc` 持久化、编辑命令与 Session 级导航已由 045 落地；窗口入口与单元格画布由 046 接入。总体验收见[012](../../task/012-impl-table.md)，实现拆分和公式交叉边界见[公式与表格专题索引](math-and-table.md)。表格作为 Block 接入共享位置、选区、删除和历史协议的要求见[块宿主交互](document-model/block-interaction.md)。
 
 ## 模型与导航
 
@@ -12,7 +12,7 @@ Table 是 Block。每个单元格持有普通 Caret 块序列，因此可包含�
 - 方向结构键在单元格间移动，到边缘后才离开表格。
 - 单元格行列、段落与公式位置及上限见[文档位置](document-model/document-position.md)。
 
-表格模型、单元格编辑和保存往返由[045](../../task/045-table-model-and-editing.md)接入；单元格坐标、裁剪、绘制、命中、光标和高亮由[046](../../task/046-table-layout-and-canvas.md)接入。
+表格模型、单元格编辑和保存往返由[045](../../task/045-table-model-and-editing.md)完成；单元格坐标、裁剪、绘制、命中、光标和高亮由[046](../../task/046-table-layout-and-canvas.md)接入。
 
 ## 布局与性能
 

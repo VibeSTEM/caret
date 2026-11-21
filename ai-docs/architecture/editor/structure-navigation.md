@@ -1,18 +1,18 @@
 # 结构导航
 
-更新日期：2026-11-11。键位见[快捷键](../interface/keyboard-shortcuts.md)，命令入口见[命令](commands.md)。
+更新日期：2026-11-22。键位见[快捷键](../interface/keyboard-shortcuts.md)，命令入口见[命令](commands.md)。
 
 ## 结构语义与界面类别
 
 结构类别、页面角色和节点语义的唯一权威定义见[文档树与结构](document-model/document-structure.md#页面层级与内容块形态)。本文件只规定结构索引、导航和焦点几何如何消费这些定义，不重述页面/内容分类。结构索引保存具体领域语义；界面只消费稳定 ID 和 Rust 投影，不根据标题文字、QML 节点树或具体 kind 再推断一次。
 
-结构索引为 Paragraph、由段落大纲属性识别的 Heading、`Section`/`Custom` 块环境以及 Equation/Align 公式块保留稳定条目和父链。Section/Custom 共享可嵌套的标题/子项容器；Section 另有编号语义。二者都投影为 `multiLine`，但不能在 Rust 索引或文档数据中抹掉具体 kind。Custom 的实例名可覆盖通用显示名，模板扩展复用容器模型，不要求新增 QML 类别分支。Equation/Align 不提供 Paragraph 停靠点；全树文档顺序必须由块身份、父链和同级次序表达，Paragraph ordinal 仅是段落导航的派生序号。Paragraph block 的 `ParagraphContent::Text(TextFlow)` 与数学 `MathContent::Text(TextFlow)` 共用文本载体；InlineMath 创建与源码编辑提交时会把根层文本提升到 ParagraphContent，固定数学槽位仍在 MathFlow 内。规则见[数学公式架构](math.md#宿主边界与拆分)。模型及代码边界见[内容节点代码链路](document-model/content-code-path.md)。
+结构索引为 Paragraph、由段落大纲属性识别的 Heading、`Section`/`Custom` 块环境、Equation/Align 公式块以及 Table 结构保留稳定条目和父链。Section/Custom 共享可嵌套的标题/子项容器；Section 另有编号语义。二者都投影为 `multiLine`，但不能在 Rust 索引或文档数据中抹掉具体 kind。Custom 的实例名可覆盖通用显示名，模板扩展复用容器模型，不要求新增 QML 类别分支。Equation/Align 不提供 Paragraph 停靠点；全树文档顺序必须由块身份、父链和同级次序表达，Paragraph ordinal 仅是段落导航的派生序号。Paragraph block 的 `ParagraphContent::Text(TextFlow)` 与数学 `MathContent::Text(TextFlow)` 共用文本载体；InlineMath 创建与源码编辑提交时会把根层文本提升到 ParagraphContent，固定数学槽位仍在 MathFlow 内。规则见[数学公式架构](math.md#宿主边界与拆分)。模型及代码边界见[内容节点代码链路](document-model/content-code-path.md)。
 
-Block 是统一块级宿主类别，Paragraph 是结构最简单且编辑规则最完整的 Block。共享交互协议以 Paragraph 已验证的行为作为提取基准，但不复用其 paragraph_id/UTF-8 坐标作为所有 Block 的位置类型。Paragraph 适配器提供 TextMap/TextFlow 位置；Section/Custom/Equation/Align 适配器提供块身份、父级顺序、必要的块边界及领域内部位置。未来 Table、Figure 必须复用该协议，并通过窄领域适配器暴露单元格或图形内部位置；当前提及扩展契约不表示对应节点已实现。Inline 是 Paragraph 和显式提供行内流的 Block 内部内容层，不是任意块序列的直接子项。
+Block 是统一块级宿主类别，Paragraph 是结构最简单且编辑规则最完整的 Block。共享交互协议以 Paragraph 已验证的行为作为提取基准，但不复用其 paragraph_id/UTF-8 坐标作为所有 Block 的位置类型。Paragraph 适配器提供 TextMap/TextFlow 位置；Section/Custom/Equation/Align 适配器提供块身份、父级顺序、必要的块边界及领域内部位置。Table 已复用该协议并通过表格适配器暴露单元格内部位置（画布/几何由 046 接入）；Figure 等未来 Block 仍须复用该协议。Inline 是 Paragraph 和显式提供行内流的 Block 内部内容层，不是任意块序列的直接子项。
 
 行内与块级当前环境的权威适配规则见[环境视图](document-model/environment-views.md)。行内 `EnvironmentNode`、Run 下划线范围和 `InlineMath` 分别保留自己的载体与编辑入口，不作为块级导航停靠点。
 
-`InlineMath` 是 Paragraph 中的 U+FFFC 原子对象；公式内部编辑由 `MathEdit` 标识宿主与活动分支：Source 分支使用源码字节游标，Text 分支使用 MathFlow 中 TextFlow 的路径和显示偏移。Equation 与 Align 作为块级公式节点进入结构范围；当前 `MathEdit.target` 标识活动公式，不改变持久化树。Table、Figure 的结构映射在相应文档节点实现并接入索引后启用。
+`InlineMath` 是 Paragraph 中的 U+FFFC 原子对象；公式内部编辑由 `MathEdit` 标识宿主与活动分支：Source 分支使用源码字节游标，Text 分支使用 MathFlow 中 TextFlow 的路径和显示偏移。Equation 与 Align 作为块级公式节点进入结构范围；当前 `MathEdit.target` 标识活动公式，不改变持久化树。Table 的结构映射已接入索引；Figure 的结构映射在相应文档节点实现并接入索引后启用。
 
 `StructureClass` 表达 `Paragraph`、`SingleLine`、`MultiLine`、`Table` 和 `Figure` 内容块类别；页面组合层不是该枚举的同级成员。页面组合角色若参与导航，按文档树父子层级表达，不折叠为内容块类别。
 
@@ -43,13 +43,13 @@ Block 是统一块级宿主类别，Paragraph 是结构最简单且编辑规则�
 
 ## 键盘作用域
 
-结构导航按文档内部的最深可编辑对象优先；公式、表格行为在对应节点接入后逐步加入：
+结构导航按文档内部的最深可编辑对象优先；公式与表格已接入 Rust Session，画布/物理键位由 046 接线：
 
 ```text
 公式内部 → 表格单元格/行 → 列表项 → 段落与块环境 → 正文
 ```
 
-命令输入、IME 预编辑、选区和 UI 弹层是键盘交互上下文，不是文档结构层级。事件先由最内层焦点所有者接收；进入 Rust 的结构/编辑意图再由 Session 仲裁，详见[键盘路由](../interface/keyboard-routing.md)。例如表格内“上一块/下一块”先按行移动，越过首/末行时再离开表格；没有表格节点前不启用这项行为。
+命令输入、IME 预编辑、选区和 UI 弹层是键盘交互上下文，不是文档结构层级。事件先由最内层焦点所有者接收；进入 Rust 的结构/编辑意图再由 Session 仲裁，详见[键盘路由](../interface/keyboard-routing.md)。例如表格内“上一块/下一块”先按行移动，越过首/末行时再离开表格；Rust Session 已按该语义实现，用户可见入口在 046 接线后启用。
 
 ## 实现文件边界
 

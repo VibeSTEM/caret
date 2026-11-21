@@ -3225,6 +3225,24 @@ fn layout_errors_reject_the_entire_document_and_leave_the_service_reusable() {
     opaque_block.body.push(Block::Opaque(OpaqueNode {
         raw: serde_json::json!({"type": "future_block", "content": "preserved"}),
     }));
+    let mut table_block = Document::blank();
+    let table: Block = serde_json::from_value(serde_json::json!({
+        "type": "table",
+        "id": "table-1",
+        "rows": [{
+            "id": "row-1",
+            "cells": [
+                {"id": "cell-1", "blocks": [
+                    {"type": "paragraph", "id": "paragraph-1", "inlines": []}
+                ]},
+                {"id": "cell-2", "blocks": [
+                    {"type": "paragraph", "id": "paragraph-2", "inlines": []}
+                ]}
+            ]
+        }]
+    }))
+    .unwrap_or_else(|error| panic!("table test block must parse: {error}"));
+    table_block.body.push(table);
     let mut unknown_empty_mark = Document::blank();
     let Block::Paragraph(empty) = &mut unknown_empty_mark.body[0] else {
         unreachable!();
@@ -3239,6 +3257,7 @@ fn layout_errors_reject_the_entire_document_and_leave_the_service_reusable() {
         (invalid_model, "layout.invalid_document:"),
         (unknown_break, "layout.unknown_break_kind: column"),
         (opaque_block, "layout.unsupported_content"),
+        (table_block, "layout.unsupported_content"),
         (
             unknown_empty_mark,
             "layout.unsupported_paragraph_mark_style",

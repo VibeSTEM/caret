@@ -33,6 +33,7 @@ mod range_edit;
 mod range_extension;
 mod selection;
 mod structure;
+mod table;
 mod text_edit;
 
 use super::paragraph_ops::{
@@ -1205,6 +1206,16 @@ impl Session {
         }
         if matches!(
             &command,
+            Command::InsertTable
+                | Command::TableInsertRow(_)
+                | Command::TableDeleteRow
+                | Command::TableInsertColumn(_)
+                | Command::TableDeleteColumn
+        ) {
+            return self.run_table_command(command);
+        }
+        if matches!(
+            &command,
             Command::BeginCommandLine
                 | Command::TypeCommandLine(_)
                 | Command::BackspaceCommandLine
@@ -1417,8 +1428,13 @@ impl Session {
             | Command::ExitStructure => {
                 unreachable!("structure commands returned above")
             }
-            Command::CreateBlockEnvironment(_) => {
-                unreachable!("structure edit commands returned above")
+            Command::CreateBlockEnvironment(_)
+            | Command::InsertTable
+            | Command::TableInsertRow(_)
+            | Command::TableDeleteRow
+            | Command::TableInsertColumn(_)
+            | Command::TableDeleteColumn => {
+                unreachable!("table/structure edit commands returned above")
             }
             Command::ToggleInlineFormat(kind) => self.toggle_inline_format(kind),
             Command::ToggleRunUnderline => self.toggle_run_underline(),

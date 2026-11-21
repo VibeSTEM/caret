@@ -1609,6 +1609,11 @@ fn document_contains_math(blocks: &[Block]) -> bool {
                 || document_contains_math(&environment.children)
         }
         Block::Equation(_) | Block::Align(_) => true,
+        Block::Table(table) => table.rows.iter().any(|row| {
+            row.cells
+                .iter()
+                .any(|cell| document_contains_math(&cell.blocks))
+        }),
         Block::ExplicitBreak(_) | Block::Opaque(_) => false,
     })
 }
@@ -2111,6 +2116,9 @@ fn collect_blocks<'a>(
                     context,
                 )?;
             }
+            // 045 只交付模型与编辑；表格画布/网格布局由 046 承接，在此之前
+            // 含表文档打开时得到明确的“不支持内容”错误而不是半成品快照。
+            Block::Table(_) => return Err(DocumentLayoutError::UnsupportedContent),
             Block::Opaque(_) => return Err(DocumentLayoutError::UnsupportedContent),
         }
     }

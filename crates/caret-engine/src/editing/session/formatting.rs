@@ -45,9 +45,9 @@ fn paragraph_edit_position(start: &Pos, location: &ParagraphLocation) -> Pos {
     }
 }
 
-/// 段落内容允许嵌套行内环境的最大层数：块环境深度加上标题槽。
+/// 段落内容允许嵌套行内环境的最大层数：块环境深度加上段落自身所在槽。
 fn paragraph_inline_depth(location: &ParagraphLocation) -> usize {
-    location.block_path.len() + usize::from(location.is_title)
+    location.container.environment_depth() + 1
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

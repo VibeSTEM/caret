@@ -54,13 +54,17 @@ impl Session {
             extra: BTreeMap::new(),
         };
         let replacement = Block::Environment(environment.clone());
-        if !replace_block_at_location(&mut self.document.body, &location, replacement.clone()) {
+        if !paragraph_ops::replace_block_at_location(
+            &mut self.document.body,
+            &location,
+            replacement.clone(),
+        ) {
             return Err(EditError::UnknownParagraph(
                 position.paragraph_id.to_string(),
             ));
         }
         if let Err(error) = self.document.validate() {
-            replace_block_at_location(
+            paragraph_ops::replace_block_at_location(
                 &mut self.document.body,
                 &location,
                 Block::Paragraph(paragraph.clone()),

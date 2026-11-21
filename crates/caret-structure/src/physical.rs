@@ -14,6 +14,7 @@ pub enum DocumentNodeKind {
     Environment,
     Equation,
     Align,
+    Table,
     InlineMath,
     InlineEnvironment,
 }
@@ -120,6 +121,68 @@ pub fn block_list_by_environment_ids_mut<'a>(
     block_list_by_environment_ids_mut(&mut environment.children, rest)
 }
 
+/// 取得表格单元格内的块序列；先按环境 ID 路径定位表格，再按稳定 ID 定位行与单元格。
+///
+/// 空环境路径表示从根块序列查找。调用者仍须校验目标节点、slot 与文档代际。
+pub fn block_list_by_table_cell<'a>(
+    blocks: &'a [Block],
+    environment_ids: &[NodeId],
+    table_id: &NodeId,
+    row_id: &NodeId,
+    cell_id: &NodeId,
+) -> Option<&'a [Block]> {
+    let container = block_list_by_environment_ids(blocks, environment_ids)?;
+    let table = find_table_in_blocks(container, table_id)?;
+    let row = table.rows.iter().find(|row| &row.id == row_id)?;
+    let cell = row.cells.iter().find(|cell| &cell.id == cell_id)?;
+    Some(&cell.blocks)
+}
+
+/// 可变取得表格单元格内的块序列；不修改路径上的文档内容。
+pub fn block_list_by_table_cell_mut<'a>(
+    blocks: &'a mut Vec<Block>,
+    environment_ids: &[NodeId],
+    table_id: &NodeId,
+    row_id: &NodeId,
+    cell_id: &NodeId,
+) -> Option<&'a mut Vec<Block>> {
+    let container = block_list_by_environment_ids_mut(blocks, environment_ids)?;
+    let table = find_table_in_blocks_mut(container, table_id)?;
+    let row = table.rows.iter_mut().find(|row| &row.id == row_id)?;
+    let cell = row.cells.iter_mut().find(|cell| &cell.id == cell_id)?;
+    Some(&mut cell.blocks)
+}
+
+fn find_table_in_blocks<'a>(
+    blocks: &'a [Block],
+    table_id: &NodeId,
+) -> Option<&'a caret_doc::Table> {
+    let mut matches = blocks.iter().filter_map(|block| match block {
+        Block::Table(table) if &table.id == table_id => Some(table),
+        _ => None,
+    });
+    let table = matches.next()?;
+    matches.next().is_none().then_some(table)
+}
+
+fn find_table_in_blocks_mut<'a>(
+    blocks: &'a mut [Block],
+    table_id: &NodeId,
+) -> Option<&'a mut caret_doc::Table> {
+    let mut matching_index = None;
+    for (index, block) in blocks.iter().enumerate() {
+        if matches!(block, Block::Table(table) if &table.id == table_id)
+            && matching_index.replace(index).is_some()
+        {
+            return None;
+        }
+    }
+    match blocks.get_mut(matching_index?)? {
+        Block::Table(table) => Some(table),
+        _ => None,
+    }
+}
+
 /// 比较同一文档快照中两个节点的外侧边界。
 ///
 /// 同一有序序列中的相邻节点共享的间隙会得到相等结果；无 ID 节点仍占据 slot。
@@ -167,6 +230,39 @@ fn find_in_blocks(
     for (slot, block) in blocks.iter().enumerate() {
         prefix.push(slot * 2 + 1);
         match block {
+            Block::Table(table) => {
+                if &table.id == id {
+                    let location = location(
+                        table.id.clone(),
+                        DocumentNodeKind::Table,
+                        None,
+                        false,
+                        parents,
+                        Some(slot),
+                        prefix,
+                    );
+                    prefix.pop();
+                    return Some(location);
+                }
+                let mut found = None;
+                'rows: for (row_index, row) in table.rows.iter().enumerate() {
+                    prefix.push(row_index * 2 + 1);
+                    for (cell_index, cell) in row.cells.iter().enumerate() {
+                        prefix.push(cell_index * 2 + 1);
+                        found = find_in_blocks(&cell.blocks, id, parents, prefix);
+                        prefix.pop();
+                        if found.is_some() {
+                            prefix.pop();
+                            break 'rows;
+                        }
+                    }
+                    prefix.pop();
+                }
+                if found.is_some() {
+                    prefix.pop();
+                    return found;
+                }
+            }
             Block::Paragraph(paragraph) if &paragraph.id == id => {
                 let location = location(
                     paragraph.id.clone(),

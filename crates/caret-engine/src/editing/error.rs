@@ -29,6 +29,10 @@ pub enum EditError {
     ClipboardHostMismatch,
     /// 复制时共享 checked 数学序列化器报告无法无损表达，拒绝生成降级文本。
     ClipboardMathLoss(String),
+    /// 表格内容尚不能进入该剪贴板/结构范围路径，拒绝而不是静默丢弃。
+    UnsupportedTableContent,
+    /// 单元格内公式编辑与导航依赖 046 的单元格画布/几何，当前明确拒绝而不是进入坏状态。
+    UnsupportedTableCellMath,
     UnknownCommand,
 }
 
@@ -56,6 +60,8 @@ impl Display for EditError {
             Self::InvalidMath(reason) => write!(f, "edit.invalid_math: {reason}"),
             Self::ClipboardHostMismatch => f.write_str("clipboard.host_mismatch"),
             Self::ClipboardMathLoss(reason) => write!(f, "clipboard.math_loss: {reason}"),
+            Self::UnsupportedTableContent => f.write_str("edit.table_content_unsupported"),
+            Self::UnsupportedTableCellMath => f.write_str("edit.table_cell_math_unsupported"),
             Self::UnknownCommand => f.write_str("edit.unknown_command"),
         }
     }

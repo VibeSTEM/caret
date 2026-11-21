@@ -139,6 +139,7 @@ pub(super) fn current_structure_state(session: &caret_engine::Session) -> Value 
             StructureKind::Custom => ("custom", None),
             StructureKind::Equation => ("equation", None),
             StructureKind::Align => ("align", None),
+            StructureKind::Table => ("table", None),
         };
         let mut value = json!({ "id": entry.id, "kind": kind });
         if let Some(level) = level {

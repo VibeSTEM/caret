@@ -369,6 +369,13 @@ fn validate_document_math_sources(document: &Document) -> Result<(), String> {
                     &equation.id.to_string(),
                 )?,
                 Block::Align(align) => validate_align(align)?,
+                Block::Table(table) => {
+                    for row in &table.rows {
+                        for cell in &row.cells {
+                            validate_blocks(&cell.blocks)?;
+                        }
+                    }
+                }
                 Block::Environment(environment) => {
                     if let Some(title) = &environment.title {
                         validate_inlines(&title.inlines)?;

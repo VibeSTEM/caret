@@ -4,6 +4,7 @@
 // 署名：Yuki Lu
 
 use super::*;
+use crate::editing::paragraph_ops;
 
 impl Session {
     /// 退出公式编辑；块公式把边界 ID 和方向交给共享外侧停靠状态。
@@ -683,7 +684,9 @@ impl Session {
         let before_anchor_visual_affinity = self.selection_anchor_visual_affinity;
         let before_visual_affinity = self.selection_visual_affinity;
         let before_state_id = self.history_state_id;
-        let blocks = block_list(&mut self.document.body, &plan.parent_environment_ids)?;
+        let blocks =
+            paragraph_ops::block_list_in_container_mut(&mut self.document.body, &plan.container)
+                .ok_or(EditError::InvalidPosition)?;
         blocks.splice(
             plan.sibling_index..=plan.sibling_index,
             plan.after.iter().cloned(),
@@ -702,7 +705,7 @@ impl Session {
         self.finalize_structure_edit(
             index,
             DocumentPatch::BlockRange {
-                parent_environment_ids: plan.parent_environment_ids,
+                container: plan.container.clone(),
                 sibling_index: plan.sibling_index,
                 before: vec![plan.before],
                 after: plan.after,
@@ -728,6 +731,9 @@ impl Session {
             return Err(EditError::CompositionPending);
         }
         let focus = self.selection.focus.clone();
+        if matches!(focus.story, StoryId::TableCell { .. }) {
+            return Err(EditError::UnsupportedTableCellMath);
+        }
         if focus.story != StoryId::Body || self.selection.anchor != focus {
             return Err(EditError::InvalidPosition);
         }
@@ -739,8 +745,10 @@ impl Session {
         if location.is_title {
             return Err(EditError::InvalidPosition);
         }
-        let (parent_ids, sibling_index) = paragraph_parent_path(&self.document.body, &location)
-            .ok_or(EditError::InvalidPosition)?;
+        let container = location.container.clone();
+        let Some(&sibling_index) = location.block_path.last() else {
+            return Err(EditError::InvalidPosition);
+        };
         let paragraph = self.paragraph_for(&focus)?.clone();
         let paragraph_map = TextMap::new(&paragraph)?;
         paragraph_map.validate_pos(&focus)?;
@@ -806,7 +814,7 @@ impl Session {
             next.inlines = right_inlines;
             next.extra.clear();
             let position = Pos {
-                story: StoryId::Body,
+                story: focus.story.clone(),
                 paragraph_id: next.id.clone(),
                 offset: 0,
                 affinity: Affinity::Downstream,
@@ -817,12 +825,14 @@ impl Session {
             )
         };
         let mut candidate_document = self.document.clone();
-        let blocks = block_list(&mut candidate_document.body, &parent_ids)?;
+        let blocks =
+            paragraph_ops::block_list_in_container_mut(&mut candidate_document.body, &container)
+                .ok_or(EditError::InvalidPosition)?;
         blocks.splice(sibling_index..=sibling_index, after.iter().cloned());
         caret_doc::CdocFile::new(candidate_document)
             .map_err(|error| EditError::InvalidDocument(error.to_string()))?;
         Ok(DisplayMathInsertPlan {
-            parent_environment_ids: parent_ids,
+            container,
             sibling_index,
             before: current,
             after,
@@ -1071,6 +1081,9 @@ impl Session {
         &mut self,
         direction: Direction,
     ) -> Result<Effect, EditError> {
+        if self.table_context().is_some() {
+            return Err(EditError::UnsupportedTableCellMath);
+        }
         if let Some(position) = self.host_caret_position.clone()
             && position.kind() == HostCaretKind::Block
             && let Some((block_id, _)) = position.as_outside()
@@ -1099,6 +1112,9 @@ impl Session {
         include_inline: bool,
         require_text_edge: bool,
     ) -> Result<Effect, EditError> {
+        if self.table_context().is_some() {
+            return Err(EditError::UnsupportedTableCellMath);
+        }
         let focus = self.selection.focus.clone();
         if self.selection.anchor != focus
             || self.has_structure_selection()

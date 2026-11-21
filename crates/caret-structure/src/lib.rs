@@ -13,6 +13,6 @@ pub use index::{
 };
 pub use physical::{
     DocumentNodeEdge, DocumentNodeKind, DocumentNodeLocation, block_list_by_environment_ids,
-    block_list_by_environment_ids_mut, compare_document_node_edges, find_block_node,
-    find_document_node,
+    block_list_by_environment_ids_mut, block_list_by_table_cell, block_list_by_table_cell_mut,
+    compare_document_node_edges, find_block_node, find_document_node,
 };
