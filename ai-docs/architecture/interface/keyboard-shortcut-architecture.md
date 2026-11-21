@@ -66,14 +66,14 @@ Qt QKeyEvent → 平台键映射 → 编辑器意图
 | --- | --- |
 | Escape | MathEdit、命令输入、composition、块环境/普通选区与结构按 handler 的明确优先级处理；普通选区 Escape 只收起选区，再按一次才退出结构。IME 预编辑时 Qt 只转交 Escape 意图，由 Session 确认是否取消。 |
 | Enter / Shift+Enter | 命令输入下 Enter 接受候选、Shift+Enter 无操作；公式 Align 中 Enter 插入行分隔，数学文本分支拒绝换行，其他公式 Enter 退出；正文分别插入段落或软换行。 |
-| Tab | 命令输入交给 `TabCommandLine`：字体候选确认、普通查询补全、空查询退出并插入字面 `\`；公式中保留公式焦点；普通正文插入两个字符宽空格。表格上下文优先处理 Tab/Shift+Tab 逐格移动与末格增行；native/QML 物理键位待 046 接线。 |
+| Tab | 命令输入交给 `TabCommandLine`：字体候选确认、普通查询补全、空查询退出并插入字面 `\`；公式中保留公式焦点；普通正文插入两个字符宽空格。表格上下文优先处理 Tab/Shift+Tab 逐格移动与末格增行；native 已接线 Shift+Tab、Alt+T 与行列插入/删除键。 |
 | Backspace | 组合输入期间不改文档；命令行优先删除查询；其余情况交给共享 `Command::Delete(Backward)` 事务处理选区、虚拟块边界、MathText/MathTree/Source 与正文删除。逐键 handler 决定焦点优先级，领域事务共享复杂删除规则。 |
 | Delete | 组合输入或命令行期间不改文档；其余情况交给共享 `Command::Delete(Forward)` 事务，按公式、结构和正文语义删除。 |
 | Mod+Backspace | composition/命令输入中不改正文；数学编辑按公式规则处理；正文优先解除可解除的最内层行内环境，否则尝试解除块环境并保留内容。 |
 | Left / Right / Up / Down / Home / End | Qt 把方向和 Shift 扩展映射为几何查询，app 提供带 Session、文档和字体代际的单次候选。每个键 handler 按自己的状态顺序处理 composition、命令行、MathEdit 和正文；结构移动变体在 composition、命令行或数学编辑活动时保持原位。MathTree Up/Down 使用当前公式内布局候选；跨操作数 Shift 扩展因单路径状态不能表示而保持原位。候选代际检查与无损提交由 `keyboards/helpers/navigation.rs` 和 `vertical_navigation.rs` 共享。Qt `commandMode` 不再抢先改写语义。 |
 | Mod+C / Mod+V | 对应键 handler 判断 composition、命令输入、数学文本选区及正文选区的允许行为；effect 请求 app 执行系统剪贴板读写。 |
 | Mod+Z / Mod+Shift+Z | 画布有焦点时 QML Shortcut 将 `mod-z` / `mod-shift-z` 交给 EditorKey handler，Session 选择数学源码草稿或文档历史；工具栏仍调用 undo()/redo()。 |
-| 结构与表格修饰键 | 结构扩选和上一块/下一块通过 `mod_space.rs`、`up_arrow.rs`、`down_arrow.rs` 进入 Session。表格键意图（Tab/Shift+Tab、结构方向键、行列增删）已在 Rust Session 实现；native/QML 物理键位与命令面板入口待 046 布局完成后接线。 |
+| 结构与表格修饰键 | 结构扩选和上一块/下一块通过 `mod_space.rs`、`up_arrow.rs`、`down_arrow.rs` 进入 Session。表格键意图（Tab/Shift+Tab、结构方向键、行列增删）已在 Rust Session 与 native 画布接线；命令面板 `\table` 入口已启用。 |
 
 以上记录当前实现的行为和边界；各上下文保留既有差异，未实现的键只登记目标文件与依赖，不把键位清单中的未来目标写成已支持行为。
 

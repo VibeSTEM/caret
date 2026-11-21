@@ -748,6 +748,42 @@ void ShellDocumentInteractionTest::documentCanvasRoutesCommandKeysAndKeepsNormal
     QTest::keyClick(&window, Qt::Key_Tab);
     QCOMPARE(editor_keys.size(), 1);
     QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("tab"));
+    QTest::keyClick(&window, Qt::Key_Tab, Qt::ShiftModifier);
+    QCOMPARE(editor_keys.size(), 1);
+    QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("shift-tab"));
+    QTest::keyClick(&window, Qt::Key_T, Qt::AltModifier);
+    QCOMPARE(editor_keys.size(), 1);
+    QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("insert-table"));
+#ifdef Q_OS_MACOS
+    QTest::keyClick(&window, Qt::Key_Up,
+                    Qt::ControlModifier | Qt::AltModifier | Qt::ShiftModifier);
+    QCOMPARE(editor_keys.size(), 1);
+    QCOMPARE(editor_keys.takeFirst().at(0).toString(),
+             QStringLiteral("table-insert-row-before"));
+    QTest::keyClick(&window, Qt::Key_Backspace, Qt::AltModifier | Qt::ShiftModifier);
+    QCOMPARE(editor_keys.size(), 1);
+    QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("table-delete-row"));
+    QTest::keyClick(&window, Qt::Key_Delete, Qt::AltModifier);
+    QCOMPARE(editor_keys.size(), 1);
+    QCOMPARE(editor_keys.takeFirst().at(0).toString(),
+             QStringLiteral("table-delete-column"));
+#else
+    QTest::keyClick(&window, Qt::Key_Down, Qt::AltModifier);
+    QCOMPARE(editor_keys.size(), 1);
+    QCOMPARE(editor_keys.takeFirst().at(0).toString(),
+             QStringLiteral("table-insert-row-after"));
+    QTest::keyClick(&window, Qt::Key_Left, Qt::AltModifier);
+    QCOMPARE(editor_keys.size(), 1);
+    QCOMPARE(editor_keys.takeFirst().at(0).toString(),
+             QStringLiteral("table-insert-col-before"));
+    QTest::keyClick(&window, Qt::Key_Backspace, Qt::AltModifier | Qt::ShiftModifier);
+    QCOMPARE(editor_keys.size(), 1);
+    QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("table-delete-row"));
+    QTest::keyClick(&window, Qt::Key_Delete, Qt::AltModifier);
+    QCOMPARE(editor_keys.size(), 1);
+    QCOMPARE(editor_keys.takeFirst().at(0).toString(),
+             QStringLiteral("table-delete-column"));
+#endif
     QInputMethodEvent preedit(QStringLiteral("ni"), {});
     QCoreApplication::sendEvent(canvas, &preedit);
     QCOMPARE(canvas->preeditText(), QStringLiteral("ni"));

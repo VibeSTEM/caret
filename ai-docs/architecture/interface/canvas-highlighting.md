@@ -2,6 +2,10 @@
 
 更新日期：2026-11-12。本文是文稿画布交互高亮与命令提示背景的唯一权威，定义数据来源、渲染层和复用边界。命令行为见[命令输入](../editor/command-input.md)，环境语义见[结构导航](../editor/structure-navigation.md)，数学节点语义见[数学公式](../editor/math.md)，实现进度见[031 当前环境背景高亮](../../task/031-environment-highlight.md)和[075 Equation/Align 活动焦点高亮](../../task/075-equation-align-active-highlight.md)。
 
+## 表格编辑辅助线
+
+焦点位于表格单元格时，Rust 布局快照发布 `tableGuidelines`（页面局部矩形）；native 只按该几何绘制白色虚线（固定 dash/gap），不重算单元格边界。辅助线不写入 `.cdoc`、不参与命中，焦点变化通过交互快照刷新。
+
 ## 两个渲染层
 
 Caret 有两类不同用途的背景：
