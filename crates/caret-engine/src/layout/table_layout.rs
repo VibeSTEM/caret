@@ -14,8 +14,8 @@ use super::produce::{
 };
 use super::{
     Block, CaretLineLocation, Document, DocumentLayoutError, DocumentLayoutSnapshot, FontCatalog,
-    LaidOutParagraph, MathBlockSource, NodeId, PageLayoutSnapshot, ResolvedParagraphStyle, StoryId,
-    TableMathPlacement,
+    LaidOutParagraph, MathBlockSource, NodeId, PageLayoutSnapshot, Paragraph,
+    ResolvedParagraphStyle, StoryId, TableMathPlacement,
 };
 use caret_structure::{BlockContainerPath, ContainerStep, TableCellPath};
 
@@ -77,6 +77,63 @@ fn math_id_for_source(source: &MathBlockSource) -> NodeId {
         MathBlockSource::Equation(equation) => equation.id.clone(),
         MathBlockSource::Align(align) => align.id.clone(),
     }
+}
+
+/// 单元格内按文档顺序展开的布局项；环境标题/正文与公式共享同一测量顺序。
+enum CellLayoutItem<'a> {
+    Paragraph {
+        paragraph: &'a Paragraph,
+        story: StoryId,
+        container: BlockContainerPath,
+    },
+    Math(MathBlockSource),
+}
+
+fn flatten_cell_layout_blocks<'a>(
+    blocks: &'a [Block],
+    container: &BlockContainerPath,
+    cell_story: &StoryId,
+    output: &mut Vec<CellLayoutItem<'a>>,
+) -> Result<(), DocumentLayoutError> {
+    for block in blocks {
+        match block {
+            Block::Paragraph(paragraph) => output.push(CellLayoutItem::Paragraph {
+                paragraph,
+                story: cell_story.clone(),
+                container: container.clone(),
+            }),
+            Block::Equation(equation) => {
+                output.push(CellLayoutItem::Math(MathBlockSource::Equation(
+                    equation.clone(),
+                )));
+            }
+            Block::Align(align) => {
+                output.push(CellLayoutItem::Math(MathBlockSource::Align(align.clone())));
+            }
+            Block::Environment(environment) => {
+                let mut child_container = container.clone();
+                child_container.push(ContainerStep::Environment(environment.id.clone()));
+                if let Some(title) = &environment.title {
+                    output.push(CellLayoutItem::Paragraph {
+                        paragraph: title,
+                        story: StoryId::EnvironmentTitle(environment.id.clone()),
+                        container: child_container.clone(),
+                    });
+                }
+                flatten_cell_layout_blocks(
+                    &environment.children,
+                    &child_container,
+                    cell_story,
+                    output,
+                )?;
+            }
+            Block::Table(_) | Block::ExplicitBreak(_) | Block::Opaque(_) => {
+                // 嵌套表/单元格内分页符随后续切片接入；当前显式拒绝。
+                return Err(DocumentLayoutError::UnsupportedContent);
+            }
+        }
+    }
+    Ok(())
 }
 
 impl DocumentLayoutService {
@@ -147,66 +204,71 @@ impl DocumentLayoutService {
                 let mut measured_blocks = Vec::new();
                 let mut math_blocks = Vec::new();
                 let mut cell_blocks = Vec::new();
-                for block in &cell.blocks {
-                    let math_source = match block {
-                        Block::Equation(equation) => {
-                            Some(MathBlockSource::Equation(equation.clone()))
-                        }
-                        Block::Align(align) => Some(MathBlockSource::Align(align.clone())),
-                        _ => None,
-                    };
-                    if let Some(source) = math_source {
-                        let (layout, text_layouts, host_metrics) = {
-                            let mut math_context = MathLayoutContext {
-                                engine: self.math_layout_engine.as_ref(),
-                                catalog,
-                                settings: settings.text_settings,
-                                base_style: settings.base_style,
-                                text_layouter: &mut self.layouter,
-                                font_size_centipoints: settings.base_style.font_size_centipoints,
-                                content_width_pt: column_width_pt as f32,
-                                line_grid_metrics,
-                                line_spacing: default_style.line_spacing,
-                                space_before_pt: default_style.space_before_pt,
-                                space_after_pt: default_style.space_after_pt,
-                                caret_metrics: default_caret_metrics,
+                let mut layout_items = Vec::new();
+                flatten_cell_layout_blocks(
+                    &cell.blocks,
+                    &cell_container,
+                    &story,
+                    &mut layout_items,
+                )?;
+                for item in layout_items {
+                    match item {
+                        CellLayoutItem::Math(source) => {
+                            let (layout, text_layouts, host_metrics) = {
+                                let mut math_context = MathLayoutContext {
+                                    engine: self.math_layout_engine.as_ref(),
+                                    catalog,
+                                    settings: settings.text_settings,
+                                    base_style: settings.base_style,
+                                    text_layouter: &mut self.layouter,
+                                    font_size_centipoints: settings
+                                        .base_style
+                                        .font_size_centipoints,
+                                    content_width_pt: column_width_pt as f32,
+                                    line_grid_metrics,
+                                    line_spacing: default_style.line_spacing,
+                                    space_before_pt: default_style.space_before_pt,
+                                    space_after_pt: default_style.space_after_pt,
+                                    caret_metrics: default_caret_metrics,
+                                };
+                                let (layout, text_layouts) = measure_math_block(
+                                    &source,
+                                    &mut math_context,
+                                    reuse.map(|(previous, _)| previous),
+                                )?;
+                                let host_metrics =
+                                    math_block_host_metrics(&source, &layout, &math_context)?;
+                                (layout, text_layouts, host_metrics)
                             };
-                            let (layout, text_layouts) = measure_math_block(
-                                &source,
-                                &mut math_context,
-                                reuse.map(|(previous, _)| previous),
-                            )?;
-                            let host_metrics =
-                                math_block_host_metrics(&source, &layout, &math_context)?;
-                            (layout, text_layouts, host_metrics)
-                        };
-                        math_blocks.push(ShapedCellMathBlock {
-                            math_id: math_id_for_source(&source),
-                            source,
-                            x_offset_pt: (column_width_pt as f32 - layout.width as f32) / 2.0,
-                            layout,
-                            text_layouts,
-                            baseline_pt: f64::from(host_metrics.baseline_pt),
-                            caret_height_pt: f64::from(default_caret_metrics.height_pt),
-                        });
-                        cell_blocks.push(ShapedCellBlock::Math(math_blocks.len() - 1));
-                        measured_blocks.push(caret_layout::MeasuredCellBlock {
-                            height_pt: f64::from(host_metrics.height_pt),
-                            first_baseline_pt: f64::from(host_metrics.baseline_pt),
-                            space_before_pt: f64::from(default_style.space_before_pt),
-                            space_after_pt: f64::from(default_style.space_after_pt),
-                        });
-                        continue;
-                    }
-                    match block {
-                        Block::Paragraph(paragraph) => {
+                            math_blocks.push(ShapedCellMathBlock {
+                                math_id: math_id_for_source(&source),
+                                source,
+                                x_offset_pt: (column_width_pt as f32 - layout.width as f32) / 2.0,
+                                layout,
+                                text_layouts,
+                                baseline_pt: f64::from(host_metrics.baseline_pt),
+                                caret_height_pt: f64::from(default_caret_metrics.height_pt),
+                            });
+                            cell_blocks.push(ShapedCellBlock::Math(math_blocks.len() - 1));
+                            measured_blocks.push(caret_layout::MeasuredCellBlock {
+                                height_pt: f64::from(host_metrics.height_pt),
+                                first_baseline_pt: f64::from(host_metrics.baseline_pt),
+                                space_before_pt: f64::from(default_style.space_before_pt),
+                                space_after_pt: f64::from(default_style.space_after_pt),
+                            });
+                        }
+                        CellLayoutItem::Paragraph {
+                            paragraph,
+                            story: paragraph_story,
+                            container: paragraph_container,
+                        } => {
                             let (laid_out, style) = self.shape_paragraph(
                                 catalog,
                                 ParagraphShapingRequest {
                                     document,
                                     paragraph,
-                                    story: story.clone(),
-                                    container: &cell_container,
+                                    story: paragraph_story,
+                                    container: &paragraph_container,
                                     width_pt: column_width_pt as f32,
                                     reuse,
                                     settings,
@@ -237,14 +299,6 @@ impl DocumentLayoutService {
                             cell_paragraphs.push(index);
                             cell_blocks.push(ShapedCellBlock::Paragraph(cell_paragraphs.len() - 1));
                         }
-                        Block::Environment(_)
-                        | Block::Table(_)
-                        | Block::ExplicitBreak(_)
-                        | Block::Opaque(_) => {
-                            // 环境/嵌套表/分页符随后续切片接入；当前显式拒绝。
-                            return Err(DocumentLayoutError::UnsupportedContent);
-                        }
-                        Block::Equation(_) | Block::Align(_) => {}
                     }
                 }
                 if cell_paragraphs.is_empty() && math_blocks.is_empty() {

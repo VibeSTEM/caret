@@ -5715,3 +5715,55 @@ fn table_cell_align_is_measured_and_projected() {
         .page_glyphs(0)
         .unwrap_or_else(|error| panic!("cell align glyphs must extract: {error}"));
 }
+
+#[test]
+fn table_cell_environment_title_and_body_are_laid_out() {
+    let environment = BlockEnvironment {
+        id: NodeId::generate(),
+        kind: BlockEnvironmentKind::Section,
+        definition_id: None,
+        props: BTreeMap::new(),
+        title: Some(paragraph("title")),
+        children: vec![Block::Paragraph(paragraph("body"))],
+        extra: BTreeMap::new(),
+    };
+    let environment_id = environment.id.clone();
+    let title_id = environment
+        .title
+        .as_ref()
+        .map(|title| title.id.clone())
+        .unwrap_or_else(|| panic!("environment must have a title"));
+    let table = Table {
+        id: NodeId::generate(),
+        rows: vec![TableRow {
+            id: NodeId::generate(),
+            cells: vec![TableCell {
+                id: NodeId::generate(),
+                blocks: vec![Block::Environment(environment)],
+            }],
+        }],
+    };
+    let mut document = Document::blank();
+    document.body = vec![Block::Table(table)];
+    let snapshot = layout_document(&document);
+    let title = snapshot
+        .paragraph_by_id(&title_id)
+        .unwrap_or_else(|| panic!("cell environment title must be laid out"));
+    assert_eq!(
+        title.story,
+        StoryId::EnvironmentTitle(environment_id.clone())
+    );
+    let page = &snapshot.pages[0];
+    assert!(
+        page.layout
+            .fragments
+            .iter()
+            .filter(|fragment| matches!(
+                fragment.host,
+                caret_layout::FragmentHost::TableCell { .. }
+            ))
+            .count()
+            >= 2
+    );
+    assert!(snapshot.page_glyphs(0).is_ok());
+}
