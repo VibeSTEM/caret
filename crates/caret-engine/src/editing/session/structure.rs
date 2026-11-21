@@ -476,6 +476,11 @@ impl Session {
         if self.composition.is_some() || self.command_line.is_some() {
             return Ok(Effect::default());
         }
+        if let Command::MoveStructure(direction) = &command
+            && let Some(effect) = self.move_table_cell(*direction)?
+        {
+            return Ok(effect);
+        }
         if matches!(&command, Command::ExitStructure)
             && self.selection.anchor != self.selection.focus
         {

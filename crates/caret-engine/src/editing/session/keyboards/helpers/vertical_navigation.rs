@@ -23,6 +23,9 @@ impl Session {
             {
                 return Ok(Effect::default());
             }
+            if let Some(effect) = self.move_table_row(direction)? {
+                return Ok(effect);
+            }
             return self.run(Command::MoveStructure(direction));
         }
         if self.composition.is_some() {

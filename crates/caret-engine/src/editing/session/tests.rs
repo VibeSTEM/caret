@@ -4,7 +4,7 @@ use super::*;
 use crate::editing::{DocumentRangeEndpoint, EditorKey, EnvironmentSource, StructureSelection};
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, DocumentFontTarget, InlineEnvironment,
-    InlineEnvironmentKind, NodeId, Paragraph, ParagraphContent, Run, TextFlow,
+    InlineEnvironmentKind, NodeId, Paragraph, ParagraphContent, Run, Table, TextFlow,
 };
 use std::collections::BTreeMap;
 use unicode_segmentation::UnicodeSegmentation;
@@ -2595,4 +2595,239 @@ fn table_cell_display_math_insertion_uses_the_cell_container_transaction() {
             .any(|block| matches!(block, Block::Equation(_))),
         "undo must remove the inserted equation"
     );
+}
+
+fn table_from_session(session: &Session) -> &Table {
+    session
+        .document
+        .body
+        .iter()
+        .find_map(|block| match block {
+            Block::Table(table) => Some(table),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("document must contain a table"))
+}
+
+#[test]
+fn insert_table_command_creates_default_grid_and_undoes_once() {
+    let mut document = Document::blank();
+    let paragraph_id = match &mut document.body[0] {
+        Block::Paragraph(paragraph) => {
+            paragraph.inlines = vec![text_flow(Run {
+                text: "x".to_owned(),
+                language: None,
+                props: Default::default(),
+                extra: Default::default(),
+            })];
+            paragraph.id.clone()
+        }
+        _ => panic!("blank document starts with a paragraph"),
+    };
+    let mut session =
+        Session::new(document).unwrap_or_else(|error| panic!("blank session must open: {error}"));
+    let position = Pos {
+        story: StoryId::Body,
+        paragraph_id,
+        offset: 1,
+        affinity: Affinity::Downstream,
+    };
+    session
+        .set_selection(Some(Selection {
+            anchor: position.clone(),
+            focus: position,
+        }))
+        .unwrap_or_else(|error| panic!("caret must be valid: {error}"));
+    session
+        .run(Command::InsertTable)
+        .unwrap_or_else(|error| panic!("insert table must succeed: {error}"));
+    let table = table_from_session(&session);
+    assert_eq!(table.rows.len(), 2);
+    assert_eq!(table.rows[0].cells.len(), 2);
+    for row in &table.rows {
+        for cell in &row.cells {
+            assert_eq!(cell.blocks.len(), 1);
+        }
+    }
+    let focus = &session.selection.focus;
+    assert!(matches!(focus.story, StoryId::TableCell { .. }));
+    assert_eq!(
+        session.story_for_paragraph(&focus.paragraph_id),
+        Some(focus.story.clone())
+    );
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("insert table undo must succeed: {error}"));
+    assert!(
+        !session
+            .document
+            .body
+            .iter()
+            .any(|block| matches!(block, Block::Table(_)))
+    );
+}
+
+#[test]
+fn table_tab_and_shift_tab_move_between_cells_and_grow_the_last_row() {
+    let mut document = Document::blank();
+    let mut session = Session::new(document.clone())
+        .unwrap_or_else(|error| panic!("blank session must open: {error}"));
+    let _ = &mut document;
+    let position = session.selection.focus.clone();
+    session
+        .set_selection(Some(Selection {
+            anchor: position.clone(),
+            focus: position,
+        }))
+        .unwrap_or_else(|error| panic!("caret must be valid: {error}"));
+    session
+        .run(Command::InsertTable)
+        .unwrap_or_else(|error| panic!("insert table must succeed: {error}"));
+    let before = session.selection.focus.clone();
+    let effect = session
+        .run(Command::EditorKey(EditorKey::Tab))
+        .unwrap_or_else(|error| panic!("tab must succeed: {error}"));
+    assert!(effect.selection_changed);
+    assert_ne!(session.selection.focus.paragraph_id, before.paragraph_id);
+    session
+        .run(Command::EditorKey(EditorKey::ShiftTab))
+        .unwrap_or_else(|error| panic!("shift-tab must succeed: {error}"));
+    assert_eq!(session.selection.focus.paragraph_id, before.paragraph_id);
+
+    // 移动到最后一个单元格后，Tab 增加一行并落到新行的首格。
+    for _ in 0..4 {
+        session
+            .run(Command::EditorKey(EditorKey::Tab))
+            .unwrap_or_else(|error| panic!("tab must succeed: {error}"));
+    }
+    let table = table_from_session(&session);
+    assert_eq!(table.rows.len(), 3);
+}
+
+#[test]
+fn table_row_and_column_commands_are_atomic_and_undoable() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session must open: {error}"));
+    session
+        .run(Command::InsertTable)
+        .unwrap_or_else(|error| panic!("insert table must succeed: {error}"));
+
+    session
+        .run(Command::TableInsertRow(crate::editing::Direction::Forward))
+        .unwrap_or_else(|error| panic!("insert row must succeed: {error}"));
+    assert_eq!(table_from_session(&session).rows.len(), 3);
+    session
+        .run(Command::TableDeleteRow)
+        .unwrap_or_else(|error| panic!("delete row must succeed: {error}"));
+    assert_eq!(table_from_session(&session).rows.len(), 2);
+
+    session
+        .run(Command::TableInsertColumn(
+            crate::editing::Direction::Forward,
+        ))
+        .unwrap_or_else(|error| panic!("insert column must succeed: {error}"));
+    assert_eq!(table_from_session(&session).rows[0].cells.len(), 3);
+    session
+        .run(Command::TableDeleteColumn)
+        .unwrap_or_else(|error| panic!("delete column must succeed: {error}"));
+    assert_eq!(table_from_session(&session).rows[0].cells.len(), 2);
+
+    for _ in 0..4 {
+        session
+            .run(Command::Undo)
+            .unwrap_or_else(|error| panic!("table command undo must succeed: {error}"));
+    }
+    assert_eq!(table_from_session(&session).rows.len(), 2);
+    assert_eq!(table_from_session(&session).rows[0].cells.len(), 2);
+}
+
+#[test]
+fn section_body_into_title_merge_keeps_environment_view_resolvable() {
+    use caret_doc::{BlockEnvironment, BlockEnvironmentKind};
+    let title_id = NodeId::generate();
+    let body_id = NodeId::generate();
+    let environment_id = NodeId::generate();
+    let mut title = Paragraph::empty(title_id.clone());
+    title.inlines = vec![text_flow(Run {
+        text: "Heading".to_owned(),
+        language: None,
+        props: Default::default(),
+        extra: Default::default(),
+    })];
+    let mut body = Paragraph::empty(body_id.clone());
+    body.inlines = vec![text_flow(Run {
+        text: "body".to_owned(),
+        language: None,
+        props: Default::default(),
+        extra: Default::default(),
+    })];
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(Paragraph::empty(NodeId::generate())),
+        Block::Environment(BlockEnvironment {
+            id: environment_id,
+            kind: BlockEnvironmentKind::Section,
+            definition_id: None,
+            props: Default::default(),
+            title: Some(title),
+            children: vec![Block::Paragraph(body)],
+            extra: Default::default(),
+        }),
+    ];
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("section document must open: {error}"));
+    let position = Pos {
+        story: StoryId::Body,
+        paragraph_id: body_id,
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
+    session
+        .set_selection(Some(Selection {
+            anchor: position.clone(),
+            focus: position,
+        }))
+        .unwrap_or_else(|error| panic!("body caret must be valid: {error}"));
+    session
+        .run(Command::Delete(crate::editing::Direction::Backward))
+        .unwrap_or_else(|error| panic!("title merge must succeed: {error}"));
+    let focus = session.selection.focus.clone();
+    assert!(
+        session.paragraph_index.contains_key(&focus.paragraph_id),
+        "merged focus paragraph must stay indexed: {focus:?}"
+    );
+    session
+        .current_environment_view()
+        .unwrap_or_else(|error| panic!("environment view must resolve after merge: {error}"));
+}
+
+#[test]
+fn section_creation_then_enter_keeps_environment_view_resolvable() {
+    use caret_doc::InlineEnvironmentKind;
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session must open: {error}"));
+    session
+        .run(Command::InsertText("Heading".to_owned()))
+        .unwrap_or_else(|error| panic!("heading text must insert: {error}"));
+    session
+        .run(Command::BeginCommandLine)
+        .unwrap_or_else(|error| panic!("command line must begin: {error}"));
+    session
+        .run(Command::TypeCommandLine("section".to_owned()))
+        .unwrap_or_else(|error| panic!("command line must type: {error}"));
+    session
+        .run(Command::AcceptCommandLine)
+        .unwrap_or_else(|error| panic!("command line must accept: {error}"));
+    session
+        .run(Command::EditorKey(EditorKey::Enter))
+        .unwrap_or_else(|error| panic!("enter must succeed: {error}"));
+    let focus = session.selection.focus.clone();
+    assert!(
+        session.paragraph_index.contains_key(&focus.paragraph_id),
+        "focus paragraph must be indexed: {focus:?}"
+    );
+    session
+        .current_environment_view()
+        .unwrap_or_else(|error| panic!("environment view must resolve: {error}"));
+    let _ = InlineEnvironmentKind::Bold;
 }

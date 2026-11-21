@@ -118,6 +118,17 @@ impl BlockContainerPath {
         }
     }
 
+    /// 最内层单元格之前的容器；表格块本身位于该容器的块序列中。
+    pub(super) fn container_before_innermost_cell(&self) -> Option<Self> {
+        let cell_position = self
+            .steps
+            .iter()
+            .rposition(|step| matches!(step, ContainerStep::TableCell(_)))?;
+        Some(Self {
+            steps: self.steps[..cell_position].to_vec(),
+        })
+    }
+
     /// 去掉最后一步容器；用于从标题环境内部回到其父块序列。
     fn without_last(&self) -> Option<Self> {
         let (_, remaining) = self.steps.split_last()?;
@@ -314,22 +325,7 @@ pub(super) fn update_index_after_split(
 ) {
     let document_prefix = container_document_prefix(location);
     if location.is_title {
-        let Some(environment) =
-            container_blocks(blocks, &location.container).and_then(|container_blocks| {
-                container_blocks.iter().find_map(|block| match block {
-                    Block::Environment(environment)
-                        if matches!(
-                            &location.story,
-                            StoryId::EnvironmentTitle(environment_id)
-                                if environment_id == &environment.id
-                        ) =>
-                    {
-                        Some(environment)
-                    }
-                    _ => None,
-                })
-            })
-        else {
+        let Some(environment) = title_environment_in_container(blocks, &location.container) else {
             return;
         };
         collect_locations_from(
@@ -337,19 +333,8 @@ pub(super) fn update_index_after_split(
             &[],
             &document_prefix,
             &location.container.clone(),
-            1,
+            0,
             index,
-        );
-        let mut right_document_path = document_prefix.clone();
-        right_document_path.push(0);
-        index.insert(
-            right_id.clone(),
-            ParagraphLocation::in_container(
-                right_id.clone(),
-                vec![0],
-                location.container.clone(),
-                right_document_path,
-            ),
         );
     } else {
         let Some((&source_index, parent_path)) = location.block_path.split_last() else {
@@ -393,8 +378,22 @@ pub(super) fn update_index_after_merge(
     let Some(location) = index.get(left_id).cloned() else {
         return;
     };
-    let let_some_guard = location.block_path.split_last();
-    let Some((&left_index, parent_path)) = let_some_guard else {
+    if location.is_title {
+        let Some(environment) = title_environment_in_container(blocks, &location.container) else {
+            return;
+        };
+        collect_locations_from(
+            &environment.children,
+            &[],
+            &location.document_path,
+            &location.container,
+            0,
+            index,
+        );
+        index.remove(right_id);
+        return;
+    }
+    let Some((&left_index, parent_path)) = location.block_path.split_last() else {
         return;
     };
     let parent_path = parent_path.to_vec();
@@ -560,11 +559,32 @@ pub(super) fn block_list_for_location<'a>(
     block_list_at_location(blocks, location, parent_path)
 }
 
+pub(super) fn block_list_in_container<'a>(
+    blocks: &'a [Block],
+    container: &BlockContainerPath,
+) -> Option<&'a [Block]> {
+    container_blocks(blocks, container)
+}
+
 pub(super) fn block_list_in_container_mut<'a>(
     blocks: &'a mut Vec<Block>,
     container: &BlockContainerPath,
 ) -> Option<&'a mut Vec<Block>> {
     container_blocks_mut(blocks, container)
+}
+
+/// 标题所属环境的只读引用（按容器路径）。
+pub(super) fn title_environment_in_container<'a>(
+    blocks: &'a [Block],
+    container: &BlockContainerPath,
+) -> Option<&'a caret_doc::BlockEnvironment> {
+    let environment_id = container.title_environment_id()?;
+    let parent = container.without_last()?;
+    let parent_blocks = container_blocks(blocks, &parent)?;
+    parent_blocks.iter().find_map(|block| match block {
+        Block::Environment(environment) if &environment.id == environment_id => Some(environment),
+        _ => None,
+    })
 }
 
 /// 标题所属环境的可变引用（按容器路径）；仅供历史补丁恢复标题槽。
