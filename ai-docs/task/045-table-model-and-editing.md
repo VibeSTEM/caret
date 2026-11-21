@@ -1,6 +1,6 @@
 # 045 — M3：表格模型与交互
 
-- 状态：in-progress
+- 状态：implemented
 - 依赖：010、021、043、071
 - 优先级：P2
 - 创建 / 更新：2026-10-29 / 2026-11-22
@@ -38,22 +38,24 @@
 
 ## 验收标准
 
-- [ ] 表格、行、单元格在 `.cdoc` 保存重开后 ID、顺序和内容一致。
-- [ ] 插入默认 2×2；插入行、插入列、删除行、删除列各有专用命令，快捷键符合唯一快捷键权威文档；无合并单元格。
-- [ ] Enter、Tab、Shift+Tab 和表格边界移动符合可观察行为；删除/插入失败不留下半更新状态。
-- [ ] 单元格接受通用块/行内公式节点并完成保存重开、编辑目标与导航验证；表格模块不直接依赖 `caret-math`，不复制公式模型。
-- [ ] 命令/模型行为测试、格式与 lint 通过；独立评审通过。
+- [x] 表格、行、单元格在 `.cdoc` 保存重开后 ID、顺序和内容一致（`caret-doc` 往返 + `tests/rust/document.rs` 黑盒往返）。
+- [x] 插入默认 2×2；插入行、插入列、删除行、删除列各有专用命令；无合并单元格。快捷键意图（Tab/Shift+Tab、结构方向键、删除行 Alt+Shift+Backspace/Delete）已在 Rust 实现并先更新权威文档；native 物理键位按决策随 046 接线。
+- [x] Enter、Tab、Shift+Tab 和表格边界移动符合可观察行为；删除/插入失败不留下半更新状态（候选文档校验 + 整表/整段原子补丁）。
+- [x] 单元格接受通用块、行内公式、显示公式与 Align 并完成编辑目标/导航验证；表格模块不直接依赖 `caret-math`，不复制公式模型。
+- [x] 命令/模型行为测试、格式与 lint 通过；独立评审通过。
 
 ## 验证计划与结果
 
 | 日期 | 环境 / 命令 | 预期 | 实际结果 |
 | --- | --- | --- | --- |
-| — | 表格模型与保存重开测试 | 表格内容和 ID 往返稳定 | 未执行 |
+| 2026-11-22 | `cargo test --locked --offline -p caret-doc --lib`；`cargo test -p caret-tests --test document table` | 表格内容和 ID 往返稳定 | 通过：静态模型/存储用例 + 黑盒 `.cdoc` 往返（含单元格内 InlineMath/Equation） |
 | 2026-11-22 | `cargo test --locked --offline -p caret-doc --lib` | 表格 DTO 往返、严格字段、结构不变量、能力推导与缺失声明预览 | 通过：113 项；新增表格模型/存储用例 |
 | 2026-11-22 | `cargo test --locked --offline -p caret-engine layout_errors_reject` | 含表文档得到明确 `layout.unsupported_content`，不发布半成品快照 | 通过 |
 | 2026-11-22 | workspace `cargo check --all-targets`；`caret-engine` 931、`caret-structure` 13 项测试 | 新增 Block 变体的全部穷尽匹配点以显式保守语义补齐 | 通过 |
-| — | 表格编辑/导航命令测试 | 边界和失败原子性正确 | 未执行 |
-| — | macOS 表格快捷键检查 | 导航键和插入键按规范工作 | 未执行 |
+| 2026-11-22 | `cargo test --locked --offline -p caret-engine --lib` | 单元格文本/Enter/显示公式/行内公式/Align、插入 2×2、行列增删、Tab/Shift+Tab 与结构边界 | 通过：943 项（含新增表格用例） |
+| 2026-11-22 | workspace 测试、`cargo fmt`/`cargo format`、`cargo clippy -D warnings`、`cargo lint --check` | 全量回归与跨语言检查 | 通过（见完成摘要） |
+| 2026-11-22 | 领域评审 + 独立 final review（只读完整 diff） | 架构复用、容器路径、历史事务与测试充分性 | 通过（发现项已修复，见评审记录） |
+| — | macOS 表格快捷键检查 | 导航键和插入键按规范工作 | 未执行：按“045 先合并、046 前 UI 不可用”决策，native/QML 键位与窗口验证随 046/012 完成 |
 
 ## 风险与回退
 
