@@ -2548,15 +2548,14 @@ fn table_cell_enter_splits_inside_the_cell_transaction() {
 }
 
 #[test]
-fn table_cell_display_math_insertion_is_rejected_until_046() {
-    let (document, _table_id, _row_id, _cell_id, paragraph_id) = table_document_for_session();
-    let before = document.clone();
+fn table_cell_display_math_insertion_uses_the_cell_container() {
+    let (document, table_id, row_id, cell_id, paragraph_id) = table_document_for_session();
     let mut session =
         Session::new(document).unwrap_or_else(|error| panic!("table document must open: {error}"));
     let story = StoryId::TableCell {
-        table_id: _table_id.clone(),
-        row_id: _row_id.clone(),
-        cell_id: _cell_id.clone(),
+        table_id: table_id.clone(),
+        row_id: row_id.clone(),
+        cell_id: cell_id.clone(),
     };
     let position = Pos {
         story,
@@ -2570,11 +2569,63 @@ fn table_cell_display_math_insertion_is_rejected_until_046() {
             focus: position,
         }))
         .unwrap_or_else(|error| panic!("cell caret must be valid: {error}"));
+    session
+        .insert_display_math(false)
+        .unwrap_or_else(|error| panic!("cell display math must insert: {error}"));
+    let cell_blocks = caret_structure::block_list_by_table_cell(
+        &session.document.body,
+        &[],
+        &table_id,
+        &row_id,
+        &cell_id,
+    )
+    .unwrap_or_else(|| panic!("cell blocks must resolve"));
+    assert!(
+        cell_blocks
+            .iter()
+            .any(|block| matches!(block, Block::Equation(_))),
+        "display equation must live inside the cell"
+    );
+    session
+        .run(Command::InsertText("x".to_owned()))
+        .unwrap_or_else(|error| panic!("typing in cell equation must succeed: {error}"));
+    session
+        .run(Command::EditorKey(EditorKey::Escape))
+        .unwrap_or_else(|error| panic!("cell equation exit must succeed: {error}"));
     assert!(matches!(
-        session.insert_display_math(false),
-        Err(EditError::UnsupportedTableCellMath)
+        session.selection.focus.story,
+        StoryId::TableCell { .. }
     ));
-    assert_eq!(session.document(), &before);
+    for _ in 0..3 {
+        if !caret_structure::block_list_by_table_cell(
+            &session.document.body,
+            &[],
+            &table_id,
+            &row_id,
+            &cell_id,
+        )
+        .unwrap_or_default()
+        .iter()
+        .any(|block| matches!(block, Block::Equation(_)))
+        {
+            break;
+        }
+        session
+            .run(Command::Undo)
+            .unwrap_or_else(|error| panic!("cell display math undo must succeed: {error}"));
+    }
+    assert!(
+        !caret_structure::block_list_by_table_cell(
+            &session.document.body,
+            &[],
+            &table_id,
+            &row_id,
+            &cell_id,
+        )
+        .unwrap_or_default()
+        .iter()
+        .any(|block| matches!(block, Block::Equation(_)))
+    );
 }
 
 fn table_from_session(session: &Session) -> &Table {
@@ -2817,19 +2868,18 @@ fn section_creation_then_enter_keeps_environment_view_resolvable() {
 }
 
 #[test]
-fn table_cell_math_editing_is_explicitly_rejected_until_046() {
-    let (document, _table_id, _row_id, _cell_id, paragraph_id) = table_document_for_session();
-    let before = document.clone();
+fn table_cell_math_insertion_edits_inside_the_cell() {
+    let (document, table_id, row_id, cell_id, paragraph_id) = table_document_for_session();
     let mut session =
         Session::new(document).unwrap_or_else(|error| panic!("table document must open: {error}"));
     let story = StoryId::TableCell {
-        table_id: _table_id.clone(),
-        row_id: _row_id.clone(),
-        cell_id: _cell_id.clone(),
+        table_id: table_id.clone(),
+        row_id: row_id.clone(),
+        cell_id: cell_id.clone(),
     };
     let position = Pos {
         story,
-        paragraph_id,
+        paragraph_id: paragraph_id.clone(),
         offset: 3,
         affinity: Affinity::Downstream,
     };
@@ -2839,15 +2889,47 @@ fn table_cell_math_editing_is_explicitly_rejected_until_046() {
             focus: position,
         }))
         .unwrap_or_else(|error| panic!("cell caret must be valid: {error}"));
-    assert!(matches!(
-        session.run(Command::InsertInlineMath("x".to_owned())),
-        Err(EditError::UnsupportedTableCellMath)
-    ));
-    assert!(matches!(
-        session.insert_display_math(true),
-        Err(EditError::UnsupportedTableCellMath)
-    ));
-    assert_eq!(session.document(), &before);
+    session
+        .run(Command::InsertInlineMath("x".to_owned()))
+        .unwrap_or_else(|error| panic!("cell inline math must insert: {error}"));
+    let cell_blocks = caret_structure::block_list_by_table_cell(
+        &session.document.body,
+        &[],
+        &table_id,
+        &row_id,
+        &cell_id,
+    )
+    .unwrap_or_else(|| panic!("cell blocks must resolve"));
+    assert!(cell_blocks.iter().any(|block| {
+        match block {
+            Block::Paragraph(paragraph) => paragraph
+                .inlines
+                .iter()
+                .any(|node| matches!(node, ParagraphContent::Math(_))),
+            _ => false,
+        }
+    }));
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("cell inline math undo must succeed: {error}"));
+
+    session
+        .insert_display_math(true)
+        .unwrap_or_else(|error| panic!("cell align must insert: {error}"));
+    let cell_blocks = caret_structure::block_list_by_table_cell(
+        &session.document.body,
+        &[],
+        &table_id,
+        &row_id,
+        &cell_id,
+    )
+    .unwrap_or_else(|| panic!("cell blocks must resolve"));
+    assert!(
+        cell_blocks
+            .iter()
+            .any(|block| matches!(block, Block::Align(_))),
+        "align block must live inside the cell"
+    );
 }
 
 #[test]
@@ -3114,7 +3196,7 @@ fn table_cell_environment_title_split_keeps_cell_story() {
 }
 
 #[test]
-fn table_cell_inline_math_enter_is_rejected() {
+fn table_cell_inline_math_can_enter_math_edit() {
     let inline = serde_json::json!({"type":"paragraph","id":"cell-paragraph","inlines":[
         {"type":"text","runs":[{"text":"x","props":{}}]},
         {"type":"inlineMath","id":"inline-1","mathTree":{
@@ -3139,10 +3221,12 @@ fn table_cell_inline_math_enter_is_rejected() {
             focus: position,
         }))
         .unwrap_or_else(|error| panic!("cell inline math caret must be valid: {error}"));
-    assert!(matches!(
-        session.run(Command::EnterMath(crate::editing::Direction::Backward)),
-        Err(EditError::UnsupportedTableCellMath)
-    ));
+    session
+        .run(Command::EnterMath(crate::editing::Direction::Backward))
+        .unwrap_or_else(|error| panic!("cell inline math must enter edit: {error}"));
+    session
+        .run(Command::EditorKey(EditorKey::Escape))
+        .unwrap_or_else(|error| panic!("cell inline math must exit edit: {error}"));
 }
 
 #[test]

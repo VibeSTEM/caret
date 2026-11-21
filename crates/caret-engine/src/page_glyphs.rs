@@ -475,6 +475,39 @@ impl DocumentLayoutSnapshot {
                 &mut next_paint_order,
             )?;
         }
+        for placement in &page.table_math_placements {
+            let layout = self
+                .math_blocks
+                .get(&placement.math_id)
+                .ok_or(PageGlyphError::MissingMathBlock)?;
+            let text_layouts = self
+                .math_text_layouts_for_block(&placement.math_id)
+                .ok_or(PageGlyphError::MissingMathBlock)?;
+            let projection = self
+                .math_projection(page_index, &placement.math_id)
+                .ok_or(PageGlyphError::MissingMathBlock)?;
+            if !placement.object_x_pt.is_finite() || !placement.baseline_y_pt.is_finite() {
+                return Err(PageGlyphError::InvalidLineGeometry);
+            }
+            append_math_items(
+                &layout.items,
+                text_layouts,
+                MathItemHost {
+                    paragraph_id: &placement.math_id,
+                    line_index: 0,
+                    line_clip_y_pt: projection.drawing_clip(),
+                    row_clips: &layout.row_clips,
+                    object_x_pt: placement.object_x_pt,
+                    baseline_y_pt: placement.baseline_y_pt,
+                },
+                MathItemOutput {
+                    runs: &mut runs,
+                    decorations: &mut decorations,
+                    shapes: &mut shapes,
+                },
+                &mut next_paint_order,
+            )?;
+        }
         append_table_borders(
             page,
             &self.table_layouts,

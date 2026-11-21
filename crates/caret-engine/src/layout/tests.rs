@@ -5574,12 +5574,13 @@ fn basic_table_layout_places_cells_and_shared_caret_geometry() {
 }
 
 #[test]
-fn table_cell_inline_math_is_rejected_without_partial_snapshot() {
+fn table_cell_inline_math_is_measured_and_projected() {
     let inline_math = caret_doc::InlineMath {
         id: NodeId::generate(),
         math_tree: empty_math_tree(),
         extra: BTreeMap::new(),
     };
+    let inline_id = inline_math.id.clone();
     let mut paragraph = Paragraph::empty(NodeId::generate());
     paragraph.inlines = vec![ParagraphContent::Math(inline_math)];
     let cell = TableCell {
@@ -5595,22 +5596,16 @@ fn table_cell_inline_math_is_rejected_without_partial_snapshot() {
     };
     let mut document = Document::blank();
     document.body = vec![Block::Table(table)];
-    let mut service = DocumentLayoutService::new();
-    let mut catalog = test_system_font_catalog();
-    let result = service.layout(&document, 1, &mut catalog, &ShapingStyle::new(1200));
-    assert!(
-        matches!(result, Err(DocumentLayoutError::UnsupportedContent)),
-        "expected unsupported content, got {result:?}"
-    );
-    let valid = service
-        .layout(
-            &Document::blank(),
-            2,
-            &mut catalog,
-            &ShapingStyle::new(1200),
-        )
-        .unwrap_or_else(|error| panic!("service must stay reusable: {error}"));
-    assert_eq!(valid.document_generation, 2);
+    let snapshot = layout_document(&document);
+    let page = &snapshot.pages[0];
+    let projection = snapshot
+        .math_projection(0, &inline_id)
+        .unwrap_or_else(|| panic!("cell inline math must have a page projection"));
+    assert!(projection.object_x_pt >= page.margin_left_pt);
+    assert!(projection.object_x_pt > page.margin_left_pt);
+    snapshot
+        .page_glyphs(0)
+        .unwrap_or_else(|error| panic!("cell inline math glyphs must extract: {error}"));
 }
 
 #[test]
@@ -5651,4 +5646,72 @@ fn table_cell_block_measurements_place_multiple_paragraphs() {
         .filter(|fragment| matches!(fragment.host, caret_layout::FragmentHost::TableCell { .. }))
         .collect::<Vec<_>>();
     assert_eq!(cell_fragments.len(), 2);
+}
+
+#[test]
+fn table_cell_display_equation_is_measured_projected_and_drawn() {
+    let equation = Equation {
+        id: NodeId::generate(),
+        math_tree: empty_math_tree(),
+        extra: BTreeMap::new(),
+    };
+    let equation_id = equation.id.clone();
+    let table = Table {
+        id: NodeId::generate(),
+        rows: vec![TableRow {
+            id: NodeId::generate(),
+            cells: vec![TableCell {
+                id: NodeId::generate(),
+                blocks: vec![Block::Equation(equation)],
+            }],
+        }],
+    };
+    let mut document = Document::blank();
+    document.body = vec![Block::Table(table)];
+    let snapshot = layout_document(&document);
+    assert!(snapshot.math_blocks.contains_key(&equation_id));
+    let page = &snapshot.pages[0];
+    assert_eq!(page.table_math_placements.len(), 1);
+    let placement = &page.table_math_placements[0];
+    assert_eq!(placement.math_id, equation_id);
+    assert!(placement.object_x_pt >= page.margin_left_pt);
+    assert!(placement.baseline_y_pt > page.margin_top_pt);
+    let glyphs = snapshot
+        .page_glyphs(0)
+        .unwrap_or_else(|error| panic!("cell equation glyphs must extract: {error}"));
+    assert!(glyphs.shapes.len() >= 4, "table borders must still render");
+}
+
+#[test]
+fn table_cell_align_is_measured_and_projected() {
+    let align = Align {
+        id: NodeId::generate(),
+        rows: vec![MathAlignRow {
+            id: NodeId::generate(),
+            cells: vec![empty_math_tree()],
+            extra: BTreeMap::new(),
+        }],
+        extra: BTreeMap::new(),
+    };
+    let align_id = align.id.clone();
+    let table = Table {
+        id: NodeId::generate(),
+        rows: vec![TableRow {
+            id: NodeId::generate(),
+            cells: vec![TableCell {
+                id: NodeId::generate(),
+                blocks: vec![Block::Align(align)],
+            }],
+        }],
+    };
+    let mut document = Document::blank();
+    document.body = vec![Block::Table(table)];
+    let snapshot = layout_document(&document);
+    assert!(snapshot.math_blocks.contains_key(&align_id));
+    let page = &snapshot.pages[0];
+    assert_eq!(page.table_math_placements.len(), 1);
+    assert_eq!(page.table_math_placements[0].math_id, align_id);
+    snapshot
+        .page_glyphs(0)
+        .unwrap_or_else(|error| panic!("cell align glyphs must extract: {error}"));
 }

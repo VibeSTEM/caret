@@ -599,6 +599,23 @@ impl DocumentLayoutService {
             math_block_text_layouts.insert(math_id.clone(), text_layouts);
             math_block_sources.insert(math_id, *source);
         }
+        for table in &shaped_tables {
+            for row in &table.rows {
+                for cell in &row.cells {
+                    for math in &cell.math_blocks {
+                        math_blocks
+                            .entry(math.math_id.clone())
+                            .or_insert_with(|| std::sync::Arc::clone(&math.layout));
+                        math_block_text_layouts
+                            .entry(math.math_id.clone())
+                            .or_insert_with(|| math.text_layouts.clone());
+                        math_block_sources
+                            .entry(math.math_id.clone())
+                            .or_insert_with(|| math.source.clone());
+                    }
+                }
+            }
+        }
         let mut math_hosts = HashMap::new();
         collect_math_hosts(&document.body, &mut math_hosts);
         let math_projections = collect_math_projections(
@@ -749,6 +766,7 @@ impl PageGeometries {
                 margin_right_pt: margins_pt[2],
                 margin_bottom_pt: margins_pt[3],
                 layout,
+                table_math_placements: Vec::new(),
             })
             .collect();
         let paragraph_lookup: HashMap<_, _> = paragraphs
@@ -876,6 +894,13 @@ fn collect_math_hosts(blocks: &[Block], hosts: &mut HashMap<NodeId, MathTextLayo
                     MathTextLayoutHost::align(align.id.clone(), align),
                 );
             }
+            Block::Table(table) => {
+                for row in &table.rows {
+                    for cell in &row.cells {
+                        collect_math_hosts(&cell.blocks, hosts);
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -941,6 +966,24 @@ fn collect_math_projections(
                     inline_index: None,
                 });
             }
+        }
+        for placement in &page.table_math_placements {
+            if !math_blocks.contains_key(&placement.math_id) {
+                continue;
+            }
+            projections.push(MathPageProjection {
+                math_id: placement.math_id.clone(),
+                page_index,
+                object_x_pt: placement.object_x_pt,
+                baseline_y_pt: placement.baseline_y_pt,
+                caret_line_top_pt: placement.caret_line_top_pt,
+                caret_baseline_y_pt: placement.caret_baseline_y_pt,
+                caret_height_pt: placement.caret_height_pt,
+                clip_y_pt: placement.clip_y_pt,
+                row_clips: Vec::new(),
+                row_baselines: Vec::new(),
+                inline_index: None,
+            });
         }
         for fragment in &page.layout.fragments {
             let Some(paragraph) = paragraph_lookup
@@ -2019,19 +2062,19 @@ pub(super) fn resolved_math_base_style(
     style
 }
 
-struct MathLayoutContext<'a> {
-    engine: Option<&'a caret_math::layout::MathLayoutEngine>,
-    catalog: &'a mut FontCatalog,
-    settings: &'a ResolvedDocumentTextSettings,
-    base_style: &'a ShapingStyle,
-    text_layouter: &'a mut ParagraphLayouter,
-    font_size_centipoints: u16,
-    content_width_pt: f32,
-    line_grid_metrics: FontLineMetrics,
-    line_spacing: LineSpacing,
-    space_before_pt: f32,
-    space_after_pt: f32,
-    caret_metrics: LineMetrics,
+pub(super) struct MathLayoutContext<'a> {
+    pub(super) engine: Option<&'a caret_math::layout::MathLayoutEngine>,
+    pub(super) catalog: &'a mut FontCatalog,
+    pub(super) settings: &'a ResolvedDocumentTextSettings,
+    pub(super) base_style: &'a ShapingStyle,
+    pub(super) text_layouter: &'a mut ParagraphLayouter,
+    pub(super) font_size_centipoints: u16,
+    pub(super) content_width_pt: f32,
+    pub(super) line_grid_metrics: FontLineMetrics,
+    pub(super) line_spacing: LineSpacing,
+    pub(super) space_before_pt: f32,
+    pub(super) space_after_pt: f32,
+    pub(super) caret_metrics: LineMetrics,
 }
 
 enum LayoutInput<'a> {
@@ -2122,68 +2165,8 @@ fn collect_blocks<'a>(
                 ordered.push(LayoutInput::ExplicitBreak);
             }
             Block::Equation(equation) => {
-                let engine = context
-                    .engine
-                    .ok_or(DocumentLayoutError::UnsupportedContent)?;
                 let source = MathBlockSource::Equation(equation.clone());
-                let reused = reuse_math_block(previous, &equation.id, &source);
-                let (layout, text_layouts) = if let Some(reused) = reused {
-                    reused
-                } else if math_flow_contains_text(&equation.math_tree.root) {
-                    let math_base_style =
-                        resolved_math_base_style(context.base_style, context.settings, None);
-                    let mut shaper = EngineMathTextShaper::new(
-                        context.catalog,
-                        context.settings,
-                        &math_base_style,
-                        context.text_layouter,
-                        MathTextLayoutHost::equation(
-                            equation.id.clone(),
-                            equation.math_tree.root.id.clone(),
-                        ),
-                    );
-                    let layout = engine
-                        .layout_with_text_shaper_and_templates(
-                            &equation.math_tree.root,
-                            DocumentUnits::centipoints_to_points(u32::from(
-                                context.font_size_centipoints,
-                            )),
-                            caret_math::layout::MathStyle::Display,
-                            context.settings.inline_environment_templates(),
-                            &mut shaper,
-                        )
-                        .map_err(|error| DocumentLayoutError::Math(error.to_string()))?;
-                    (layout, shaper.into_sidecars())
-                } else if !context.settings.inline_environment_templates().is_empty() {
-                    (
-                        Arc::new(
-                            caret_math::layout::layout_math_with_templates(
-                                engine.font(),
-                                &equation.math_tree.root,
-                                DocumentUnits::centipoints_to_points(u32::from(
-                                    context.font_size_centipoints,
-                                )),
-                                caret_math::layout::MathStyle::Display,
-                                context.settings.inline_environment_templates(),
-                            )
-                            .map_err(|error| DocumentLayoutError::Math(error.to_string()))?,
-                        ),
-                        HashMap::new(),
-                    )
-                } else {
-                    (
-                        engine
-                            .layout(
-                                &equation.math_tree.root,
-                                DocumentUnits::centipoints_to_points(u32::from(
-                                    context.font_size_centipoints,
-                                )),
-                                caret_math::layout::MathStyle::Display,
-                            )
-                            .map_err(|error| DocumentLayoutError::Math(error.to_string()))?,
-                        HashMap::new(),
-                    )
-                };
+                let (layout, text_layouts) = measure_math_block(&source, context, previous)?;
                 push_math_block(
                     ordered,
                     source,
@@ -2194,67 +2177,8 @@ fn collect_blocks<'a>(
                 )?;
             }
             Block::Align(align) => {
-                let engine = context
-                    .engine
-                    .ok_or(DocumentLayoutError::UnsupportedContent)?;
-                let contains_text = align
-                    .rows
-                    .iter()
-                    .flat_map(|row| &row.cells)
-                    .any(|cell| math_flow_contains_text(&cell.root));
                 let source = MathBlockSource::Align(align.clone());
-                let (layout, text_layouts) = if contains_text {
-                    let math_base_style =
-                        resolved_math_base_style(context.base_style, context.settings, None);
-                    let mut shaper = EngineMathTextShaper::new(
-                        context.catalog,
-                        context.settings,
-                        &math_base_style,
-                        context.text_layouter,
-                        MathTextLayoutHost::align(align.id.clone(), align),
-                    );
-                    (
-                        Arc::new(
-                            caret_math::layout::layout_align_with_host_row_grid(
-                                engine.font(),
-                                align,
-                                DocumentUnits::centipoints_to_points(u32::from(
-                                    context.font_size_centipoints,
-                                )),
-                                context.settings.inline_environment_templates(),
-                                Some(&mut shaper),
-                                math_host_row_grid(
-                                    context.line_grid_metrics,
-                                    context.caret_metrics,
-                                    context.line_spacing,
-                                )?,
-                            )
-                            .map_err(|error| DocumentLayoutError::Math(error.to_string()))?,
-                        ),
-                        shaper.into_sidecars(),
-                    )
-                } else {
-                    (
-                        Arc::new(
-                            caret_math::layout::layout_align_with_host_row_grid(
-                                engine.font(),
-                                align,
-                                DocumentUnits::centipoints_to_points(u32::from(
-                                    context.font_size_centipoints,
-                                )),
-                                context.settings.inline_environment_templates(),
-                                None,
-                                math_host_row_grid(
-                                    context.line_grid_metrics,
-                                    context.caret_metrics,
-                                    context.line_spacing,
-                                )?,
-                            )
-                            .map_err(|error| DocumentLayoutError::Math(error.to_string()))?,
-                        ),
-                        HashMap::new(),
-                    )
-                };
+                let (layout, text_layouts) = measure_math_block(&source, context, previous)?;
                 push_math_block(
                     ordered,
                     source,
@@ -2276,6 +2200,145 @@ fn collect_blocks<'a>(
     Ok(())
 }
 
+/// 测量显示公式（Equation/Align）；正文与单元格共用同一塑形/复用路径。
+pub(super) fn measure_math_block(
+    source: &MathBlockSource,
+    context: &mut MathLayoutContext<'_>,
+    previous: Option<&DocumentLayoutSnapshot>,
+) -> Result<
+    (
+        Arc<caret_math::layout::MathLayout>,
+        HashMap<u64, MathTextSidecar>,
+    ),
+    DocumentLayoutError,
+> {
+    let math_id = match source {
+        MathBlockSource::Equation(equation) => &equation.id,
+        MathBlockSource::Align(align) => &align.id,
+    };
+    if let Some(reused) = reuse_math_block(previous, math_id, source) {
+        return Ok(reused);
+    }
+    let engine = context
+        .engine
+        .ok_or(DocumentLayoutError::UnsupportedContent)?;
+    match source {
+        MathBlockSource::Equation(equation) => {
+            if math_flow_contains_text(&equation.math_tree.root) {
+                let math_base_style =
+                    resolved_math_base_style(context.base_style, context.settings, None);
+                let mut shaper = EngineMathTextShaper::new(
+                    context.catalog,
+                    context.settings,
+                    &math_base_style,
+                    context.text_layouter,
+                    MathTextLayoutHost::equation(
+                        equation.id.clone(),
+                        equation.math_tree.root.id.clone(),
+                    ),
+                );
+                let layout = engine
+                    .layout_with_text_shaper_and_templates(
+                        &equation.math_tree.root,
+                        DocumentUnits::centipoints_to_points(u32::from(
+                            context.font_size_centipoints,
+                        )),
+                        caret_math::layout::MathStyle::Display,
+                        context.settings.inline_environment_templates(),
+                        &mut shaper,
+                    )
+                    .map_err(|error| DocumentLayoutError::Math(error.to_string()))?;
+                Ok((layout, shaper.into_sidecars()))
+            } else if !context.settings.inline_environment_templates().is_empty() {
+                Ok((
+                    Arc::new(
+                        caret_math::layout::layout_math_with_templates(
+                            engine.font(),
+                            &equation.math_tree.root,
+                            DocumentUnits::centipoints_to_points(u32::from(
+                                context.font_size_centipoints,
+                            )),
+                            caret_math::layout::MathStyle::Display,
+                            context.settings.inline_environment_templates(),
+                        )
+                        .map_err(|error| DocumentLayoutError::Math(error.to_string()))?,
+                    ),
+                    HashMap::new(),
+                ))
+            } else {
+                Ok((
+                    engine
+                        .layout(
+                            &equation.math_tree.root,
+                            DocumentUnits::centipoints_to_points(u32::from(
+                                context.font_size_centipoints,
+                            )),
+                            caret_math::layout::MathStyle::Display,
+                        )
+                        .map_err(|error| DocumentLayoutError::Math(error.to_string()))?,
+                    HashMap::new(),
+                ))
+            }
+        }
+        MathBlockSource::Align(align) => {
+            let contains_text = align
+                .rows
+                .iter()
+                .flat_map(|row| &row.cells)
+                .any(|cell| math_flow_contains_text(&cell.root));
+            let host_row_grid = math_host_row_grid(
+                context.line_grid_metrics,
+                context.caret_metrics,
+                context.line_spacing,
+            )?;
+            if contains_text {
+                let math_base_style =
+                    resolved_math_base_style(context.base_style, context.settings, None);
+                let mut shaper = EngineMathTextShaper::new(
+                    context.catalog,
+                    context.settings,
+                    &math_base_style,
+                    context.text_layouter,
+                    MathTextLayoutHost::align(align.id.clone(), align),
+                );
+                Ok((
+                    Arc::new(
+                        caret_math::layout::layout_align_with_host_row_grid(
+                            engine.font(),
+                            align,
+                            DocumentUnits::centipoints_to_points(u32::from(
+                                context.font_size_centipoints,
+                            )),
+                            context.settings.inline_environment_templates(),
+                            Some(&mut shaper),
+                            host_row_grid,
+                        )
+                        .map_err(|error| DocumentLayoutError::Math(error.to_string()))?,
+                    ),
+                    shaper.into_sidecars(),
+                ))
+            } else {
+                Ok((
+                    Arc::new(
+                        caret_math::layout::layout_align_with_host_row_grid(
+                            engine.font(),
+                            align,
+                            DocumentUnits::centipoints_to_points(u32::from(
+                                context.font_size_centipoints,
+                            )),
+                            context.settings.inline_environment_templates(),
+                            None,
+                            host_row_grid,
+                        )
+                        .map_err(|error| DocumentLayoutError::Math(error.to_string()))?,
+                    ),
+                    HashMap::new(),
+                ))
+            }
+        }
+    }
+}
+
 fn push_math_block<'a>(
     ordered: &mut Vec<LayoutInput<'a>>,
     source: MathBlockSource,
@@ -2289,15 +2352,7 @@ fn push_math_block<'a>(
         MathBlockSource::Align(align) => align.id.clone(),
     };
     let width_pt = layout.width as f32;
-    let host_metrics = match &source {
-        MathBlockSource::Equation(equation)
-            if !math_flow_contains_soft_break(&equation.math_tree.root) =>
-        {
-            calculate_math_host_metrics(&layout, context.line_grid_metrics, context.line_spacing)?
-        }
-        MathBlockSource::Equation(_) => calculate_math_align_host_metrics(&layout)?,
-        MathBlockSource::Align(_) => calculate_math_align_host_metrics(&layout)?,
-    };
+    let host_metrics = math_block_host_metrics(&source, &layout, context)?;
     let height_pt = host_metrics.height_pt;
     if !context.content_width_pt.is_finite()
         || context.content_width_pt <= 0.0
@@ -2329,6 +2384,24 @@ fn push_math_block<'a>(
     Ok(())
 }
 
+/// 显示公式宿主行框度量；Equation 与 Align 共用同一入口。
+pub(super) fn math_block_host_metrics(
+    source: &MathBlockSource,
+    layout: &caret_math::layout::MathLayout,
+    context: &MathLayoutContext<'_>,
+) -> Result<LineMetrics, DocumentLayoutError> {
+    match source {
+        MathBlockSource::Equation(equation)
+            if !math_flow_contains_soft_break(&equation.math_tree.root) =>
+        {
+            calculate_math_host_metrics(layout, context.line_grid_metrics, context.line_spacing)
+        }
+        MathBlockSource::Equation(_) | MathBlockSource::Align(_) => {
+            calculate_math_align_host_metrics(layout)
+        }
+    }
+}
+
 pub(super) fn calculate_math_host_metrics(
     layout: &caret_math::layout::MathLayout,
     line_grid_metrics: FontLineMetrics,
@@ -2347,7 +2420,7 @@ pub(super) fn calculate_math_host_metrics(
         .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))
 }
 
-fn calculate_math_align_host_metrics(
+pub(super) fn calculate_math_align_host_metrics(
     layout: &caret_math::layout::MathLayout,
 ) -> Result<LineMetrics, DocumentLayoutError> {
     let height_pt = (layout.ascent + layout.descent) as f32;
@@ -2367,7 +2440,7 @@ fn calculate_math_align_host_metrics(
     })
 }
 
-fn math_host_row_grid(
+pub(super) fn math_host_row_grid(
     line_grid: FontLineMetrics,
     body_metrics: LineMetrics,
     spacing: LineSpacing,

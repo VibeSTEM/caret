@@ -731,10 +731,7 @@ impl Session {
             return Err(EditError::CompositionPending);
         }
         let focus = self.selection.focus.clone();
-        if matches!(focus.story, StoryId::TableCell { .. }) {
-            return Err(EditError::UnsupportedTableCellMath);
-        }
-        if focus.story != StoryId::Body || self.selection.anchor != focus {
+        if self.selection.anchor != focus {
             return Err(EditError::InvalidPosition);
         }
         let location = self
@@ -742,7 +739,7 @@ impl Session {
             .get(&focus.paragraph_id)
             .cloned()
             .ok_or_else(|| EditError::UnknownParagraph(focus.paragraph_id.to_string()))?;
-        if location.is_title {
+        if location.is_title || location.story != focus.story {
             return Err(EditError::InvalidPosition);
         }
         let container = location.container.clone();
@@ -1081,9 +1078,6 @@ impl Session {
         &mut self,
         direction: Direction,
     ) -> Result<Effect, EditError> {
-        if self.table_context().is_some() {
-            return Err(EditError::UnsupportedTableCellMath);
-        }
         if let Some(position) = self.host_caret_position.clone()
             && position.kind() == HostCaretKind::Block
             && let Some((block_id, _)) = position.as_outside()
@@ -1112,9 +1106,6 @@ impl Session {
         include_inline: bool,
         require_text_edge: bool,
     ) -> Result<Effect, EditError> {
-        if self.table_context().is_some() {
-            return Err(EditError::UnsupportedTableCellMath);
-        }
         let focus = self.selection.focus.clone();
         if self.selection.anchor != focus
             || self.has_structure_selection()

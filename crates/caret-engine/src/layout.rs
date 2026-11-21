@@ -197,6 +197,20 @@ struct LaidOutParagraphInput {
     inline_math_text_layouts: Vec<HashMap<u64, MathTextSidecar>>,
 }
 
+/// 单元格内显示公式在页面上的放置；与正文公式投影共用同一坐标约定。
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TableMathPlacement {
+    pub(crate) math_id: NodeId,
+    /// 公式盒左边缘的页面局部 x 坐标。
+    pub(crate) object_x_pt: f64,
+    /// 公式基线的页面局部 y 坐标。
+    pub(crate) baseline_y_pt: f64,
+    pub(crate) caret_line_top_pt: f64,
+    pub(crate) caret_baseline_y_pt: f64,
+    pub(crate) caret_height_pt: f64,
+    pub(crate) clip_y_pt: Option<[f64; 2]>,
+}
+
 /// 一页的文档坐标和段落行片段。
 #[derive(Debug, Clone, PartialEq)]
 pub struct PageLayoutSnapshot {
@@ -207,6 +221,8 @@ pub struct PageLayoutSnapshot {
     pub margin_right_pt: f64,
     pub margin_bottom_pt: f64,
     pub layout: PageLayout,
+    /// 本页单元格内显示公式的放置；不回写 PageLayout 的分页片段。
+    pub(crate) table_math_placements: Vec<TableMathPlacement>,
 }
 
 /// 块级环境在单页上的内容范围，由其标题、段落和显示公式的实际分页片段合并得到。
