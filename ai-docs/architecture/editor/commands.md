@@ -26,7 +26,7 @@ id 用小写点分段，段内使用 snake_case：`text.insert`、`para.heading`
 | `para.bullets` / `para.numbering` | 列表 | 一步 |
 | `insert.equation` | 插入公式对象 | 一步 |
 | `equation.move` / `equation.exit` | 公式内部导航、离开 | 纯命令 / 离开时若只动光标则纯命令 |
-| `insert.table` | 插入默认 2×2 表格（Session 命令已实现；命令面板与 native 入口在 046 前禁用） | 一步，可撤销 |
+| `insert.table` | 插入默认 2×2 表格（命令面板 `\table`、Alt+T 与 native 键位已启用；标题/单元格内等不可插入上下文拒绝） | 一步，可撤销 |
 | `table.insert_row_before` / `table.insert_row_after` / `table.delete_row` / `table.insert_col_before` / `table.insert_col_after` / `table.delete_col` | 改表格形状（整表一次原子替换；仅表格上下文可用） | 一步，可撤销 |
 | `struct.next` / `struct.prev` / `struct.exit` | 结构跳转 | 纯命令 |
 | `struct.section.create` | 把当前 Paragraph block 转为 Section 标题，保留标题段落属性与行内内容项 | 一步，可撤销 |
@@ -40,7 +40,7 @@ id 用小写点分段，段内使用 snake_case：`text.insert`、`para.heading`
 
 结构命令的完整行为和键位见[结构导航](structure-navigation.md)和[快捷键](../interface/keyboard-shortcuts.md)。
 
-注册表条目不代表命令已经可执行。当前 `struct.next`、`struct.prev`、`struct.exit` 与 `struct.section.create` 已进入用户交互；Custom 容器创建目前仅有 Rust 领域 API，不是命令候选，用户入口留待 Customize 设计。`insert.table` 与表格形状命令已在 Rust Session 实现，但命令面板 `\table` 候选保持不可用、native/QML 键位未接线，待 046 布局完成后统一启用。标题级别命令和列表仍由后续任务实现，未接入前候选必须标记不可用。结构选区上的 Backspace 复用 `text.delete` 按键意图，不新增独立候选。每次实现后同步更新可用状态和行为表，不让候选显示与 Rust 实际分发脱节。
+注册表条目不代表命令已经可执行。当前 `struct.next`、`struct.prev`、`struct.exit` 与 `struct.section.create` 已进入用户交互；Custom 容器创建目前仅有 Rust 领域 API，不是命令候选，用户入口留待 Customize 设计。`insert.table` 与表格形状命令已在 Rust Session、命令面板 `\table` 与 native 画布键位接通。标题级别命令和列表仍由后续任务实现，未接入前候选必须标记不可用。结构选区上的 Backspace 复用 `text.delete` 按键意图，不新增独立候选。每次实现后同步更新可用状态和行为表，不让候选显示与 Rust 实际分发脱节。
 
 新增命令时同时写：它在公式内、表格内、命令模式里是否可用；它会不会改变 `rev`。没写明的命令在公式内先退出公式再执行。`struct.*` 和 `cmdline.*` 必须自己声明，不能靠这个默认。
 

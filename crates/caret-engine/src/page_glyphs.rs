@@ -812,7 +812,8 @@ struct PageGlyphRunOrigin<'a> {
 }
 
 /// 将正文或数学文本岛的同类 Parley glyph run 转为页面快照。
-const TABLE_BORDER_COLOR: [u8; 4] = [0, 0, 0, 255];
+// v1 表格边框使用中性灰，在浅色与深色纸张上都可见；主题化边框属后续切片。
+const TABLE_BORDER_COLOR: [u8; 4] = [112, 112, 112, 255];
 const TABLE_BORDER_WIDTH_PT: f64 = 0.5;
 
 /// 表格边框作为页面形状输出，与字形共享页面局部坐标和绘制顺序。

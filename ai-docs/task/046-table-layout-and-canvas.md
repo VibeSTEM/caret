@@ -92,12 +92,19 @@
 
 ## 限制与明确移交
 
+- **表格位于文档末尾无尾随段落**：插入表格后不会自动追加表后段落，方向键/鼠标暂无路径在表后新建正文；需先有表后正文或后续任务补“表格后新建段落”出口。
+- **持久化表格边框颜色**：v1 使用中性灰（`#707070`）保证浅色/深色纸张都可见，边框颜色/宽度尚未走主题 token 与布局几何单一来源。
 - **整表复制/结构范围删除、跨单元格选择**：当前仍显式返回 `edit.table_content_unsupported`。046 的“按需要”范围未包含结构范围对象协议；后续由 012 集成或独立任务补齐，不在本任务声称完成。
 - **单元格内嵌套表/显式分页符**：模型允许嵌套表（≤24 层），布局 v1 对单元格内嵌套表与 ExplicitBreak 显式 `layout.unsupported_content`；不做静默漏画。
 - **超高单元格行**：行原子分页不拆分行内内容；超过单页版心高度的内容只发布本页可见片段并裁剪，超出部分暂不显示（行内分页属“分页细化”后续切片）。发布边界已按版心过滤，native 不会因越页 fragment/guideline 拒绝整份快照；该区域不可定位光标、cell 公式块高亮降级为空，编辑不发布可见 caret。
 - **列宽策略**：v1 等分并受最小列宽约束，auto/固定列宽属后续。
 - **真实窗口人工验收**：本环境只运行 native headless CTest（含 QML 加载、键位与快照校验）；macOS/Windows 窗口内实际视觉验收由 012 总验收执行。
 - **性能**：仅记录单机 Criterion 基线，不设 CI 门槛。
+
+### 最终验证记录（2026-11-22）
+
+- `cargo fmt --all -- --check`、`cargo clippy --locked --offline --workspace --all-targets -- -D warnings`、`cargo test --locked --offline --workspace`（36 suites，engine 969/app 359/layout 160/structure 15）、`cargo test -p caret-tests --test native`（CTest 20/20）、`cargo lint --check`（9/9）通过；50×8 bench 复跑 8.63–8.67 ms（~46 Kcell/s）。
+- 独立 final review：待修复表格后正文分页基址、cell padding 命中、dark 边框可读性、Shift+方向键 cell 守卫后复验。
 
 ## 当前状态与后续切片
 

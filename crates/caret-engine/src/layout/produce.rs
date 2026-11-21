@@ -695,9 +695,13 @@ impl PageGeometries {
         } = geometry;
         let content_width_pt = page_width_pt - margins_pt[0] - margins_pt[2];
         let mut math_block_environment_ids = HashMap::new();
+        let paragraph_positions: std::collections::HashMap<NodeId, usize> = paragraphs
+            .iter()
+            .enumerate()
+            .map(|(index, paragraph)| (paragraph.id.clone(), index))
+            .collect();
         let page_layouts = {
             let mut pagination_items = Vec::with_capacity(ordered_inputs.len());
-            let mut paragraph_index = 0;
             let mut table_index = 0;
             for item in ordered_inputs {
                 match item {
@@ -721,7 +725,15 @@ impl PageGeometries {
                             },
                         ));
                     }
-                    LayoutInput::Paragraph { .. } => {
+                    LayoutInput::Paragraph { paragraph, .. } => {
+                        let paragraph_index = paragraph_positions
+                            .get(&paragraph.id)
+                            .copied()
+                            .ok_or_else(|| {
+                                DocumentLayoutError::InvalidDocument(
+                                    "missing laid out paragraph".into(),
+                                )
+                            })?;
                         let paragraph = paragraphs.get(paragraph_index).ok_or_else(|| {
                             DocumentLayoutError::InvalidDocument(
                                 "missing laid out paragraph".into(),
@@ -737,7 +749,6 @@ impl PageGeometries {
                                 *style,
                             ),
                         ));
-                        paragraph_index += 1;
                     }
                     LayoutInput::MathBlock {
                         math_id,

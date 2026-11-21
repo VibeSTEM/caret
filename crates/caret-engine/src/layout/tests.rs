@@ -5950,8 +5950,100 @@ fn body_before_table_keeps_cell_paragraph_indices_and_hit_geometry_consistent() 
     assert_eq!(cell_hit.position.paragraph_id, cell_id);
     assert_eq!(cell_hit.position.story, cell.story);
 
+    // 点在单元格边框/内边距区域也必须命中该单元格，而不是落到表前正文。
+    let padding_hit = snapshot
+        .hit_test(0, cell_clip.x0_pt + 0.5, cell_clip.y0_pt + 0.5)
+        .unwrap_or_else(|| panic!("cell padding hit must resolve"));
+    assert_eq!(padding_hit.position.paragraph_id, cell_id);
+
     let glyphs = snapshot
         .page_glyphs(0)
         .unwrap_or_else(|error| panic!("glyphs must extract: {error}"));
     assert!(!glyphs.runs.is_empty());
+}
+
+#[test]
+fn paragraph_after_table_keeps_its_page_fragment_and_caret() {
+    let body_paragraph = paragraph("BODYTEXT");
+    let body_id = body_paragraph.id.clone();
+    let cell_paragraph = paragraph("CELLTEXT");
+    let cell_id = cell_paragraph.id.clone();
+    let after_paragraph = paragraph("AFTERTEXT");
+    let after_id = after_paragraph.id.clone();
+    let table = Table {
+        id: NodeId::generate(),
+        rows: vec![TableRow {
+            id: NodeId::generate(),
+            cells: vec![TableCell {
+                id: NodeId::generate(),
+                blocks: vec![Block::Paragraph(cell_paragraph)],
+            }],
+        }],
+    };
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(body_paragraph),
+        Block::Table(table),
+        Block::Paragraph(after_paragraph),
+    ];
+    let snapshot = layout_document(&document);
+    assert_eq!(snapshot.paragraphs.len(), 3);
+    let page = &snapshot.pages[0];
+    assert_eq!(
+        page.layout
+            .fragments
+            .iter()
+            .filter(|fragment| fragment.paragraph_id == body_id)
+            .count(),
+        1,
+        "body paragraph must have exactly one fragment"
+    );
+    assert_eq!(
+        page.layout
+            .fragments
+            .iter()
+            .filter(|fragment| fragment.paragraph_id == cell_id)
+            .count(),
+        1,
+        "cell paragraph must have exactly one fragment"
+    );
+    assert_eq!(
+        page.layout
+            .fragments
+            .iter()
+            .filter(|fragment| fragment.paragraph_id == after_id)
+            .count(),
+        1,
+        "paragraph after the table must keep its own fragment"
+    );
+    let after = snapshot
+        .paragraph_by_id(&after_id)
+        .unwrap_or_else(|| panic!("paragraph after table must be laid out"));
+    assert_eq!(after.story, StoryId::Body);
+    let caret = snapshot
+        .caret_geometry(
+            &Pos {
+                story: StoryId::Body,
+                paragraph_id: after_id.clone(),
+                offset: 0,
+                affinity: Affinity::Upstream,
+            },
+            VisualAffinity::Upstream,
+        )
+        .unwrap_or_else(|| panic!("caret after table must exist"));
+    assert!((caret.x_pt - page.margin_left_pt).abs() < 0.01);
+    let after_fragment = page
+        .layout
+        .fragments
+        .iter()
+        .find(|fragment| fragment.paragraph_id == after_id)
+        .unwrap_or_else(|| panic!("fragment after table must exist"));
+    let hit = snapshot
+        .hit_test(
+            0,
+            page.margin_left_pt + 5.0,
+            page.margin_top_pt + f64::from(after_fragment.y_offset_pt) + 5.0,
+        )
+        .unwrap_or_else(|| panic!("hit after table must resolve"));
+    assert_eq!(hit.position.paragraph_id, after_id);
 }

@@ -1947,6 +1947,10 @@ fn public_command_ids_and_error_codes_remain_stable() {
             EditError::UnsupportedTableContent,
             "edit.table_content_unsupported",
         ),
+        (
+            EditError::TableInsertionUnsupported,
+            "edit.table_insertion_unsupported",
+        ),
     ];
     for (error, expected) in errors {
         assert_eq!(error.to_string(), expected);

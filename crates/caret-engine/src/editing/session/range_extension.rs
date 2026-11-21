@@ -303,7 +303,8 @@ impl Session {
             };
         }
         if position.story != StoryId::Body {
-            return Err(EditError::InvalidPosition);
+            // 单元格内 Shift+方向键暂不跨 cell 扩展；保持原选区而不是报错。
+            return Ok(None);
         }
         let (parent_environment_ids, sibling_index) =
             find_block_path(&self.document.body, &position.paragraph_id)
@@ -447,6 +448,9 @@ impl Session {
         position: &Pos,
         direction: Direction,
     ) -> Result<bool, EditError> {
+        if position.story != StoryId::Body {
+            return Ok(false);
+        }
         let Some((parent_environment_ids, sibling_index)) =
             find_block_path(&self.document.body, &position.paragraph_id)
         else {

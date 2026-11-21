@@ -386,6 +386,19 @@ pub(super) fn expand_table_fragments(
                         content_x_pt + grid_cell.content_width_pt,
                         origin_y_pt + grid_row.top_pt + grid_row.height_pt,
                     ];
+                    // 命中/光标裁剪使用包含边框与内边距的单元格矩形；
+                    // 段落片段自身仍使用内容盒裁剪绘图与选区。
+                    let hit_clip = shaped.grid.columns.get(cell_index).map_or(
+                        clip,
+                        |(column_x, column_width)| {
+                            [
+                                origin_x_pt + column_x,
+                                origin_y_pt + grid_row.top_pt,
+                                origin_x_pt + column_x + column_width,
+                                origin_y_pt + grid_row.top_pt + grid_row.height_pt,
+                            ]
+                        },
+                    );
                     let host = caret_layout::FragmentHost::TableCell {
                         table_id: fragment.table_id.clone(),
                         row_index,
@@ -420,7 +433,7 @@ pub(super) fn expand_table_fragments(
                                             page_index,
                                             x0_pt: content_x_pt,
                                             y0_pt,
-                                            clip: Some(super::PageClip::from_array(clip)),
+                                            clip: Some(super::PageClip::from_array(hit_clip)),
                                         });
                                     }
                                     y0_pt += f64::from(line.metrics.height_pt);
