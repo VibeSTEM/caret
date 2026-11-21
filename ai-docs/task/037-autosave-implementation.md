@@ -1,9 +1,9 @@
 # 037 — AutoSave 实现
 
-- 状态：in-progress
+- 状态：done
 - 依赖：018、019、029
 - 优先级：P2
-- 创建 / 更新：2026-10-28 / 2026-11-21
+- 创建 / 更新：2026-10-28 / 2026-11-22
 
 ## 目标与背景
 
@@ -83,6 +83,7 @@
 | 2026-11-21 | 改动 C++ TU 的 `clang-format --dry-run -Werror`、`clang-tidy -p target/native/debug/quality`、include-cleaner、`cargo lint cppcheck` | 新增 Qt 测试的格式、静态检查与直接 include | 通过：5 个改动 TU 的 clang-format / clang-tidy / include-cleaner 与 cppcheck 均 exit=0。 |
 | 2026-11-21 | 分支集成验证：`cargo test --locked --offline --workspace`；`cargo format --check`；`cargo lint --check` | 与 077 光标修复合并后的完整 workspace、native 聚合与 9 阶段静态检查 | 通过：workspace exit=0（caret-app 353、caret-ffi 18、native 聚合含 CTest/qmllint 通过）；format 通过；lint 9/9 通过（首次 lint 报新增测试 `QLatin1String` 缺少直接 include，已改为 `QString::fromLatin1` 并复跑通过）。 |
 | 2026-11-21 | 独立最终评审（完整分支 diff，只读） | 037 验收证据范围、测试真实性、文档与索引一致性 | P1 未发现；指出 nightly 证据覆盖 main 产品代码、11 个新增 Qt 用例尚未在 PR 三平台 CI 运行，因此不能在此之前把 037 标为 done；完成摘要与自动化验收决策存在措辞矛盾。已在验证记录与本摘要中澄清，状态保持 in-progress 直到 PR CI 全绿。 |
+| 2026-11-22 | GitHub Actions Nightly [44923637913](https://github.com/VibeSTEM/caret/actions/runs/44923637913)（分支 `yuki/task-077-math-slot-caret`）；PR CI [44923633762](https://github.com/VibeSTEM/caret/actions/runs/44923633762) | 新增 Qt 用例在 macOS/Windows/Ubuntu 全量 workspace 测试执行；PR CI 覆盖 Linux 检查 | 通过：三平台 `full workspace tests` 全部 success（含新增 11 项 Qt 用例）；PR CI 全部通过。首轮 Windows 因新增光标测试断言了平台相关的正文行顶失败，改为只断言槽位布局盒包含关系后，本 run 三平台通过。 |
 | 2026-11-21 | 覆盖矩阵复核（见决策记录） | 037 各验收项均可追溯到 Rust/Qt 自动化用例；无法自动化的部分如实记录 | 已完成；残留限制见下方“未覆盖范围”。 |
 
 ## 风险与回退
@@ -106,4 +107,4 @@ AutoSave 触及用户文件且可能与外部编辑器竞争。任何基线校�
 
 ## 完成摘要
 
-核心单窗口 AutoSave、恢复与关闭链已实现并通过本机集成测试；双进程恢复租约隔离已有子进程回归测试。按维护者 2026-11-21 决定，恢复/冲突/关闭对话框的验收改由 Qt 自动化行为测试取证：新增 11 项用例覆盖恢复启动可见、手动保存冲突三选择与替换前备份、AutoSave 关闭 flush/失败/取消/迟到回调，本机引擎与 native 回归全绿。main 产品代码的三平台 nightly 已全绿；新增用例的三平台执行由 PR CI 承接，PR CI 全绿后可将本任务与索引转为 done。多窗口文档会话与全局操作协调由 038 承接。
+完成：核心单窗口 AutoSave、恢复与关闭链已实现并通过本机集成测试；双进程恢复租约隔离已有子进程回归测试。按维护者 2026-11-21 决定，恢复/冲突/关闭对话框的验收改由 Qt 自动化行为测试取证：新增 11 项用例覆盖恢复启动可见、手动保存冲突三选择与替换前备份、AutoSave 关闭 flush/失败/取消/迟到回调。本机 workspace/native 回归、PR CI 与分支 Nightly 三平台全量 workspace 测试均通过，独立最终评审未留未解决 P1/P2。多窗口文档会话与全局操作协调由 038 承接。

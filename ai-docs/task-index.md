@@ -1,6 +1,6 @@
 # Task 索引
 
-更新日期：2026-11-21。非平凡改动先从[模板](task/_template.md)建 task，在本索引登记，然后再动代码。行为规格在[架构](architecture/README.md)和[规范](standards/README.md)。2026-10-25 删去未执行的旧队列，现行任务从 001 重新编号。
+更新日期：2026-11-22。非平凡改动先从[模板](task/_template.md)建 task，在本索引登记，然后再动代码。行为规格在[架构](architecture/README.md)和[规范](standards/README.md)。2026-10-25 删去未执行的旧队列，现行任务从 001 重新编号。
 
 ## 使用方式
 
@@ -68,7 +68,7 @@
 | 034 | 性能 | [Qt / Rust 性能测量与热点优化](task/034-performance-profiling.md) | P2 | 024、026、027、030 | L | done |
 | 035 | 文档模式 | [Editing、Review、View 模式语义与行为](task/035-document-work-modes.md) | P2 | 018 | L | planned |
 | 036 | 图标与致谢 | [Icons8 图标替换与 Settings 关于页面署名](task/036-icons8-icons-and-attribution.md) | P1 | 018 | M | planned |
-| 037 | AutoSave | [AutoSave 实现](task/037-autosave-implementation.md) | P2 | 018、019、029 | L | in-progress |
+| 037 | AutoSave | [AutoSave 实现](task/037-autosave-implementation.md) | P2 | 018、019、029 | L | done |
 | 038 | 窗口架构 | [多窗口文档会话与全局操作协调](task/038-multiwindow-document-sessions.md) | P2 | 037 | L | planned |
 | 039 | Settings UI | [Settings 中的主题与界面语言](task/039-settings-theme-language-ui.md) | P2 | 003、004、029 | M | done |
 | 040 | 架构治理 | [架构与结构审计整改](task/040-architecture-structure-cleanup.md) | P2 | — | M | done |
