@@ -4933,10 +4933,8 @@ fn math_slot_caret_is_centered_in_the_slot_box() {
         numerator.y0_pt >= box_top - 1e-9 && numerator.y1_pt <= box_bottom + 1e-9,
         "empty fraction caret should stay inside its slot box"
     );
-    assert!(
-        numerator.y0_pt >= projection.caret_line_top_pt,
-        "empty fraction caret should stay inside the host line box"
-    );
+    // 宿主行顶/基线来自正文回退字体度量，跨平台会有差异；这里只断言与槽位盒
+    // 的包含关系，跨平台稳定的是结构槽几何本身。
 
     let (superscript_snapshot, superscript_id) = equation_layout("x^{2}");
     let superscript_target = MathEditTarget::Block {
