@@ -2,9 +2,9 @@
 
 use super::*;
 use caret_doc::{
-    BlockEnvironment, BlockEnvironmentKind, Equation, InlineEnvironment, InlineEnvironmentKind,
-    InlineMath, MathContent, MathFlow, MathTree, NodeId, Paragraph, ParagraphContent, Run,
-    TextFlow,
+    Align, BlockEnvironment, BlockEnvironmentKind, Equation, InlineEnvironment,
+    InlineEnvironmentKind, InlineMath, MathAlignRow, MathContent, MathFlow, MathTree, NodeId,
+    Paragraph, ParagraphContent, Run, TextFlow,
 };
 use std::collections::BTreeMap;
 
@@ -1889,6 +1889,38 @@ fn equation_block(id: &NodeId, text: &str) -> Block {
     })
 }
 
+/// 构造带两行的 Align 块，用于块级结构选区几何断言。
+fn align_block(id: &NodeId) -> Block {
+    Block::Align(Align {
+        id: id.clone(),
+        rows: ["a&=b", "c&=d"]
+            .iter()
+            .map(|text| MathAlignRow {
+                id: NodeId::generate(),
+                cells: vec![MathTree {
+                    schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+                    root: MathFlow {
+                        id: NodeId::generate(),
+                        content: vec![MathContent::Text(TextFlow {
+                            runs: vec![Run {
+                                text: (*text).to_owned(),
+                                language: None,
+                                props: BTreeMap::new(),
+                                extra: BTreeMap::new(),
+                            }],
+                            extra: BTreeMap::new(),
+                        })],
+                        extra: BTreeMap::new(),
+                    },
+                    extra: BTreeMap::new(),
+                }],
+                extra: BTreeMap::new(),
+            })
+            .collect(),
+        extra: BTreeMap::new(),
+    })
+}
+
 fn collapsed_selection(paragraph_id: &NodeId, offset: usize) -> caret_engine::Selection {
     let position = caret_engine::Pos {
         story: caret_engine::StoryId::Body,
@@ -2032,6 +2064,105 @@ fn structural_selection_geometry_covers_equation_hosts_across_host_boundaries()
         extended_rectangles
             .iter()
             .any(|(_, x0, _, x1, _)| { (x1 - x0) < (math_rectangle.x1_pt - math_rectangle.x0_pt) }),
+        "extension into the following paragraph must add its text rectangle"
+    );
+    Ok(())
+}
+
+#[test]
+fn structural_selection_geometry_covers_align_hosts_across_host_boundaries()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before_id = NodeId::generate();
+    let after_id = NodeId::generate();
+    let math_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(paragraph_with_id(&before_id, "before")),
+        align_block(&math_id),
+        Block::Paragraph(paragraph_with_id(&after_id, "after")),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let page = runtime.current_snapshot()?.pages[0].clone();
+    let math_rectangles = runtime
+        .current_snapshot()?
+        .math_block_geometry(std::slice::from_ref(&math_id))
+        .ok_or_else(|| std::io::Error::other("align fragment is missing"))?;
+    assert!(!math_rectangles.is_empty());
+    let math_tuples = math_rectangles
+        .iter()
+        .map(|rectangle| {
+            (
+                i64::try_from(rectangle.page_index).unwrap_or_default(),
+                rectangle.x0_pt,
+                rectangle.y0_pt,
+                rectangle.x1_pt,
+                rectangle.y1_pt,
+            )
+        })
+        .collect::<Vec<_>>();
+    runtime
+        .session
+        .run(caret_engine::Command::SetSelection(Some(
+            collapsed_selection(&before_id, "before".len()),
+        )))?;
+
+    // 第一次 Shift+Right：Align 整体进入结构选区，选区层由所有行矩形表示。
+    let first: Value = serde_json::from_str(&runtime.move_visual_caret_json(true, true)?)?;
+    assert_eq!(
+        runtime.session.selected_math_blocks(),
+        std::slice::from_ref(&math_id)
+    );
+    assert!(
+        runtime.session.structure_selection_range().is_some(),
+        "cross-host selection must publish structural endpoints"
+    );
+    let first_rectangles = rectangle_tuples(&first["selectionRects"]);
+    assert_eq!(
+        first_rectangles.len(),
+        math_tuples.len(),
+        "the selected align rows must be the only visible selection geometry"
+    );
+    for (actual, expected) in first_rectangles.iter().zip(&math_tuples) {
+        assert!(
+            rectangle_close(actual, *expected),
+            "selection geometry must match every align row rectangle"
+        );
+    }
+    for rectangle in &math_rectangles {
+        assert!(
+            (rectangle.x1_pt - (page.width_pt - page.margin_right_pt)).abs() < 1e-9
+                && (rectangle.x0_pt - page.margin_left_pt).abs() < 1e-9,
+            "the align selection must span the page content width"
+        );
+    }
+    assert_eq!(
+        first["mathBlockHighlightRects"],
+        serde_json::json!([]),
+        "a structural selection belongs to the selection layer, not the block highlight layer"
+    );
+
+    // 继续 Shift+Right：结构范围保留 Align 并延伸到后一段文字。
+    runtime.move_visual_caret_json(true, true)?;
+    assert_eq!(
+        runtime.session.selected_math_blocks(),
+        std::slice::from_ref(&math_id)
+    );
+    assert_eq!(runtime.session.selection().focus.paragraph_id, after_id);
+    let extended: Value = serde_json::from_str(&runtime.move_visual_caret_json(true, true)?)?;
+    let extended_rectangles = rectangle_tuples(&extended["selectionRects"]);
+    for expected in &math_tuples {
+        assert!(
+            extended_rectangles
+                .iter()
+                .any(|rectangle| rectangle_close(rectangle, *expected)),
+            "every align row rectangle must survive further extension"
+        );
+    }
+    assert!(
+        extended_rectangles.iter().any(|(_, x0, _, x1, _)| {
+            (x1 - x0) < (page.width_pt - page.margin_left_pt - page.margin_right_pt)
+        }),
         "extension into the following paragraph must add its text rectangle"
     );
     Ok(())
