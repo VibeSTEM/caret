@@ -25,6 +25,10 @@ pub enum EditError {
     InvalidPageGeometry(String),
     /// 公式源文本无法解析为目标公式类型。
     InvalidMath(String),
+    /// 剪贴板片段与目标宿主不兼容，或当前选区/公式位置不能承载该片段形状。
+    ClipboardHostMismatch,
+    /// 复制时共享 checked 数学序列化器报告无法无损表达，拒绝生成降级文本。
+    ClipboardMathLoss(String),
     UnknownCommand,
 }
 
@@ -50,6 +54,8 @@ impl Display for EditError {
                 write!(f, "edit.invalid_page_geometry: {reason}")
             }
             Self::InvalidMath(reason) => write!(f, "edit.invalid_math: {reason}"),
+            Self::ClipboardHostMismatch => f.write_str("clipboard.host_mismatch"),
+            Self::ClipboardMathLoss(reason) => write!(f, "clipboard.math_loss: {reason}"),
             Self::UnknownCommand => f.write_str("edit.unknown_command"),
         }
     }

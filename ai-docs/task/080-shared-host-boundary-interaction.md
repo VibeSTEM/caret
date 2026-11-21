@@ -35,8 +35,8 @@ Caret 的 Block/Inline 编辑目前分散管理焦点位置、边界移动、选
 ## 前置条件与待决策
 
 - 071、074、081、082、083 已完成；077 为 `implemented`（代码与自动验证完成，仅桌面 caret 视觉确认待补）。
-- 091 富剪贴板已转为 `ready`（依赖 083、092 均完成）；在本任务完成跨宿主剪贴板与 TeX 回退的整链验收前，080 无法关闭。
-- 解除阻塞条件：091 完成并接入剪贴板 → 执行本任务剩余整链验收与独立评审。
+- 091 富剪贴板已实现（`implemented`，依赖 083、092 均完成）；v1 双格式 MIME、TeX 回退、单事务片段粘贴与外部文本公式识别已合入，Math 形状/公式内部选区等由任务 105 跟进，不阻塞 080 的整链验收。
+- 解除阻塞条件：091 合入后执行本任务剩余整链验收与独立评审。
 
 ## 实施步骤
 
@@ -55,12 +55,12 @@ Caret 的 Block/Inline 编辑目前分散管理焦点位置、边界移动、选
 
 - [x] 081、082、083 均完成且各自验收通过。
 - [x] Paragraph、Section/Custom、Equation/Align 与 InlineEnvironment/InlineMath 使用单一共享交互协议，适配器只提供领域局部位置、事务与几何（子任务 071/081/082/083 的实现与评审记录）。
-- [x] 连续 Block 删除落点、Section 邻接 Backspace、Inline/Block 双侧扩选、替换与空 Inline 槽位符合权威行为文档；复制/粘贴部分受 091 阻塞，见下方未完成项。
+- [x] 连续 Block 删除落点、Section 邻接 Backspace、Inline/Block 双侧扩选、替换与空 Inline 槽位符合权威行为文档；复制/粘贴部分待 091 合入后做整链复核，见下方未完成项。
 - [x] 位置、选区、事务与历史使用同一宿主身份/顺序；完整快照、增量刷新与 Qt 绘制使用同代投影（082/083 验收及本次定向回归）。
 - [x] 无重复权威状态、任意 Paragraph 隐藏锚点、逐类型补丁、U+FFFC 泄漏、静默对象丢失或失败后非法焦点（083 分域评审发现项已修复）。
 - [x] Paragraph、MathEdit、Section、Align 行/cell 的真实局部坐标和行为未被统一底座抹平；新 Block 只需 adapter 接入（子任务测试与 #151 跨宿主范围收敛）。
 - [x] Section、Equation、Align 的块外侧垂直导航和 Shift 选区共享视觉行候选/块边界仲裁；InlineMath 外部逐项扩选通过共享端点、范围消费与同代几何协议（#151 与 2026-11-21 定向回归）。
-- [ ] 相关行为测试、覆盖率门槛、分域检查及独立最终评审在整链（含剪贴板）上通过；未执行的桌面平台验收明确记录。当前仅子任务分别通过，整链待 091 后执行。
+- [ ] 相关行为测试、覆盖率门槛、分域检查及独立最终评审在整链（含剪贴板）上通过；未执行的桌面平台验收明确记录。当前仅子任务分别通过，整链待 091 合入后执行。
 - [ ] Caret 内复制粘贴保留 MathTree/Align 和 InlineMath 对象；外部应用读取可读 TeX 回退；显式 TeX 数学片段粘贴由 091 接入 092 的共享转换器。
 
 ## 验证计划与结果
@@ -72,7 +72,7 @@ Caret 的 Block/Inline 编辑目前分散管理焦点位置、边界移动、选
 | 2026-11-21 | `cargo test --locked -p caret-engine editing::session::structure` / `editing::session::navigation` / `editing::session::math_edit::tests::selection_caret` / `editing::session::document_position` | 跨宿主删除/导航/选区/文档位置协议一致 | 通过：73 / 40 / 86 / 24 项 |
 | 2026-11-21 | `cargo test --locked -p caret-app vertical_navigation_leaves_math_block_boundary_for_adjacent_visual_paragraph` / `structural_selection_geometry_covers_equation_hosts_across_host_boundaries` / `backspace` / `inline_math` 过滤 | 块边界、跨宿主几何与空 inline 槽位回归 | 通过：1 / 1 / 14 / 36 项 |
 | 2026-11-21 | `cargo test --locked -p caret-engine empty_inline_math`、`cargo test --locked -p caret-app empty_inline_math` | 087 收尾：空 Inline 槽位/命中/删除/Undo/Redo/IME 回归 | 通过：9 / 5 项 |
-| — | 091 富剪贴板接入后的整链回归 | 复制/粘贴 MathTree、TeX 回退与同代投影 | 未执行（阻塞条件；092 转换器已就绪） |
+| — | 091 富剪贴板接入后的整链回归 | 复制/粘贴完整 MathTree/Align/InlineMath、TeX 回退与同代投影 | 未执行（091 v1 已实现；Math 内部选区由 105 跟进） |
 | — | 覆盖率门槛与整链 Terra/Sol 评审 | 通过 | 未执行（阻塞条件） |
 
 ## 风险与回退
@@ -87,8 +87,8 @@ Caret 的 Block/Inline 编辑目前分散管理焦点位置、边界移动、选
 - 2026-11-09：本 PR 仅更新/整理 Markdown 文档，不包含代码改动或平台验证。
 - 2026-11-16：审计发现原有纯文本剪贴板会将公式降格为 U+FFFC，与结构复制契约冲突。将富剪贴板实现拆为 091；080 保留跨宿主最终集成验收。
 - 2026-11-18：桌面测试发现 Equation 外侧 Up/Down 走入公式边界重入路径，Shift 垂直扩展在视觉候选计算前只覆盖整公式；InlineMath 外部选区也只表达 U+FFFC。按维护者要求在 080/083 中补齐 Section 主导的垂直候选复用与 MathTree 内部跨宿主选区。
-- 2026-11-21：跟进审计：081/082/083 已完成，083 的 InlineMath 跨宿主范围由 #151 合入；071/074 `done`、077 `implemented`。定向回归（engine structure/navigation/math selection/document_position；app 块边界、跨宿主几何、Backspace、inline math 及 087 空 inline 槽位）全部通过。剩余验收依赖 091 富剪贴板（依赖 083、092 均已 done，091 已转 `ready`）：在 091 完成前，080 的复制/粘贴整链与覆盖率/最终评审无法执行。任务标记为 `blocked`，下一步从 091 开始。 勾选项当前依据 081/082/083 各自验收与 2026-11-21 定向回归，080 整链复核待 091 后再执行；087 收尾新增的 Qt 端到端空槽渲染用例不改变 080 剩余范围。
+- 2026-11-21：跟进审计：081/082/083 已完成，083 的 InlineMath 跨宿主范围由 #151 合入；071/074 `done`、077 `implemented`。定向回归（engine structure/navigation/math selection/document_position；app 块边界、跨宿主几何、Backspace、inline math 及 087 空 inline 槽位）全部通过。剩余验收依赖 091 富剪贴板（依赖 083、092 均已完成，091 v1 已实现）：080 可在 091 合入后执行复制/粘贴整链、覆盖率与最终评审；Math 内部局部选区不属 080 验收范围（任务 105 跟进）。 勾选项当前依据 081/082/083 各自验收与 2026-11-21 定向回归，080 整链复核待 091 后再执行；087 收尾新增的 Qt 端到端空槽渲染用例不改变 080 剩余范围。
 
 ## 完成摘要
 
-未完成，状态 `blocked`。081、082、083 已完成并合入，071/074 `done`、077 `implemented`；跨宿主位置/顺序/焦点/选区/事务/几何与空 Inline 槽位的定向回归在 2026-11-21 通过。剩余范围是 091 富剪贴板的 MathTree/Align/InlineMath 保留、TeX 回退（复用已完成的 092 `MathFragment`），以及其后的整链覆盖率、分域与独立 final review；091 已完成依赖转 `ready`，构成具体阻塞。
+未完成，状态 `blocked`。081、082、083 已完成并合入，071/074 `done`、077 `implemented`；跨宿主位置/顺序/焦点/选区/事务/几何与空 Inline 槽位的定向回归在 2026-11-21 通过。剩余范围是 091 v1 剪贴板的复制/粘贴整链验收（完整 MathTree/Align/InlineMath 保真、TeX 回退、一次 Undo、失败原子性），以及其后的整链覆盖率、分域与独立 final review。

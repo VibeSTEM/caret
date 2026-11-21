@@ -27,6 +27,7 @@
 #include <QJsonObject>
 #include <QKeyEvent>
 #include <QList>
+#include <QMimeData>
 #include <QMouseEvent>
 #include <QObject>
 #include <QPointF>
@@ -1200,6 +1201,154 @@ bool prepareDocumentInteractionAt(DocumentInteractionFixture& fixture, int gener
     return replayDocumentToGeneration(fixture, generation);
 }
 
+// 富剪贴板 slot 的固定文档：正文文本 + InlineMath、Equation、Align 与尾段落。
+constexpr auto kRichClipboardDocument = R"json({
+    "format":"caret","version":1,
+    "requiredFeatures":["caret.math.align","caret.math.content-flow.v2","caret.math.equation",
+        "caret.math.inline","caret.math.syntax.v1","caret.paragraph.content-flow.v1",
+        "caret.paragraph.layout-settings","caret.text.default-font-size"],
+    "media":[],"document":{
+        "globalSettings":{},"body":[
+            {"type":"paragraph","id":"paragraph-one","inlines":[
+                {"type":"text","runs":[{"text":"before "}]},
+                {"type":"inlineMath","id":"inline-x","mathTree":{
+                    "schemaVersion":3,"root":{"id":"inline-root","content":[
+                        {"type":"math","id":"inline-x-symbol","kind":"symbol","text":"x"}
+                    ]}
+                }},
+                {"type":"text","runs":[{"text":" after"}]}
+            ]},
+            {"type":"equation","id":"equation-y","mathTree":{
+                "schemaVersion":3,"root":{"id":"equation-root","content":[
+                    {"type":"math","id":"equation-y-symbol","kind":"symbol","text":"y"}
+                ]}
+            }},
+            {"type":"align","id":"align-one","rows":[
+                {"id":"align-row","cells":[{"schemaVersion":3,
+                    "root":{"id":"align-root","content":[
+                        {"type":"math","id":"align-a-symbol","kind":"symbol","text":"a"}
+                    ]}}]}
+            ]},
+            {"type":"paragraph","id":"paragraph-two","inlines":[
+                {"type":"text","runs":[{"text":"tail"}]}
+            ]}
+        ],
+        "pageSections":[{"id":"page-section","props":{}}]
+    }
+})json";
+
+constexpr auto kClipboardFragmentMime = "application/vnd.caret.fragment+json";
+
+QString clipboard_fragment_mime_name() { return QString::fromLatin1(kClipboardFragmentMime); }
+
+rust::String rust_string_from_bytes(const QByteArray& bytes) {
+    return rust::String(bytes.constData(), static_cast<std::size_t>(bytes.size()));
+}
+
+// 用临时 .cdoc 准备真实 Rust 会话并安装布局快照与文档 runtime。
+bool installClipboardDocumentRuntime(const QByteArray& document_json, QString* error) {
+    QTemporaryDir directory;
+    if (!directory.isValid()) {
+        *error = QStringLiteral("剪贴板测试临时目录不可用");
+        return false;
+    }
+    const QString path = directory.filePath(QStringLiteral("rich-clipboard.cdoc"));
+    QFile document_file(path);
+    if (!document_file.open(QIODevice::WriteOnly)) {
+        *error = QStringLiteral("剪贴板测试文档无法写入");
+        return false;
+    }
+    if (document_file.write(document_json) != document_json.size()) {
+        *error = QStringLiteral("剪贴板测试文档写入不完整");
+        return false;
+    }
+    document_file.close();
+
+    auto runtime = caret::ffi::new_blank_document_runtime();
+    const auto prepared =
+        caret::ffi::prepare_document_file(rust_string_from_bytes(path.toUtf8()), 1, 0);
+    if (!prepared.error.empty()) {
+        *error =
+            QString::fromUtf8(prepared.error.data(), static_cast<qsizetype>(prepared.error.size()));
+        return false;
+    }
+    const rust::String installed = caret::ffi::install_prepared_document(*runtime, prepared.ticket);
+    if (!installed.empty()) {
+        *error = QString::fromUtf8(installed.data(), static_cast<qsizetype>(installed.size()));
+        return false;
+    }
+    const rust::String snapshot = caret::ffi::layout_snapshot_json(*runtime);
+    const std::string_view snapshot_view(snapshot.data(), snapshot.size());
+    if (snapshot_view.starts_with("error:")) {
+        *error = QString::fromUtf8(snapshot.data(), static_cast<qsizetype>(snapshot.size()));
+        return false;
+    }
+    if (!caret::install_layout_snapshot(
+            QString::fromUtf8(snapshot.data(), static_cast<qsizetype>(snapshot.size())))) {
+        *error = QStringLiteral("剪贴板测试布局快照无法安装");
+        return false;
+    }
+    if (!caret::install_document_runtime(std::move(runtime))) {
+        *error = QStringLiteral("剪贴板测试文档 runtime 无法安装");
+        return false;
+    }
+    return true;
+}
+
+QVariantMap findBodyDragStop(const QVariantMap& hit_map, const QString& paragraph_id, int offset) {
+    for (const QVariant& value : hit_map.value(QStringLiteral("stops")).toList()) {
+        const QVariantMap stop = value.toMap();
+        const QVariantMap position = stop.value(QStringLiteral("position")).toMap();
+        if (position.value(QStringLiteral("kind")).toString() != QStringLiteral("body") ||
+            position.value(QStringLiteral("paragraphId")).toString() != paragraph_id ||
+            position.value(QStringLiteral("offsetUtf8")).toString() != QString::number(offset) ||
+            stop.value(QStringLiteral("visualAffinity")).toString() !=
+                QStringLiteral("downstream")) {
+            continue;
+        }
+        return stop;
+    }
+    return {};
+}
+
+QString paragraph_text_by_id(const caret::LayoutViewModel& view_model,
+                             const QString& paragraph_id) {
+    for (const QVariant& value : view_model.paragraphLayouts()) {
+        const QVariantMap paragraph = value.toMap();
+        if (paragraph.value(QStringLiteral("paragraphId")).toString() == paragraph_id)
+            return paragraph.value(QStringLiteral("text")).toString();
+    }
+    return {};
+}
+
+qsizetype replacement_char_count(const QString& text) { return text.count(QChar(0xFFFC)); }
+
+qsizetype math_fragment_count(const caret::LayoutViewModel& view_model) {
+    qsizetype total = 0;
+    for (const QVariant& page : view_model.pageLayouts())
+        total += page.toMap().value(QStringLiteral("mathFragments")).toList().size();
+    return total;
+}
+
+bool select_document_paragraph_range(caret::LayoutViewModel& view_model, const QString& anchor_id,
+                                     int anchor_offset, const QString& focus_id, int focus_offset) {
+    const QVariantMap hit_map = view_model.dragHitMap(0);
+    if (!hit_map.value(QStringLiteral("valid")).toBool())
+        return false;
+    const QVariantMap anchor = findBodyDragStop(hit_map, anchor_id, anchor_offset);
+    const QVariantMap focus = findBodyDragStop(hit_map, focus_id, focus_offset);
+    if (anchor.isEmpty() || focus.isEmpty())
+        return false;
+    return view_model.setSelection(anchor, focus).value(QStringLiteral("valid")).toBool();
+}
+
+void set_clipboard_fragment_payload(const QByteArray& fragment_utf8, const QString& text) {
+    auto* mime = new QMimeData;
+    mime->setData(clipboard_fragment_mime_name(), fragment_utf8);
+    mime->setText(text);
+    QGuiApplication::clipboard()->setMimeData(mime);
+}
+
 } // namespace
 
 void ShellDocumentInteractionTest::documentHitTestReturnsRustPosition() {
@@ -2331,8 +2480,10 @@ void ShellDocumentInteractionTest::mathTextDragUsesSharedPreviewAndCommitProtoco
     QCOMPARE(input_context.value(QStringLiteral("anchorPosition")).toInt(), 1);
     QCOMPARE(input_context.value(QStringLiteral("cursorPosition")).toInt(), 7);
     QVERIFY(input_context.value(QStringLiteral("enabled")).toBool());
-    QVERIFY(view_model->copySelectionToClipboard().value(QStringLiteral("valid")).toBool());
-    QCOMPARE(QGuiApplication::clipboard()->text(), QStringLiteral("abcdef"));
+    // 公式内部选区无法构造完整 Caret 片段：复制明确失败且不覆盖系统剪贴板。
+    const QString clipboard_before_math_copy = QGuiApplication::clipboard()->text();
+    QVERIFY(!view_model->copySelectionToClipboard().value(QStringLiteral("valid")).toBool());
+    QCOMPARE(QGuiApplication::clipboard()->text(), clipboard_before_math_copy);
 
     QVERIFY(view_model->clearSelection().value(QStringLiteral("valid")).toBool());
     QVERIFY(view_model->selectionRects().isEmpty());
@@ -2352,8 +2503,10 @@ void ShellDocumentInteractionTest::mathTextDragUsesSharedPreviewAndCommitProtoco
              QStringLiteral("math"));
     QTRY_VERIFY_WITH_TIMEOUT(!view_model->selectionRects().isEmpty(), 3000);
     QTest::mouseRelease(&window, Qt::LeftButton, Qt::NoModifier, start_window.toPoint());
-    QVERIFY(view_model->copySelectionToClipboard().value(QStringLiteral("valid")).toBool());
-    QVERIFY(QGuiApplication::clipboard()->text().endsWith(QStringLiteral("x")));
+    // 跨正文与行内公式内部的结构选区同样不能生成完整片段，复制失败保留剪贴板。
+    const QString clipboard_before_span_copy = QGuiApplication::clipboard()->text();
+    QVERIFY(!view_model->copySelectionToClipboard().value(QStringLiteral("valid")).toBool());
+    QCOMPARE(QGuiApplication::clipboard()->text(), clipboard_before_span_copy);
     QVERIFY(view_model->clearSelection().value(QStringLiteral("valid")).toBool());
     QVariantMap structural_stop;
     for (const QVariant& value : drag_stops) {
@@ -2403,9 +2556,10 @@ void ShellDocumentInteractionTest::mathTextDragUsesSharedPreviewAndCommitProtoco
     QTRY_VERIFY_WITH_TIMEOUT(!view_model->selectionRects().isEmpty(), 3000);
     QTest::mouseRelease(&window, Qt::LeftButton, Qt::NoModifier, body_window.toPoint());
     QVERIFY(!view_model->selectionRects().isEmpty());
-    QVERIFY(view_model->copySelectionToClipboard().value(QStringLiteral("valid")).toBool());
-    QVERIFY(QGuiApplication::clipboard()->text().contains(QStringLiteral("after")));
-    QVERIFY(QGuiApplication::clipboard()->text().contains(QStringLiteral("x")));
+    // 数学树内部选区不进入富剪贴板；失败时不覆盖系统剪贴板。
+    const QString clipboard_before_tree_copy = QGuiApplication::clipboard()->text();
+    QVERIFY(!view_model->copySelectionToClipboard().value(QStringLiteral("valid")).toBool());
+    QCOMPARE(QGuiApplication::clipboard()->text(), clipboard_before_tree_copy);
     QCOMPARE(view_model->documentGeneration(), QStringLiteral("0"));
 
     QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, start_window.toPoint());
@@ -2768,5 +2922,257 @@ void ShellDocumentInteractionTest::interactionResponseErrorsRefreshAutoSaveDeadl
     QCOMPARE(invalid.value(QStringLiteral("error")).toString(),
              QStringLiteral("error:layout.test_failure"));
     QVERIFY(caret::LayoutViewModelTestProbe::autoSaveTimerActive(view_model));
+}
+
+void ShellDocumentInteractionTest::richClipboardCopyPreservesMathStructure() {
+    QString error;
+    QVERIFY2(installClipboardDocumentRuntime(QByteArray(kRichClipboardDocument), &error),
+             qPrintable(error));
+    caret::LayoutViewModel view_model;
+    QVERIFY2(view_model.error().isEmpty(), qPrintable(view_model.error()));
+    QCOMPARE(view_model.documentGeneration(), QStringLiteral("0"));
+
+    // 正文文本 + InlineMath 选区复制：同一 Rust 复制同时产出专用 MIME 与 TeX 纯文本回退。
+    QGuiApplication::clipboard()->clear();
+    QVERIFY(select_document_paragraph_range(view_model, QStringLiteral("paragraph-one"), 0,
+                                            QStringLiteral("paragraph-one"), 16));
+    const QVariantMap copy = view_model.copySelectionToClipboard();
+    QVERIFY2(copy.value(QStringLiteral("valid")).toBool(),
+             qPrintable(copy.value(QStringLiteral("error")).toString()));
+    const QMimeData* mime = QGuiApplication::clipboard()->mimeData();
+    if (mime == nullptr)
+        QFAIL("clipboard must expose the copied MIME data");
+    QVERIFY(mime->hasFormat(clipboard_fragment_mime_name()));
+    const QString plain_text = mime->text();
+    QVERIFY(!plain_text.isEmpty());
+    QVERIFY(!plain_text.contains(QChar(0xFFFC)));
+    QVERIFY(plain_text.contains(QStringLiteral("before")));
+    QVERIFY(plain_text.contains(QStringLiteral("after")));
+    QVERIFY(plain_text.contains(QStringLiteral("\\(")));
+    QVERIFY(plain_text.contains(QStringLiteral("x")));
+
+    const QJsonObject envelope =
+        QJsonDocument::fromJson(mime->data(clipboard_fragment_mime_name())).object();
+    QCOMPARE(envelope.value(QStringLiteral("format")).toString(), QStringLiteral("caret.fragment"));
+    QCOMPARE(envelope.value(QStringLiteral("version")).toInt(), 1);
+    QCOMPARE(envelope.value(QStringLiteral("shape")).toString(), QStringLiteral("inline"));
+    const QJsonArray blocks = envelope.value(QStringLiteral("blocks")).toArray();
+    QCOMPARE(blocks.size(), 1);
+    bool inline_math_copied = false;
+    for (const QJsonValue value :
+         blocks.first().toObject().value(QStringLiteral("inlines")).toArray()) {
+        const QJsonObject inline_object = value.toObject();
+        if (inline_object.value(QStringLiteral("type")).toString() ==
+                QStringLiteral("inlineMath") &&
+            inline_object.value(QStringLiteral("mathTree"))
+                    .toObject()
+                    .value(QStringLiteral("schemaVersion"))
+                    .toInt() == 3) {
+            inline_math_copied = true;
+        }
+    }
+    QVERIFY(inline_math_copied);
+
+    // 跨段落 Blocks 片段保留 Equation/Align，text/plain 用规范 TeX 定界符且不含 U+FFFC。
+    QVERIFY(select_document_paragraph_range(view_model, QStringLiteral("paragraph-one"), 0,
+                                            QStringLiteral("paragraph-two"), 4));
+    const QVariantMap blocks_copy = view_model.copySelectionToClipboard();
+    QVERIFY2(blocks_copy.value(QStringLiteral("valid")).toBool(),
+             qPrintable(blocks_copy.value(QStringLiteral("error")).toString()));
+    const QMimeData* blocks_mime = QGuiApplication::clipboard()->mimeData();
+    QVERIFY(blocks_mime->hasFormat(clipboard_fragment_mime_name()));
+    const QJsonObject blocks_envelope =
+        QJsonDocument::fromJson(blocks_mime->data(clipboard_fragment_mime_name())).object();
+    QCOMPARE(blocks_envelope.value(QStringLiteral("shape")).toString(), QStringLiteral("blocks"));
+    const QString blocks_text = blocks_mime->text();
+    QVERIFY(blocks_text.contains(QStringLiteral("\\[")));
+    QVERIFY(blocks_text.contains(QStringLiteral("aligned")));
+    QVERIFY(!blocks_text.contains(QChar(0xFFFC)));
+}
+
+void ShellDocumentInteractionTest::richClipboardPasteRoundTripsMathStructureAndUndo() {
+    QString error;
+    QVERIFY2(installClipboardDocumentRuntime(QByteArray(kRichClipboardDocument), &error),
+             qPrintable(error));
+    caret::LayoutViewModel view_model;
+    QVERIFY2(view_model.error().isEmpty(), qPrintable(view_model.error()));
+
+    QGuiApplication::clipboard()->clear();
+    QVERIFY(select_document_paragraph_range(view_model, QStringLiteral("paragraph-one"), 0,
+                                            QStringLiteral("paragraph-one"), 16));
+    QVERIFY2(view_model.copySelectionToClipboard().value(QStringLiteral("valid")).toBool(),
+             "复制正文与 InlineMath 选区失败");
+    QVERIFY(select_document_paragraph_range(view_model, QStringLiteral("paragraph-two"), 4,
+                                            QStringLiteral("paragraph-two"), 4));
+    const QVariantMap paste = view_model.pasteFromClipboard();
+    QVERIFY2(paste.value(QStringLiteral("valid")).toBool(),
+             qPrintable(paste.value(QStringLiteral("error")).toString()));
+    QCOMPARE(view_model.documentGeneration(), QStringLiteral("1"));
+    QCOMPARE(paragraph_text_by_id(view_model, QStringLiteral("paragraph-two")),
+             QStringLiteral("tailbefore ") + QChar(0xFFFC) + QStringLiteral(" after"));
+
+    // 粘贴后的 InlineMath 仍在片段中携带完整 MathTree，可再次往返。
+    QGuiApplication::clipboard()->clear();
+    QVERIFY(select_document_paragraph_range(view_model, QStringLiteral("paragraph-two"), 0,
+                                            QStringLiteral("paragraph-two"), 20));
+    QVERIFY(view_model.copySelectionToClipboard().value(QStringLiteral("valid")).toBool());
+    const QMimeData* mime = QGuiApplication::clipboard()->mimeData();
+    QVERIFY(mime->hasFormat(clipboard_fragment_mime_name()));
+    const QJsonObject envelope =
+        QJsonDocument::fromJson(mime->data(clipboard_fragment_mime_name())).object();
+    QVERIFY(QJsonDocument(envelope).toJson().contains("mathTree"));
+    QVERIFY(mime->text().contains(QStringLiteral("\\(")));
+    QVERIFY(!mime->text().contains(QChar(0xFFFC)));
+
+    const QVariantMap undo = view_model.undo();
+    QVERIFY2(undo.value(QStringLiteral("valid")).toBool(),
+             qPrintable(undo.value(QStringLiteral("error")).toString()));
+    QCOMPARE(view_model.documentGeneration(), QStringLiteral("2"));
+    QCOMPARE(paragraph_text_by_id(view_model, QStringLiteral("paragraph-two")),
+             QStringLiteral("tail"));
+    QVERIFY(view_model.canRedo());
+}
+
+void ShellDocumentInteractionTest::richClipboardRejectsInvalidFragmentPayload() {
+    QString error;
+    QVERIFY2(installClipboardDocumentRuntime(QByteArray(kRichClipboardDocument), &error),
+             qPrintable(error));
+    caret::LayoutViewModel view_model;
+    QVERIFY2(view_model.error().isEmpty(), qPrintable(view_model.error()));
+    const QString paragraph_one = paragraph_text_by_id(view_model, QStringLiteral("paragraph-one"));
+    const QString paragraph_two = paragraph_text_by_id(view_model, QStringLiteral("paragraph-two"));
+
+    // 未知版本且同时带安全的 text/plain：必须整次拒绝，不得降级插入纯文本。
+    set_clipboard_fragment_payload(
+        QByteArrayLiteral(R"({"format":"caret.fragment","version":99,"shape":"inline",)"
+                          R"("startClipped":false,"endClipped":false,"blocks":[]})"),
+        QStringLiteral("plain fallback"));
+    const QVariantMap unknown_version = view_model.pasteFromClipboard();
+    QVERIFY(!unknown_version.value(QStringLiteral("valid")).toBool());
+    QVERIFY2(unknown_version.value(QStringLiteral("error"))
+                 .toString()
+                 .contains(QStringLiteral("clipboard.invalid_fragment")),
+             qPrintable(unknown_version.value(QStringLiteral("error")).toString()));
+    QCOMPARE(view_model.documentGeneration(), QStringLiteral("0"));
+    QCOMPARE(paragraph_text_by_id(view_model, QStringLiteral("paragraph-one")), paragraph_one);
+    QCOMPARE(paragraph_text_by_id(view_model, QStringLiteral("paragraph-two")), paragraph_two);
+    QVERIFY(!paragraph_text_by_id(view_model, QStringLiteral("paragraph-two"))
+                 .contains(QStringLiteral("plain")));
+    // 失败不覆盖系统剪贴板中的源载荷。
+    QVERIFY(QGuiApplication::clipboard()->mimeData()->hasFormat(clipboard_fragment_mime_name()));
+    QCOMPARE(QGuiApplication::clipboard()->text(), QStringLiteral("plain fallback"));
+
+    // 损坏 JSON 同样拒绝且保持文档状态。
+    set_clipboard_fragment_payload(QByteArrayLiteral("{not-json"),
+                                   QStringLiteral("plain fallback"));
+    const QVariantMap corrupt = view_model.pasteFromClipboard();
+    QVERIFY(!corrupt.value(QStringLiteral("valid")).toBool());
+    QVERIFY(corrupt.value(QStringLiteral("error"))
+                .toString()
+                .contains(QStringLiteral("clipboard.invalid_fragment")));
+    QCOMPARE(view_model.documentGeneration(), QStringLiteral("0"));
+    QCOMPARE(paragraph_text_by_id(view_model, QStringLiteral("paragraph-two")), paragraph_two);
+
+    // 非 UTF-8 片段字节必须返回错误而不是让 cxx 字符串转换抛异常退出进程。
+    set_clipboard_fragment_payload(QByteArray::fromHex("fffe"), QStringLiteral("plain fallback"));
+    const QVariantMap non_utf8 = view_model.pasteFromClipboard();
+    QVERIFY(!non_utf8.value(QStringLiteral("valid")).toBool());
+    QVERIFY2(non_utf8.value(QStringLiteral("error"))
+                 .toString()
+                 .contains(QStringLiteral("clipboard.invalid_fragment")),
+             qPrintable(non_utf8.value(QStringLiteral("error")).toString()));
+    QCOMPARE(view_model.documentGeneration(), QStringLiteral("0"));
+    QCOMPARE(paragraph_text_by_id(view_model, QStringLiteral("paragraph-two")), paragraph_two);
+}
+
+void ShellDocumentInteractionTest::externalMathTextPasteRecognizesDelimiters() {
+    const auto prepare_caret = [](caret::LayoutViewModel& view_model) {
+        const QVariantMap hit_map = view_model.dragHitMap(0);
+        const QVariantMap caret = findBodyDragStop(hit_map, QStringLiteral("paragraph-two"), 4);
+        if (caret.isEmpty())
+            return false;
+        return view_model.setSelection(caret, caret).value(QStringLiteral("valid")).toBool();
+    };
+    const auto install_fixture = [](QString* error) {
+        return installClipboardDocumentRuntime(QByteArray(kRichClipboardDocument), error);
+    };
+
+    // 混合文本中的闭合 \(...\)：插入 InlineMath，而不是普通文本。
+    {
+        QString error;
+        QVERIFY2(install_fixture(&error), qPrintable(error));
+        caret::LayoutViewModel view_model;
+        QVERIFY(prepare_caret(view_model));
+        QGuiApplication::clipboard()->setText(QStringLiteral("before \\(x\\) after"));
+        const QVariantMap paste = view_model.pasteFromClipboard();
+        QVERIFY2(paste.value(QStringLiteral("valid")).toBool(),
+                 qPrintable(paste.value(QStringLiteral("error")).toString()));
+        QCOMPARE(view_model.documentGeneration(), QStringLiteral("1"));
+        QCOMPARE(paragraph_text_by_id(view_model, QStringLiteral("paragraph-two")),
+                 QStringLiteral("tailbefore ") + QChar(0xFFFC) + QStringLiteral(" after"));
+    }
+
+    // 整段 \[...\]：构造 Equation 块，显示公式片段增加一个。
+    {
+        QString error;
+        QVERIFY2(install_fixture(&error), qPrintable(error));
+        caret::LayoutViewModel view_model;
+        const qsizetype math_blocks_before = math_fragment_count(view_model);
+        QCOMPARE(math_blocks_before, 2);
+        QVERIFY(prepare_caret(view_model));
+        QGuiApplication::clipboard()->setText(QStringLiteral("\\[y\\]"));
+        const QVariantMap paste = view_model.pasteFromClipboard();
+        QVERIFY2(paste.value(QStringLiteral("valid")).toBool(),
+                 qPrintable(paste.value(QStringLiteral("error")).toString()));
+        QCOMPARE(view_model.documentGeneration(), QStringLiteral("1"));
+        QCOMPARE(math_fragment_count(view_model), math_blocks_before + 1);
+    }
+
+    // 整段 aligned 公式：构造 Align 块。
+    {
+        QString error;
+        QVERIFY2(install_fixture(&error), qPrintable(error));
+        caret::LayoutViewModel view_model;
+        const qsizetype math_blocks_before = math_fragment_count(view_model);
+        QVERIFY(prepare_caret(view_model));
+        QGuiApplication::clipboard()->setText(
+            QStringLiteral("\\[\\begin{aligned}a&=b\\end{aligned}\\]"));
+        const QVariantMap paste = view_model.pasteFromClipboard();
+        QVERIFY2(paste.value(QStringLiteral("valid")).toBool(),
+                 qPrintable(paste.value(QStringLiteral("error")).toString()));
+        QCOMPARE(math_fragment_count(view_model), math_blocks_before + 1);
+    }
+
+    // 整段 $...$：仅当占据全部文本时识别为 InlineMath。
+    {
+        QString error;
+        QVERIFY2(install_fixture(&error), qPrintable(error));
+        caret::LayoutViewModel view_model;
+        QVERIFY(prepare_caret(view_model));
+        QGuiApplication::clipboard()->setText(QStringLiteral("$x$"));
+        const QVariantMap paste = view_model.pasteFromClipboard();
+        QVERIFY2(paste.value(QStringLiteral("valid")).toBool(),
+                 qPrintable(paste.value(QStringLiteral("error")).toString()));
+        QCOMPARE(replacement_char_count(
+                     paragraph_text_by_id(view_model, QStringLiteral("paragraph-two"))),
+                 1);
+    }
+
+    // 未闭合 \(...\)：整段按普通文本插入，不产生 InlineMath。
+    {
+        QString error;
+        QVERIFY2(install_fixture(&error), qPrintable(error));
+        caret::LayoutViewModel view_model;
+        const qsizetype math_blocks_before = math_fragment_count(view_model);
+        QVERIFY(prepare_caret(view_model));
+        QGuiApplication::clipboard()->setText(QStringLiteral("unclosed \\(x"));
+        const QVariantMap paste = view_model.pasteFromClipboard();
+        QVERIFY2(paste.value(QStringLiteral("valid")).toBool(),
+                 qPrintable(paste.value(QStringLiteral("error")).toString()));
+        const QString text = paragraph_text_by_id(view_model, QStringLiteral("paragraph-two"));
+        QCOMPARE(text, QStringLiteral("tailunclosed \\(x"));
+        QCOMPARE(replacement_char_count(text), 0);
+        QCOMPARE(math_fragment_count(view_model), math_blocks_before);
+    }
 }
 #endif

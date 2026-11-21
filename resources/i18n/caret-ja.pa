@@ -90,6 +90,26 @@ message_125:
   tr: 設定を保存できませんでした。
   st: finished
 
+message_126:
+  src: The clipboard contains an invalid or unsupported Caret fragment.
+  tr: クリップボードの内容が無効な Caret フラグメントか、サポートされていないバージョンです。
+  st: finished
+
+message_127:
+  src: The clipboard content cannot be inserted at the current position.
+  tr: クリップボードの内容は現在の位置に挿入できません。
+  st: finished
+
+message_128:
+  src: The selected math cannot be copied without losing formatting.
+  tr: 選択した数式は書式を失わずにコピーできません。
+  st: finished
+
+message_129:
+  src: The clipboard operation could not be completed.
+  tr: クリップボード操作を完了できませんでした。
+  st: finished
+
 [DialogAction]
 message_012:
   src: OK

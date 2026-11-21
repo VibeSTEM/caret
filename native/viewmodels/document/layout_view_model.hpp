@@ -172,9 +172,9 @@ class LayoutViewModel final : public QObject {
     Q_INVOKABLE QVariantMap setSelection(const QVariantMap& anchor, const QVariantMap& focus);
     /// 清除选区并保留现有焦点位置。
     Q_INVOKABLE QVariantMap clearSelection();
-    /// 将 Rust 生成的选区纯文本复制到系统剪贴板。
+    /// 将 Rust 生成的 Caret 片段与纯文本回退写入系统剪贴板；空选区不覆盖剪贴板。
     Q_INVOKABLE QVariantMap copySelectionToClipboard();
-    /// 将系统剪贴板文本作为一次 Rust 插入/替换命令粘贴。
+    /// 读取系统剪贴板的 Caret 片段或纯文本，作为一次 Rust 粘贴事务提交。
     Q_INVOKABLE QVariantMap pasteFromClipboard();
     /// 在后台读取 `.cdoc`，再由 Rust 在 GUI 线程验证并安装新会话。
     Q_INVOKABLE QVariantMap openDocument(const QString& path);

@@ -7,11 +7,16 @@
 // 署名：Yuki Lu
 
 mod document_units;
+mod fragment;
 mod model;
 mod page_geometry;
 mod storage_format;
 
 pub use document_units::DocumentUnits;
+pub use fragment::{
+    ClipboardFragment, ClipboardFragmentShape, clipboard_fragment_contains_id,
+    decode_clipboard_fragment_json, encode_clipboard_fragment_json, regenerate_clipboard_ids,
+};
 pub use model::{
     Align, Block, BlockEnvironment, BlockEnvironmentKind, DEFAULT_FONT_FAMILY,
     DEFAULT_MATH_MATRIX_STYLE, Document, DocumentFontTarget, DocumentSettings, Equation,

@@ -133,6 +133,10 @@ pub enum Command {
     InsertOneCharacterWidthSpace,
     InsertTwoCharacterWidthSpace,
     PasteText(String),
+    /// 粘贴已解码的 Caret 结构片段；剪贴板 MIME 读写由 app/FFI 层负责。
+    PasteClipboardFragment(Box<caret_doc::ClipboardFragment>),
+    /// 粘贴外部纯文本；由引擎识别闭合数学片段后按普通文本或公式插入。
+    PasteExternalClipboardText(String),
     InsertSoftBreak,
     /// 以 LaTeX 源文本在插入点放入一个原子行内公式。
     InsertInlineMath(String),
@@ -202,6 +206,8 @@ impl Command {
                 command_ids::TEXT_INSERT_TWO_CHARACTER_WIDTH_SPACE
             }
             Self::PasteText(_) => "clipboard.paste",
+            Self::PasteClipboardFragment(_) => "clipboard.paste_fragment",
+            Self::PasteExternalClipboardText(_) => "clipboard.paste_external",
             Self::InsertSoftBreak => command_ids::TEXT_SOFT_BREAK,
             Self::InsertInlineMath(_) => command_ids::INSERT_INLINE_MATH,
             Self::EnterMath(_) => "math.enter",

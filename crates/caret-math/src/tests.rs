@@ -1,4 +1,4 @@
-//! 解析器与序列化器的行为测试。
+//! 数学解析、序列化与剪贴板辅助的行为测试。
 //
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
@@ -13,8 +13,10 @@ use serde_json::{Value, json};
 
 use crate::{
     MAX_MATH_SOURCE_BYTES, MathFragment, MathFragmentError, MathInputKind, MathInputStatus,
-    MathLossReason, MathParseError, ParsedMath, ProjectedMath, classify_input,
-    input_body_range_for_edit, is_incomplete_input_prefix, parse, serialize_align, serialize_tree,
+    MathLossReason, MathParseError, ParsedMath, PlainTextMathScan, PlainTextMathSegment,
+    PlainTextMathSpan, ProjectedMath, classify_input, input_body_range_for_edit,
+    is_incomplete_input_prefix, parse, scan_plain_text_math, serialize_align, serialize_tree,
+    wrap_tex,
 };
 
 /// 去掉 ID 和源范围后的结构描述，用于比较往返结果。
@@ -2647,4 +2649,298 @@ fn math_fragment_loss_does_not_mutate_the_model() {
     let before = fragment.clone();
     assert!(fragment.to_tex().is_err());
     assert_eq!(fragment, before);
+}
+
+fn canonical_tex(source: &str, kind: MathInputKind) -> String {
+    let fragment = match MathFragment::parse(source, kind) {
+        Ok(fragment) => fragment,
+        Err(error) => panic!("{source:?} should parse as {kind:?}: {error}"),
+    };
+    fragment_tex(&fragment)
+}
+
+fn fragment_tex(fragment: &MathFragment) -> String {
+    match fragment.to_tex() {
+        Ok(tex) => tex,
+        Err(error) => panic!("fragment should serialize: {error}"),
+    }
+}
+
+fn whole_display(scan: PlainTextMathScan) -> MathFragment {
+    match scan {
+        PlainTextMathScan::WholeDisplay(fragment) => fragment,
+        other => panic!("expected whole display math, got {other:?}"),
+    }
+}
+
+fn whole_inline(scan: PlainTextMathScan) -> MathFragment {
+    match scan {
+        PlainTextMathScan::WholeInline(fragment) => fragment,
+        other => panic!("expected whole inline math, got {other:?}"),
+    }
+}
+
+fn mixed_inline(scan: PlainTextMathScan) -> Vec<PlainTextMathSegment> {
+    match scan {
+        PlainTextMathScan::MixedInline(segments) => segments,
+        other => panic!("expected mixed inline math, got {other:?}"),
+    }
+}
+
+fn text_segment(segment: &PlainTextMathSegment) -> &str {
+    match segment {
+        PlainTextMathSegment::Text(text) => text,
+        other => panic!("expected text segment, got {other:?}"),
+    }
+}
+
+fn math_segment(segment: &PlainTextMathSegment) -> &PlainTextMathSpan {
+    match segment {
+        PlainTextMathSegment::Math(span) => span,
+        other => panic!("expected math segment, got {other:?}"),
+    }
+}
+
+#[test]
+fn clipboard_wrap_tex_uses_host_delimiters() {
+    assert_eq!(wrap_tex("x^2", MathInputKind::Inline), r"\(x^2\)");
+    assert_eq!(wrap_tex("x^2", MathInputKind::Equation), r"\[x^2\]");
+    let aligned = r"\begin{aligned}a &= b\end{aligned}";
+    assert_eq!(
+        wrap_tex(aligned, MathInputKind::Align),
+        format!(r"\[{aligned}\]")
+    );
+    assert_eq!(wrap_tex("", MathInputKind::Inline), r"\(\)");
+    assert_eq!(wrap_tex("", MathInputKind::Align), r"\[\]");
+}
+
+#[test]
+fn clipboard_scan_recognizes_whole_display_equation() {
+    for text in [r"\[x\]", r"$$x$$", "  \\[x\\]  ", "  $$x$$  "] {
+        let fragment = whole_display(scan_plain_text_math(text));
+        assert_eq!(fragment.kind(), MathInputKind::Equation, "{text:?}");
+        assert_eq!(
+            fragment_tex(&fragment),
+            canonical_tex("x", MathInputKind::Equation),
+            "{text:?}"
+        );
+    }
+}
+
+#[test]
+fn clipboard_scan_recognizes_whole_display_align() {
+    for text in [
+        r"\[\begin{aligned}a &= b \\ c &= d\end{aligned}\]",
+        r"$$\begin{aligned}a &= b \\ c &= d\end{aligned}$$",
+        r"  \[\begin{aligned}a &= b \\ c &= d\end{aligned}\]  ",
+    ] {
+        let fragment = whole_display(scan_plain_text_math(text));
+        assert_eq!(fragment.kind(), MathInputKind::Align, "{text:?}");
+        assert!(matches!(fragment.math(), ParsedMath::Align(_)), "{text:?}");
+        assert_eq!(
+            fragment_tex(&fragment),
+            canonical_tex(
+                r"\begin{aligned}a &= b \\ c &= d\end{aligned}",
+                MathInputKind::Align
+            ),
+            "{text:?}"
+        );
+    }
+}
+
+#[test]
+fn clipboard_scan_recognizes_whole_inline_math() {
+    for text in [r"$x$", r"\(x\)", "  $x$  ", "  \\(x\\)  "] {
+        let fragment = whole_inline(scan_plain_text_math(text));
+        assert_eq!(fragment.kind(), MathInputKind::Inline, "{text:?}");
+        assert_eq!(
+            fragment_tex(&fragment),
+            canonical_tex("x", MathInputKind::Inline),
+            "{text:?}"
+        );
+    }
+}
+
+#[test]
+fn clipboard_scan_splits_mixed_inline_math_with_byte_ranges() {
+    let text = "before \\(x\\) after";
+    let segments = mixed_inline(scan_plain_text_math(text));
+    assert_eq!(segments.len(), 3);
+    assert_eq!(text_segment(&segments[0]), "before ");
+    let span = math_segment(&segments[1]);
+    assert_eq!(span.kind, MathInputKind::Inline);
+    assert_eq!((span.start, span.end), (7, 12));
+    assert_eq!(&text[span.start..span.end], r"\(x\)");
+    assert_eq!(
+        fragment_tex(&span.fragment),
+        canonical_tex("x", MathInputKind::Inline)
+    );
+    assert_eq!(text_segment(&segments[2]), " after");
+}
+
+#[test]
+fn clipboard_scan_mixed_inline_uses_utf8_byte_offsets() {
+    let text = "前\\(α\\)后\\(β^2\\)尾";
+    let segments = mixed_inline(scan_plain_text_math(text));
+    assert_eq!(segments.len(), 5);
+    assert_eq!(text_segment(&segments[0]), "前");
+    let first = math_segment(&segments[1]);
+    assert_eq!((first.start, first.end), (3, 9));
+    assert_eq!(&text[first.start..first.end], r"\(α\)");
+    assert_eq!(text_segment(&segments[2]), "后");
+    let second = math_segment(&segments[3]);
+    assert_eq!((second.start, second.end), (12, 20));
+    assert_eq!(&text[second.start..second.end], r"\(β^2\)");
+    assert_eq!(
+        fragment_tex(&first.fragment),
+        canonical_tex("α", MathInputKind::Inline)
+    );
+    assert_eq!(
+        fragment_tex(&second.fragment),
+        canonical_tex("β^2", MathInputKind::Inline)
+    );
+    assert_eq!(text_segment(&segments[4]), "尾");
+}
+
+#[test]
+fn clipboard_scan_mixed_inline_preserves_surrounding_whitespace() {
+    let text = " \\(x\\) y ";
+    let segments = mixed_inline(scan_plain_text_math(text));
+    assert_eq!(segments.len(), 3);
+    assert_eq!(text_segment(&segments[0]), " ");
+    let span = math_segment(&segments[1]);
+    assert_eq!((span.start, span.end), (1, 6));
+    assert_eq!(text_segment(&segments[2]), " y ");
+}
+
+#[test]
+fn clipboard_scan_handles_adjacent_inline_spans() {
+    let text = r"\(a\)\(b\)";
+    let segments = mixed_inline(scan_plain_text_math(text));
+    assert_eq!(segments.len(), 2);
+    assert_eq!(
+        (
+            math_segment(&segments[0]).start,
+            math_segment(&segments[0]).end
+        ),
+        (0, 5)
+    );
+    assert_eq!(
+        (
+            math_segment(&segments[1]).start,
+            math_segment(&segments[1]).end
+        ),
+        (5, 10)
+    );
+    assert_eq!(
+        fragment_tex(&math_segment(&segments[0]).fragment),
+        canonical_tex("a", MathInputKind::Inline)
+    );
+    assert_eq!(
+        fragment_tex(&math_segment(&segments[1]).fragment),
+        canonical_tex("b", MathInputKind::Inline)
+    );
+}
+
+#[test]
+fn clipboard_scan_keeps_plain_text_without_math() {
+    for text in [
+        "",
+        "   ",
+        "text",
+        "$5 and $6",
+        "$x$ extra",
+        r"\[x",
+        r"\[x\] tail",
+        r"\(x",
+        r"a \) b",
+        r"\[x\] \[y\]",
+    ] {
+        assert_eq!(
+            scan_plain_text_math(text),
+            PlainTextMathScan::Plain,
+            "{text:?}"
+        );
+    }
+}
+
+#[test]
+fn clipboard_scan_ignores_escaped_inline_delimiters() {
+    for text in [r"before \\(x\\) after", r"\\(x\\)"] {
+        assert_eq!(
+            scan_plain_text_math(text),
+            PlainTextMathScan::Plain,
+            "{text:?}"
+        );
+    }
+}
+
+#[test]
+fn clipboard_scan_falls_back_when_display_math_is_invalid() {
+    for text in [
+        r"\[\frac{a\]",
+        r"$$x}y$$",
+        r"\[\begin{unknown}a\end{unknown}\]",
+        r"\[\left( x\]",
+    ] {
+        assert_eq!(
+            scan_plain_text_math(text),
+            PlainTextMathScan::Plain,
+            "{text:?}"
+        );
+    }
+}
+
+#[test]
+fn clipboard_scan_falls_back_when_inline_math_is_invalid() {
+    for text in [r"\(x}y\)", r"$x}y$"] {
+        assert_eq!(
+            scan_plain_text_math(text),
+            PlainTextMathScan::Plain,
+            "{text:?}"
+        );
+    }
+}
+
+#[test]
+fn clipboard_scan_mixed_failure_falls_back_without_partial_math() {
+    for text in [
+        r"before \(x\) after \(y",
+        r"before \(x}y\) after",
+        r"before \(x\) after \)",
+    ] {
+        assert_eq!(
+            scan_plain_text_math(text),
+            PlainTextMathScan::Plain,
+            "{text:?}"
+        );
+    }
+}
+
+#[test]
+fn clipboard_scan_falls_back_when_math_exceeds_source_budget() {
+    let oversized = "x".repeat(MAX_MATH_SOURCE_BYTES + 1);
+    assert_eq!(
+        scan_plain_text_math(&format!(r"\[{oversized}\]")),
+        PlainTextMathScan::Plain
+    );
+    assert_eq!(
+        scan_plain_text_math(&format!(r"\({oversized}\)")),
+        PlainTextMathScan::Plain
+    );
+    assert_eq!(
+        scan_plain_text_math(&format!(r"before \(a\) after \({oversized}\)")),
+        PlainTextMathScan::Plain
+    );
+}
+
+#[test]
+fn clipboard_scan_dollar_math_only_matches_whole_text() {
+    assert_eq!(scan_plain_text_math("$5 and $6"), PlainTextMathScan::Plain);
+    let text = "price $5 and \\(x\\)";
+    let segments = mixed_inline(scan_plain_text_math(text));
+    assert_eq!(segments.len(), 2);
+    assert_eq!(text_segment(&segments[0]), "price $5 and ");
+    let span = math_segment(&segments[1]);
+    assert_eq!(&text[span.start..span.end], r"\(x\)");
 }

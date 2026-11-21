@@ -6,9 +6,11 @@
 mod block_rows;
 mod checkpoint;
 mod clipboard;
+mod clipboard_fragment;
 mod command_line;
 mod composition;
 pub use checkpoint::SessionCheckpoint;
+pub use clipboard_fragment::ClipboardCopy;
 pub use composition::{CompositionRange, CompositionUpdateCandidate};
 mod current_environment;
 mod document_position;
@@ -1004,6 +1006,27 @@ impl Session {
         if matches!(command, Command::Undo | Command::Redo) {
             return self.handle_history_command(command == Command::Redo);
         }
+        // 剪贴板粘贴命令在此转换为自身事务；外部纯文本无数学片段时回退到既有
+        // 普通文本粘贴路径，继续共享结构选区消费与历史补丁。
+        let command = match command {
+            Command::PasteClipboardFragment(fragment) => {
+                return self.execute_paste_clipboard_fragment(*fragment);
+            }
+            Command::PasteExternalClipboardText(text) => {
+                match self.plan_external_clipboard_text(&text)? {
+                    clipboard_fragment::ExternalClipboardPlan::PlainText => {
+                        Command::PasteText(text)
+                    }
+                    clipboard_fragment::ExternalClipboardPlan::ReplaceInline(nodes) => {
+                        return self.replace_selection_with_inline_content(nodes);
+                    }
+                    clipboard_fragment::ExternalClipboardPlan::InsertDisplay(math) => {
+                        return self.insert_external_display_math(math);
+                    }
+                }
+            }
+            command => command,
+        };
         // 结构选区必须先按范围事务整体消费；相邻空段落的公式邻接特例只在没有结构范围时成立。
         if matches!(&command, Command::Delete(Direction::Backward))
             && self.math_edit.is_none()
@@ -1375,6 +1398,9 @@ impl Session {
             Command::InsertOneCharacterWidthSpace => self.insert_text("\u{2003}"),
             Command::InsertTwoCharacterWidthSpace => self.insert_text("\u{2003}\u{2003}"),
             Command::PasteText(text) => self.paste_text(&text),
+            Command::PasteClipboardFragment(_) | Command::PasteExternalClipboardText(_) => {
+                unreachable!("clipboard paste commands are resolved before editing dispatch")
+            }
             Command::InsertSoftBreak => self.insert_soft_break(),
             Command::InsertInlineMath(source) => {
                 self.insert_inline_math_with_edit_target(&source, focus_inserted_inline_math)

@@ -1117,6 +1117,33 @@ impl DocumentViewRuntime {
         serde_json::to_string(&serde_json::json!({ "text": text }))
             .map_err(|error| format!("clipboard.serialize: {error}"))
     }
+
+    /// 生成系统剪贴板的双格式 JSON 载荷：Caret 片段信封与纯文本回退。
+    ///
+    /// `fragment` 为 null 只表示空选区；选区端点落在公式内部等无法构造完整片段的
+    /// 情况按错误返回，由调用方保留原系统剪贴板，不降级为纯文本。
+    pub fn copy_clipboard_json(&mut self) -> Result<String, String> {
+        let copy = self.session.copy_clipboard_fragment().map_err(|error| {
+            let message = error.to_string();
+            if message.starts_with("clipboard.") {
+                message
+            } else {
+                format!("clipboard.copy: {message}")
+            }
+        })?;
+        let (fragment, text) = match copy {
+            None => (serde_json::Value::Null, String::new()),
+            Some(copy) => (
+                serde_json::Value::String(
+                    caret_doc::encode_clipboard_fragment_json(&copy.fragment)
+                        .map_err(|error| format!("clipboard.copy: {error}"))?,
+                ),
+                copy.plain_text,
+            ),
+        };
+        serde_json::to_string(&serde_json::json!({ "fragment": fragment, "text": text }))
+            .map_err(|error| format!("clipboard.serialize: {error}"))
+    }
 }
 
 /// 正文拖选停靠点的去重身份：段落 ID、逻辑偏移、逻辑亲和性与视觉亲和性侧别。

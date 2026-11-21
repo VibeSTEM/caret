@@ -2,12 +2,13 @@
 
 use crate::document::{
     auto_save_deadline_fired, auto_save_deadline_json, auto_save_write_finished,
-    clear_selection_json, current_caret_json, delete_backward_json, document_hit_test_json,
-    document_save_snapshot, document_status_json, drag_hit_map_json, input_method_event_json,
-    insert_soft_break_json, insert_text_json, install_prepared_document, interaction_state_json,
-    layout_snapshot_json, mark_document_saved_json, move_to_visual_line_edge_json,
-    move_vertical_caret_json, move_visual_caret_json, new_blank_document_runtime, paste_text_json,
-    place_caret_at_page_json, prepare_document_file, rasterize_page_glyphs, selected_text_json,
+    clear_selection_json, clipboard_copy_json, clipboard_paste_json, current_caret_json,
+    delete_backward_json, document_hit_test_json, document_save_snapshot, document_status_json,
+    drag_hit_map_json, input_method_event_json, insert_soft_break_json, insert_text_json,
+    install_prepared_document, interaction_state_json, layout_snapshot_json,
+    mark_document_saved_json, move_to_visual_line_edge_json, move_vertical_caret_json,
+    move_visual_caret_json, new_blank_document_runtime, paste_text_json, place_caret_at_page_json,
+    prepare_document_file, rasterize_page_glyphs, selected_text_json,
     set_document_auto_save_enabled, set_selection_json, split_paragraph_json, write_document_file,
 };
 
@@ -203,6 +204,69 @@ fn ffi_navigation_selection_and_clipboard_forward_the_active_document() {
             .starts_with("error:selection.invalid_payload:")
     );
     assert_eq!(selected_text_json(&mut runtime), "{\"text\":\"a\"}");
+}
+
+#[test]
+fn ffi_clipboard_payload_round_trips_math_fragment_and_rejects_invalid_json() {
+    let mut runtime = new_blank_document_runtime();
+    assert_eq!(
+        clipboard_copy_json(&mut runtime),
+        "{\"fragment\":null,\"text\":\"\"}"
+    );
+
+    // 外部纯文本中的闭合行内公式进入 InlineMath；布局投影用对象替换符占位。
+    let pasted = clipboard_paste_json(
+        &mut runtime,
+        "before \\(x\\) after".to_owned(),
+        String::new(),
+    );
+    assert!(!pasted.starts_with("error:"), "{pasted}");
+    assert!(
+        pasted.contains("\"text\":\"before \u{fffc} after\""),
+        "{pasted}"
+    );
+
+    // 选区复制同时产出 Caret 片段信封和不含 U+FFFC 的 TeX 纯文本回退。
+    assert!(!move_to_visual_line_edge_json(&mut runtime, false, false).starts_with("error:"));
+    assert!(!move_to_visual_line_edge_json(&mut runtime, true, true).starts_with("error:"));
+    let copy_response = clipboard_copy_json(&mut runtime);
+    let Ok(copy) = serde_json::from_str::<serde_json::Value>(&copy_response) else {
+        panic!("clipboard copy must return a JSON payload: {copy_response}");
+    };
+    let Some(fragment) = copy["fragment"].as_str() else {
+        panic!("clipboard copy must contain a fragment envelope: {copy}");
+    };
+    assert!(
+        fragment.contains("\"format\":\"caret.fragment\""),
+        "{fragment}"
+    );
+    assert!(fragment.contains("inlineMath"), "{fragment}");
+    let Some(text) = copy["text"].as_str() else {
+        panic!("clipboard copy must contain plain text: {copy}");
+    };
+    assert_eq!(text, "before \\(x\\) after");
+    assert!(!text.contains('\u{fffc}'), "{text}");
+
+    // 片段粘贴原样保留 InlineMath，恰好推进一次 generation。
+    let generation_before = document_save_snapshot(&mut runtime).document_generation;
+    let pasted_fragment = clipboard_paste_json(&mut runtime, text.to_owned(), fragment.to_owned());
+    assert!(!pasted_fragment.starts_with("error:"), "{pasted_fragment}");
+    assert_eq!(
+        document_save_snapshot(&mut runtime).document_generation,
+        generation_before + 1
+    );
+    assert!(pasted_fragment.contains('\u{fffc}'), "{pasted_fragment}");
+
+    // 损坏的 Caret 载荷整次拒绝，不降级为 text/plain，也不推进 generation。
+    let invalid = clipboard_paste_json(&mut runtime, "plain".to_owned(), "{".to_owned());
+    assert!(
+        invalid.starts_with("error:clipboard.invalid_fragment:"),
+        "{invalid}"
+    );
+    assert_eq!(
+        document_save_snapshot(&mut runtime).document_generation,
+        generation_before + 1
+    );
 }
 
 #[test]

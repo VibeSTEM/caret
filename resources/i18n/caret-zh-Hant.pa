@@ -90,6 +90,26 @@ message_125:
   tr: 設定無法儲存。
   st: finished
 
+message_126:
+  src: The clipboard contains an invalid or unsupported Caret fragment.
+  tr: 剪貼板內容不是有效的 Caret 片段或版本不受支援。
+  st: finished
+
+message_127:
+  src: The clipboard content cannot be inserted at the current position.
+  tr: 剪貼板內容無法插入目前位置。
+  st: finished
+
+message_128:
+  src: The selected math cannot be copied without losing formatting.
+  tr: 選取的公式無法在不遺失格式的情況下複製。
+  st: finished
+
+message_129:
+  src: The clipboard operation could not be completed.
+  tr: 剪貼板操作未能完成。
+  st: finished
+
 [DialogAction]
 message_012:
   src: OK
