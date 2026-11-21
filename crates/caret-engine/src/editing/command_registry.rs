@@ -99,7 +99,7 @@ const CANDIDATES: &[RegisteredCandidate] = &[
         label: "Multiline equation",
         available: true,
     },
-    // 046 布局完成前不暴露表格入口：命令本身在 Session 已可用，但 	able
+    // 046 布局完成前不暴露表格入口：命令本身在 Session 已可用，但 \table
     // 候选与 native 键位保持禁用，避免插入不可见/不可排版的表格。
     RegisteredCandidate {
         alias: "\\table",
@@ -269,7 +269,7 @@ pub fn math_candidates() -> Vec<CommandCandidate> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CANDIDATES, MATH_CANDIDATES, MATH_INSERT_COMMAND_ID, math_candidates};
+    use super::{CANDIDATES, MATH_CANDIDATES, MATH_INSERT_COMMAND_ID, candidates, math_candidates};
     use std::collections::BTreeSet;
 
     #[test]
@@ -301,6 +301,22 @@ mod tests {
             .chain(MATH_CANDIDATES.iter().map(|(_, label, _)| *label))
             .collect::<BTreeSet<_>>();
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn table_command_is_registered_but_disabled_until_046() {
+        let table = candidates()
+            .into_iter()
+            .find(|candidate| candidate.alias == "\\table")
+            .unwrap_or_else(|| panic!("table candidate must be registered"));
+        assert_eq!(
+            table.command_id,
+            super::super::command::command_ids::INSERT_TABLE
+        );
+        assert!(
+            !table.available,
+            "table candidate stays disabled until 046 connects the canvas"
+        );
     }
 
     #[test]

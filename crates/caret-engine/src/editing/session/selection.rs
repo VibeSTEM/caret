@@ -178,8 +178,27 @@ impl Session {
                         first,
                     )?;
                 }
-                caret_doc::Block::Table(_) => {
-                    return Err(EditError::UnsupportedTableContent);
+                caret_doc::Block::Table(table) => {
+                    let covered = whole
+                        || match copy.bounds {
+                            Some(bounds) => {
+                                let Some(entry) = self.structure_index.get(&table.id) else {
+                                    return Err(EditError::UnsupportedTableContent);
+                                };
+                                let range = &entry.range.paragraph_ordinals;
+                                if range.start == range.end {
+                                    range.start >= bounds.start_ordinal
+                                        && range.start <= bounds.end_ordinal
+                                } else {
+                                    range.start <= bounds.end_ordinal
+                                        && range.end > bounds.start_ordinal
+                                }
+                            }
+                            None => true,
+                        };
+                    if covered {
+                        return Err(EditError::UnsupportedTableContent);
+                    }
                 }
                 caret_doc::Block::Equation(equation)
                     if whole || copy.math_blocks.contains(&equation.id) =>

@@ -850,20 +850,46 @@ pub(super) fn paragraph_at_location_mut<'a>(
 }
 
 pub(super) fn first_paragraph(blocks: &[Block]) -> Option<(&Paragraph, StoryId)> {
+    first_paragraph_with_cell(blocks, None)
+}
+
+/// 在块序列中找首个可编辑段落；单元格内段落使用 TableCell Story。
+fn first_paragraph_with_cell<'a>(
+    blocks: &'a [Block],
+    cell_story: Option<&StoryId>,
+) -> Option<(&'a Paragraph, StoryId)> {
     for block in blocks {
         match block {
-            Block::Paragraph(paragraph) => return Some((paragraph, StoryId::Body)),
+            Block::Paragraph(paragraph) => {
+                return Some((paragraph, cell_story.cloned().unwrap_or(StoryId::Body)));
+            }
             Block::Environment(environment) => {
                 if let Some(title) = &environment.title {
                     return Some((title, StoryId::EnvironmentTitle(environment.id.clone())));
                 }
-                if let Some(paragraph) = first_paragraph(&environment.children) {
+                if let Some(paragraph) =
+                    first_paragraph_with_cell(&environment.children, cell_story)
+                {
                     return Some(paragraph);
                 }
             }
+            Block::Table(table) => {
+                for row in &table.rows {
+                    for cell in &row.cells {
+                        let story = StoryId::TableCell {
+                            table_id: table.id.clone(),
+                            row_id: row.id.clone(),
+                            cell_id: cell.id.clone(),
+                        };
+                        if let Some(paragraph) =
+                            first_paragraph_with_cell(&cell.blocks, Some(&story))
+                        {
+                            return Some(paragraph);
+                        }
+                    }
+                }
+            }
             Block::ExplicitBreak(_) | Block::Opaque(_) | Block::Equation(_) | Block::Align(_) => {}
-            // 表格内部首个段落由 045 的容器路径切片接入。
-            Block::Table(_) => {}
         }
     }
     None

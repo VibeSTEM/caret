@@ -2856,3 +2856,33 @@ fn table_cell_split_uses_the_shared_paragraph_transaction() {
     .unwrap_or_else(|| panic!("cell blocks must resolve"));
     assert_eq!(cell_blocks.len(), 3);
 }
+
+#[test]
+fn table_command_ids_are_stable() {
+    use crate::editing::command::command_ids;
+    use crate::editing::{Command, Direction};
+
+    for (command, expected) in [
+        (Command::InsertTable, command_ids::INSERT_TABLE),
+        (
+            Command::TableInsertRow(Direction::Backward),
+            command_ids::TABLE_INSERT_ROW_BEFORE,
+        ),
+        (
+            Command::TableInsertRow(Direction::Forward),
+            command_ids::TABLE_INSERT_ROW_AFTER,
+        ),
+        (Command::TableDeleteRow, command_ids::TABLE_DELETE_ROW),
+        (
+            Command::TableInsertColumn(Direction::Backward),
+            command_ids::TABLE_INSERT_COL_BEFORE,
+        ),
+        (
+            Command::TableInsertColumn(Direction::Forward),
+            command_ids::TABLE_INSERT_COL_AFTER,
+        ),
+        (Command::TableDeleteColumn, command_ids::TABLE_DELETE_COL),
+    ] {
+        assert_eq!(command.id(), expected);
+    }
+}

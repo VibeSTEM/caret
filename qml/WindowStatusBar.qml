@@ -24,7 +24,8 @@ Rectangle {
             "section": qsTranslate("WindowStatusBar", "Section"),
             "custom": qsTranslate("WindowStatusBar", "Custom environment"),
             "equation": qsTranslate("WindowStatusBar", "Equation"),
-            "align": qsTranslate("WindowStatusBar", "Align environment")
+            "align": qsTranslate("WindowStatusBar", "Align environment"),
+            "table": qsTranslate("WindowStatusBar", "Table")
         })
     readonly property string structureDescription: {
         const entries = LayoutViewModel.currentStructure;

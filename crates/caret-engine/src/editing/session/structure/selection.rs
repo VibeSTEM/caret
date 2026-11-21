@@ -1054,7 +1054,7 @@ fn find_inline_math_in_blocks_mut<'a>(
                     return Some(math);
                 }
             }
-            // 单元格内公式在 045 的 S2 容器路径切片接入。
+            // 单元格内公式定位随 046 的容器感知公式定位器接入。
             Block::Table(_)
             | Block::Equation(_)
             | Block::Align(_)

@@ -1583,7 +1583,7 @@ fn first_entry_in_blocks(blocks: &[Block]) -> Option<Pos> {
                     return Some(position);
                 }
             }
-            // 表格内部首个/末个位置由 045 的容器路径切片接入。
+            // 表格内部首个/末个位置随 046 的单元格导航接入。
             Block::Table(_)
             | Block::Equation(_)
             | Block::Align(_)

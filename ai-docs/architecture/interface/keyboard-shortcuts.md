@@ -45,7 +45,7 @@ Esc 和 Shift+Esc 由当前焦点作用域处理；事件到达画布后交给 R
 
 逐级扩大选区使用物理 Control+Space；macOS 上不是 Command+Space。Qt 的平台修饰键语义映射由画布统一处理。
 
-表格里，上一块 / 下一块（Linux / Windows 的 Ctrl+↑ / ↓、macOS 的 Option+↑ / ↓）先按行移动，到首行或末行才离开表格。单元格之间的移动用结构内移动那一组。
+表格里，上一块 / 下一块（Linux / Windows 的 Ctrl+↑ / ↓、macOS 的 Option+↑ / ↓）先按行移动，到首行或末行才离开表格。单元格之间的移动用结构内移动那一组。表内键意图已在 Rust Session 实现（Tab/Shift+Tab、方向结构键、行列增删）；native/QML 物理键位与 `\table` 命令入口按 045 决策在 046 布局完成后接线，本条描述接入后的目标行为。
 
 插入行列和删除行列只在表格内可用。插入方向以当前单元格为基准：↑ / ↓ 在前 / 后插入行，← / → 在前 / 后插入列。删除列保持 Alt+Backspace / Delete（macOS Option+Backspace / Delete）；删除行使用 Alt+Shift+Backspace / Delete（macOS Option+Shift+Backspace / Delete）。macOS 的 Option+↑ / ↓ 始终用于导航，不插入行。
 
@@ -70,7 +70,7 @@ Esc 和 Shift+Esc 由当前焦点作用域处理；事件到达画布后交给 R
 | 公式内移动 / 进出公式 | ← / →（在边界退出；正文中紧邻公式时进入） |
 | 离开公式 | Esc；Enter（`align` 中 Enter 插入换行 `\\`） |
 | 导入 LaTeX 源码分隔符 | 仅公式源码导入语法；不是正文插入快捷键 |
-| 插入 2×2 表格 | Alt+T |
-| 表格内下一格 / 上一格（后续目标） | Tab / Shift+Tab |
+| 插入 2×2 表格（Rust 已实现，native 待 046 接线） | Alt+T |
+| 表格内下一格 / 上一格（Rust 已实现，native 待 046 接线） | Tab / Shift+Tab |
 
 正文中的 `$` 创建并聚焦空行内公式；公式源码导入仍识别 `$...$` 作为分隔符。命令查询中的 `$` 是普通查询文本，公式编辑中的 `$` 是公式内容。中文标点 `、`、`¥` 和 `￥` 按普通文本输入，不作为命令或公式快捷键。命令模式仍使用 `\`。

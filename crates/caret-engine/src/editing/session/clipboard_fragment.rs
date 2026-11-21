@@ -452,6 +452,26 @@ impl Session {
         }))
     }
 
+    /// 只拒绝与复制范围相交的表格；含表文档内与表格无关的正文复制保持可用。
+    fn table_intersects_copy_range(
+        &self,
+        table_id: &NodeId,
+        context: &CopyContext<'_>,
+    ) -> Result<bool, EditError> {
+        let (Some(start), Some(end)) = (context.start_ordinal, context.end_ordinal) else {
+            return Ok(true);
+        };
+        let Some(entry) = self.structure_index.get(table_id) else {
+            return Ok(true);
+        };
+        let range = &entry.range.paragraph_ordinals;
+        if range.start == range.end {
+            Ok(range.start >= start && range.start <= end)
+        } else {
+            Ok(range.start <= end && range.end > start)
+        }
+    }
+
     fn collect_copy_units(
         &self,
         blocks: &[Block],
@@ -462,7 +482,12 @@ impl Session {
         for (index, block) in blocks.iter().enumerate() {
             path.push(index);
             match block {
-                Block::Table(_) => return Err(EditError::UnsupportedTableContent),
+                Block::Table(table) => {
+                    if self.table_intersects_copy_range(&table.id, context)? {
+                        return Err(EditError::UnsupportedTableContent);
+                    }
+                    continue;
+                }
                 Block::Paragraph(paragraph) => {
                     if let Some(unit) = self.copy_paragraph_unit(paragraph, context)? {
                         units.push(unit);

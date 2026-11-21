@@ -210,12 +210,11 @@ impl Session {
                 context.cell_index + 1
             }
         };
-        let target = table_target(&table, context.row_index, cell_index, true);
-        Ok(Some(self.replace_table(
-            context,
-            table.clone(),
-            table,
-            target,
+        Ok(Some(self.focus_table_cell(
+            &table,
+            context.row_index,
+            cell_index,
+            true,
         )?))
     }
 
@@ -243,12 +242,11 @@ impl Session {
                 context.row_index + 1
             }
         };
-        let target = table_target(&table, row_index, context.cell_index, true);
-        Ok(Some(self.replace_table(
-            context,
-            table.clone(),
-            table,
-            target,
+        Ok(Some(self.focus_table_cell(
+            &table,
+            row_index,
+            context.cell_index,
+            true,
         )?))
     }
 

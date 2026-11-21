@@ -1112,6 +1112,9 @@ impl Session {
         include_inline: bool,
         require_text_edge: bool,
     ) -> Result<Effect, EditError> {
+        if self.table_context().is_some() {
+            return Err(EditError::UnsupportedTableCellMath);
+        }
         let focus = self.selection.focus.clone();
         if self.selection.anchor != focus
             || self.has_structure_selection()
