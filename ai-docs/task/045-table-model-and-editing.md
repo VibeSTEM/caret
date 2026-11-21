@@ -42,7 +42,7 @@
 - [x] 插入默认 2×2；插入行、插入列、删除行、删除列各有专用命令；无合并单元格。快捷键意图（Tab/Shift+Tab、结构方向键、删除行 Alt+Shift+Backspace/Delete）已在 Rust 实现并先更新唯一快捷键权威文档；native 物理键位与命令面板入口按决策随 046 接线。
 - [x] Enter、Tab、Shift+Tab 和表格边界移动符合可观察行为；删除/插入失败不留下半更新状态（候选文档克隆校验后才替换，失败保留文档、选区、generation 与历史）。单元格移动只改选区，不推进 generation/历史。
 - [x] 单元格接受通用块、行内公式、显示公式与 Align 的模型与持久化；表格模块不直接依赖 `caret-math`，不复制公式模型。**限制**：单元格内公式的编辑目标/进入/导航依赖 046 单元格画布与容器感知公式定位器，当前明确返回 `edit.table_cell_math_unsupported`，不会进入半坏状态。
-- [ ] 命令/模型行为测试、格式与 lint 通过；独立评审通过（最终评审与 PR CI 完成后勾选）。
+- [x] 命令/模型行为测试、格式与 lint 通过；领域评审与独立 final review 通过；PR CI 全绿（PR #167）。
 
 ## 验证计划与结果
 
@@ -54,6 +54,7 @@
 | 2026-11-22 | workspace `cargo test --locked --offline --workspace` | 全量 Rust/native/QML 回归 | 通过（见完成摘要） |
 | 2026-11-22 | `cargo fmt`/`cargo format --check`、`cargo clippy -D warnings`、`cargo lint --check` 9/9 | 格式、跨层与静态检查 | 通过 |
 | 2026-11-22 | 领域评审（只读完整 diff） | 架构复用、容器路径、原子性、导航历史、测试真实性、文档一致性 | 完成：P1-1（cell Enter 后续输入 WrongStory）、P2-1（表格命令非原子）、P2-2（导航进历史）已修复；P1-2（cell 公式编辑/导航）降级为显式拒绝并移交 046；P2-5（文档夸大/矛盾）已按实际重写；P2-3/P2-4/P2-6 边界记录于下 |
+| 2026-11-22 | PR #167 CI（ubuntu：detect/format/clippy/lint 9/9/math-backend/check-build/audit） | 合并前检查 | 通过：全部 pass（部分路径跳过）；合并到 main |
 | 2026-11-22 | 独立 final review（只读完整 diff） | 最终合并前检查 | 首轮：无 P1，6 项 P2（结构方向键历史、纵向边界回退、复制过度拒绝、table-only 打开、单元格环境标题 Story、行内公式箭头进入）→ 已修复并补回归；二次复审：6 项全部确认解决、无新增 P1/P2，可创建 PR。P3（翻译条目、边界测试、错误码、空表复制）已顺手修复 |
 | — | macOS 表格快捷键检查 | 导航键和插入键按规范工作 | 未执行：native/QML 键位与窗口验证随 046/012 完成 |
 
