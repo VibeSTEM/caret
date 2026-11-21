@@ -1,9 +1,9 @@
 # 064 — 内置字体角色与统一默认标记
 
-- 状态：implemented
+- 状态：done
 - 依赖：024、025、042
 - 优先级：P2
-- 创建 / 更新：2026-11-01 / 2026-11-01
+- 创建 / 更新：2026-11-01 / 2026-11-21
 
 ## 目标与背景
 
@@ -45,7 +45,7 @@ L1 `caret-font-roles` 统一持有共享字体角色、内置默认族名和所�
 - [ ] Regular、Bold、Italic、Bold Italic 在 Fontique 和 Qt 中可加载；目录刷新后 Fontique 仍含内置代码字体。
 - [ ] macOS、Windows、Linux Runtime 均包含两种字体的许可文件；仓库 NOTICE 和资源来源说明完整。
 - [ ] `caret-layout`、`caret-math` 与未来代码领域 crate 保持同层零依赖；静态字体文件由共享 `resources/fonts/` 提供，角色 crate 是 Rust 字节接口的唯一归属，Qt 资源清单只引用这些相同文件。
-- [ ] 相关 Rust、native/QML 加载、打包检查和文档索引通过；未运行的跨平台包验证如实记录。
+- [x] 相关 Rust、native/QML 加载、打包检查和文档索引通过；跨平台包验证见 2026-11-21 Package desktop builds 证据。
 
 ## 验证计划与结果
 
@@ -55,7 +55,7 @@ L1 `caret-font-roles` 统一持有共享字体角色、内置默认族名和所�
 | 2026-11-01 | `cargo test --locked --offline -p caret-tests --test native` | 静态资源可加载，命令输入使用 JetBrains Mono | 最新 Qt 改动后 `ShellLoadTest::builtinCodeFontIsAvailableToQt` 仍通过；ShellLoad 其余 40 项通过，未改动的 `documentPathAdapterReturnsLocalPathsAndDefaultSaveLocation` 仍因 `default_url.isLocalFile()` 失败，需单独查明 |
 | 2026-11-06 | `cargo test --workspace --locked --offline` | 共享字体角色、默认名、Fontique 注册和 Qt 资源加载回归通过 | 通过；native CTest 9/9，包括 `builtinCodeFontIsAvailableToQt` |
 | 2026-11-06 | `cargo lint --check`、`cargo format --check`、`cargo fmt --all -- --check` | 字体 crate、资源引用与工作区规则通过 | 通过；包含 layering、CMake/QML、clang-tidy、include-cleaner、cppcheck |
-| — | 三平台 Runtime package workflow | 两种字体的许可文件随包移动并通过启动 smoke | 未执行 |
+| 2026-11-21 | Package desktop builds dispatch [#44869135882](https://github.com/VibeSTEM/caret/actions/runs/44869135882) | macOS arm64、Linux x86_64、Windows x86_64 便携包都包含 `Caret-LICENSE`、`JetBrains-Mono-OFL.txt`、`STIX-Two-Math-OFL.txt`，清除开发环境变量后独立安装树启动成功 | 通过：3/3 job 绿，三平台 artifacts 已上传；Linux 冒烟在 Xvfb + xcb 下执行（PR #163） |
 
 ## 风险与回退
 
@@ -73,4 +73,4 @@ L1 `caret-font-roles` 统一持有共享字体角色、内置默认族名和所�
 
 ## 完成摘要
 
-共享字体角色、静态字节接口和 Qt 加载已实现并通过仓库内验证；三平台 Runtime 打包 smoke 尚待执行。
+已完成并转 `done`：共享字体角色、静态字节接口与 Qt 加载实现并通过仓库内验证；2026-11-21 三平台 Package desktop builds 全绿，两种字体的 OFL 许可文件随 macOS/Linux/Windows 便携包迁移，独立安装树启动冒烟通过。

@@ -37,7 +37,7 @@
 | 003 | 应用服务 | [路径、设置、语言与主题](task/003-infra-app.md) | P0 | 001、002 | M | done |
 | 004 | Qt/QML | [QML 组件库与通用对话框](task/004-infra-qml-kit.md) | P0 | 001、002 | L | done |
 | 005 | 桌面入口 | [launcher、CMake 与 FFI 骨架](task/005-infra-launcher.md) | P0 | 003、004 | M | done |
-| 006 | CI/发布 | [CI 与打包管线](task/006-infra-ci.md) | P0 | 005 | M | implemented |
+| 006 | CI/发布 | [CI 与打包管线](task/006-infra-ci.md) | P0 | 005 | M | done |
 | 007 | 窗口 UI | [M0 窗口](task/007-ui-m0.md) | P1 | 006 | S | implemented |
 | 008 | M0 集成 | [M0：基础文本编辑纵向切片](task/008-impl-document.md) | P2 | 021、022、023、024、026、027、030 | M | done |
 | 009 | 命令输入 | [M1：`\` 命令](task/009-impl-commands.md) | P2 | 008 | M | done |
@@ -95,7 +95,7 @@
 | 061 | 字符格式 | [字色、高亮与字符底纹](task/061-text-paint-formatting.md) | P2 | 022、024、027 | M | ready |
 | 062 | 段落格式 | [段落格式命令](task/062-paragraph-formatting.md) | P2 | 022、026、027 | M | ready |
 | 063 | 文档样式 | [文档排版主题与命名样式](task/063-document-typography-styles.md) | P2 | 020、021 | L | ready |
-| 064 | 字体 | [内置字体角色与统一默认标记](task/064-builtin-font-roles.md) | P2 | 024、025、042 | M | implemented |
+| 064 | 字体 | [内置字体角色与统一默认标记](task/064-builtin-font-roles.md) | P2 | 024、025、042 | M | done |
 | 065 | 数学编辑 | [TeX 源码输入与结构化公式转换](task/065-tex-math-input-conversion.md) | P2 | 043、044、037 | M | planned |
 | 066 | 架构文档 | [`.pa` DSL 架构页与进程崩溃处理器接入](task/066-dsl-architecture-page.md) | P2 | — | M | done |
 | 067 | Qt 工具链 | [Qt 6.12 托管工具链升级](task/067-qt-6-12-toolchain.md) | P1 | 004、006 | M | done |

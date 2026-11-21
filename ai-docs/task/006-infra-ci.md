@@ -1,9 +1,9 @@
 # 006 — CI 与打包管线
 
-- 状态：implemented
+- 状态：done
 - 依赖：005
 - 优先级：P0
-- 创建 / 更新：2026-10-25 / 2026-10-30
+- 创建 / 更新：2026-10-25 / 2026-11-21
 
 ## 目标与背景
 
@@ -48,7 +48,7 @@
 - [x] 本地 fmt、clippy 和已有测试通过。远程运行若尚未推送，验证表写明未执行，不记为通过。评审发现已处理。
 - [x] GoogleTest 独立生产、归档搬迁自检与供给正反夹具通过，未发布资产不伪造固定摘要。
 - [x] macOS 桌面包在清除开发环境变量后可启动；Windows、Linux 远程结果另记。
-- [ ] 日常 Ubuntu CI、三平台 nightly 和桌面打包有对应远程证据后，再将任务标为 done；SDK 生产发布已由 016 完成。
+- [x] 日常 Ubuntu CI、三平台 nightly 和桌面打包有对应远程证据；SDK 生产发布已由 016 完成。2026-11-21：Nightly [#44865061216](https://github.com/VibeSTEM/caret/actions/runs/44865061216)（macOS/Ubuntu/Windows full tests、quality、coverage、sanitize、Miri、ObjC++、三个性能样例）全绿；Package desktop builds [#44869135882](https://github.com/VibeSTEM/caret/actions/runs/44869135882)（macOS arm64 / Linux x86_64 / Windows x86_64，含许可文件与独立安装树启动冒烟）全绿并产出便携包 artifacts。
 
 ## 验证计划与结果
 
@@ -61,6 +61,8 @@
 | 2026-10-25 | `actionlint` 四条 workflow、`shellcheck` 五段 composite shell、本地链接检查 | 语法、脚本及文档入口可用 | 通过；65 个 Markdown 文件的本地链接与锚点通过 |
 | 2026-10-25 | `cargo caret-package` 生成新目录，macOS 签名检查与清空 Qt/QML/DYLD 开发变量启动 | 安装树独立运行 | 通过；`--quit-after-load` 退出码 0，修复前缺失 QtQuick.Layouts 的情况已消除 |
 | 2026-10-25 | `cargo run --locked -p caret-tests -- sdk-googletest target/sdk-production/googletest target/sdk-production/work macos-arm64` | 生产固定源码 SDK 并消费搬迁归档 | 通过；解包目录中静态链接及运行 1/1，归档在 `target/sdk-production/work/dist/` |
+| 2026-11-21 | Nightly diagnostics dispatch [#44865061216](https://github.com/VibeSTEM/caret/actions/runs/44865061216)（workflow 修复 PR #161 合入后） | 三平台 nightly 全绿，性能样例不再因构建脚本缺 CACHEDIR.TAG 失败 | 通过：15/15 job 绿；macOS/Ubuntu/Windows full workspace tests、quality、Rust/native coverage、三平台 sanitizer、Miri、ObjC++、Rust/Qt CPU 与 Qt GPU 性能样例全部通过 |
+| 2026-11-21 | Package desktop builds dispatch [#44869135882](https://github.com/VibeSTEM/caret/actions/runs/44869135882)（Linux 冒烟修复 PR #163 合入后） | 三平台便携包构建、许可文件迁移与独立安装树启动冒烟通过 | 通过：3/3 job 绿并上传 `caret-macos-arm64.zip`、`caret-linux-x86_64.tar.gz`、`caret-windows-x86_64.zip` |
 | 2026-10-25 | `caret_require_googletest()` 真实归档消费与失败路径夹具 | 强摘要、懒供给、CONFIG 和升级失败保留旧 SDK | 通过；真实 `GoogleTest.ConsumerSmoke` 1/1；错误摘要、缺 target、错误版本等均拒绝，旧安装保持有效 |
 | 2026-10-25 | subagent `review_006`，`gpt-6.1-sol`、high，完整 diff 及最终增量 | 独立评审发现已处理并复验 | 通过；配置缺失、Windows 安装转义、manifest、发布保留资产及 SDK 升级事务均已修复，最终无剩余实质问题 |
 | 2026-10-26 | [PR #26 Ubuntu CI](https://github.com/VibeSTEM/caret/actions/runs/40211041328)、[PR #27 Ubuntu CI](https://github.com/VibeSTEM/caret/actions/runs/40212390890) 与[三平台 Nightly](https://github.com/VibeSTEM/caret/actions/runs/40212431385) | 日常 CI 和三平台 nightly 全部通过；桌面打包分别有三平台证据 | PR #26 CI 全部检查通过；PR #27 相关 Ubuntu 检查通过，按变更范围跳过无关 job。Nightly 12/12 job 成功，覆盖率函数 87.12%、行 88.32%，macOS sanitizer 两个 profile 的 CTest 均 4/4。Windows/Linux 桌面包仍待远程验证；SDK 另见 016 |
@@ -84,6 +86,8 @@
 
 逐次 CI 与 Nightly 结果见[验证历史](006/verification-history.md)；本页只维护任务范围、验收条件和当前结论。
 
+- 2026-11-21：夜间性能 job 在第一次 cargo 前 `mkdir -p target/performance-ci`，Cargo 不会为已存在目录写 `CACHEDIR.TAG`，导致 `caret-tests` 构建脚本无法解析 target 根（run 44839862989 三个性能 job 失败）。修复：报告目录移到仓库根 `performance-ci/` 并加入 `.gitignore`（PR #161）。Linux 便携包只部署 xcb 插件却按 offscreen 冒烟导致 SIGABRT；修复为安装 Xvfb 后以 xcb 无头启动（PR #163）。两处修复后重新 dispatch Nightly 与 Package，均全绿并据此将任务转 done。
+
 ## 完成摘要
 
-本地实现与验证完成，保持 panta 的统一 format/lint/test 调度机制。GoogleTest 已由 016 独立完成三平台生产、自检与正式发布，006 已固定正式摘要并跑通默认消费路径。较早的日常 Ubuntu CI 与三平台 Nightly 有成功记录；2026-10-28–29 的动态检查仍有失败项，后续修复尚待 Nightly 复验。Windows/Linux 桌面包也待远程验证，因此本任务保持 implemented，不标记 done。
+已完成并转 `done`：panta 的统一 format/lint/test 调度机制保持；GoogleTest 由 016 完成三平台生产与发布，006 固定正式摘要并跑通默认消费路径。2026-11-21 修复夜间性能样例预创建 `target` 导致 `CACHEDIR.TAG` 缺失（PR #161）与 Linux 便携包无头冒烟平台插件不匹配（PR #163）后，Nightly（三平台 full tests + 质量/覆盖率/动态检查/性能）与 Package desktop builds（三平台便携包、许可文件、独立安装树启动冒烟）均全绿，远程证据已记录在验证表。
