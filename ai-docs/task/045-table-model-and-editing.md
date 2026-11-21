@@ -60,7 +60,7 @@
 ## 风险、限制与 046 前置
 
 - **单元格内公式编辑/导航**：模型与持久化完整，但编辑目标解析/相邻公式查找/结构导航仍是环境链实现；045 对 cell 内 `\math`/`\equation`/`lign` 显式返回 `edit.table_cell_math_unsupported`。046 必须先把 `find_block_path`、`find_inline_math_in_blocks`、`paragraph_beside_block`、composition 公式定位统一改为容器路径感知，再接画布。
-- **整表复制/结构范围删除**：当前显式拒绝（`edit.table_content_unsupported`）；结构范围只有真正覆盖整表时拒绝，未覆盖表格的正文结构选区可继续使用。046 接入画布后补齐整表对象范围、剪贴板与文本投影。
+- **整表复制/结构范围删除**：当前显式拒绝（`edit.table_content_unsupported`）；结构范围/剪贴板只有与表格相交时拒绝，未覆盖表格的正文复制可继续使用。单元格内多段文本复制同样因表格区间相交显式拒绝，随 046 的单元格范围协议接入。046 接入画布后补齐整表对象范围、剪贴板与文本投影。
 - **定位器边界**：engine 的 `BlockContainerPath`/`TableCellPath`/`document_path` 是编辑定位权威；`caret-structure` 新增的 `block_list_by_table_cell(_mut)` 目前无生产消费者（仅结构测试），`find_document_node` 的父链尚未压入表格步骤。046 前应收敛为一个共享 locator（082 方向），或删除孤儿 API；不得再引入第三套寻址。
 - **跨 cell 位置**：跨单元格文本位置比较返回 `WrongStory`，跨 cell 选择/删除随 046 的单元格几何与范围协议接入。
 - **性能**：表格结构命令整表快照 + 全文校验 + 索引重建，未设性能门槛；列宽/行高/分页/命中/增量布局全部属 046。

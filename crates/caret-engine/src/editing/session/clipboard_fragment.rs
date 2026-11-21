@@ -466,7 +466,32 @@ impl Session {
         };
         let range = &entry.range.paragraph_ordinals;
         if range.start == range.end {
-            Ok(range.start >= start && range.start <= end)
+            let (Some(start_position), Some(end_position)) = (context.start, context.end) else {
+                return Ok(true);
+            };
+            let before_start = caret_structure::compare_document_node_edges(
+                &self.document,
+                table_id,
+                caret_structure::DocumentNodeEdge::After,
+                &start_position.paragraph_id,
+                caret_structure::DocumentNodeEdge::Before,
+            );
+            let table_before_start = matches!(
+                before_start,
+                Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+            );
+            let after_end = caret_structure::compare_document_node_edges(
+                &self.document,
+                table_id,
+                caret_structure::DocumentNodeEdge::Before,
+                &end_position.paragraph_id,
+                caret_structure::DocumentNodeEdge::After,
+            );
+            let table_after_end = matches!(
+                after_end,
+                Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
+            );
+            Ok(!(table_before_start || table_after_end))
         } else {
             Ok(range.start <= end && range.end > start)
         }

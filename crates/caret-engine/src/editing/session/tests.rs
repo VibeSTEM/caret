@@ -3007,12 +3007,12 @@ fn table_vertical_boundary_with_non_paragraph_neighbour_is_noop() {
     let before_focus = session.selection.focus.clone();
     let generation = session.document_generation();
     session
-        .run(Command::EditorKey(EditorKey::UpArrow {
+        .run(Command::EditorKey(EditorKey::DownArrow {
             candidate: None,
             extend: false,
             structure: true,
         }))
-        .unwrap_or_else(|error| panic!("structure up must be no-op: {error}"));
+        .unwrap_or_else(|error| panic!("structure down must be no-op: {error}"));
     assert_eq!(session.selection.focus, before_focus);
     assert_eq!(session.document_generation(), generation);
 }

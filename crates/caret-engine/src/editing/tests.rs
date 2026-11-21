@@ -1943,6 +1943,14 @@ fn public_command_ids_and_error_codes_remain_stable() {
             EditError::ClipboardMathLoss("opaque extension field".to_owned()),
             "clipboard.math_loss: opaque extension field",
         ),
+        (
+            EditError::UnsupportedTableContent,
+            "edit.table_content_unsupported",
+        ),
+        (
+            EditError::UnsupportedTableCellMath,
+            "edit.table_cell_math_unsupported",
+        ),
     ];
     for (error, expected) in errors {
         assert_eq!(error.to_string(), expected);

@@ -490,6 +490,11 @@ message_163:
   tr: テキストフォント「%1」がインストールされていないため、代替フォントを使用します。
   st: finished
 
+message_164:
+  src: Table
+  tr: 表
+  st: finished
+
 [WindowTitleBar]
 message_078:
   src: Untitled
