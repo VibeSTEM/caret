@@ -678,6 +678,62 @@ impl DocumentLayoutSnapshot {
         Some(geometry)
     }
 
+    /// 当前焦点所在单元格的编辑辅助线矩形；焦点不在表格内时为空。
+    ///
+    /// 辅助线只表达编辑焦点，不进入 `.cdoc`，也不参与命中。
+    pub fn table_guidelines(&self, position: &Pos) -> Vec<PageSelectionRect> {
+        let Some(paragraph) = self.paragraph_by_id(&position.paragraph_id) else {
+            return Vec::new();
+        };
+        if paragraph.story != position.story {
+            return Vec::new();
+        }
+        let Some(cell) = paragraph.container.innermost_cell() else {
+            return Vec::new();
+        };
+        let Some(grid) = self.table_layouts.get(&cell.table_id) else {
+            return Vec::new();
+        };
+        let Some(row) = grid.rows.get(cell.row_index) else {
+            return Vec::new();
+        };
+        let Some(cell_geometry) = row.cells.get(cell.cell_index) else {
+            return Vec::new();
+        };
+        for (page_index, page) in self.pages.iter().enumerate() {
+            for fragment in &page.layout.table_fragments {
+                if fragment.table_id != cell.table_id
+                    || !fragment.row_range.contains(&cell.row_index)
+                {
+                    continue;
+                }
+                let x0_pt = page.margin_left_pt
+                    + f64::from(fragment.x_offset_pt)
+                    + cell_geometry.content_x_pt;
+                let y0_pt = page.margin_top_pt + f64::from(fragment.y_offset_pt) + row.top_pt;
+                let x1_pt = x0_pt + cell_geometry.content_width_pt;
+                let y1_pt = y0_pt + row.height_pt;
+                if !x0_pt.is_finite()
+                    || !y0_pt.is_finite()
+                    || !x1_pt.is_finite()
+                    || !y1_pt.is_finite()
+                    || x1_pt <= x0_pt
+                    || y1_pt <= y0_pt
+                {
+                    continue;
+                }
+                return vec![PageSelectionRect {
+                    page_index,
+                    x0_pt,
+                    y0_pt,
+                    x1_pt,
+                    y1_pt,
+                }];
+            }
+        }
+        Vec::new()
+    }
+
     /// 返回裁切到可见分页片段内的选区矩形。
     pub fn selection_geometry(&self, selection: &Selection) -> Option<Vec<PageSelectionRect>> {
         self.range_geometry(selection, false)

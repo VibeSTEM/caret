@@ -55,6 +55,7 @@ class LayoutViewModel final : public QObject {
     Q_PROPERTY(QVariantMap commandLine READ commandLine NOTIFY interactionChanged)
     Q_PROPERTY(QVariantList currentStructure READ currentStructure NOTIFY interactionChanged)
     Q_PROPERTY(QVariantList blockHighlightRects READ blockHighlightRects NOTIFY interactionChanged)
+    Q_PROPERTY(QVariantList tableGuidelines READ tableGuidelines NOTIFY interactionChanged)
     Q_PROPERTY(
         QVariantList inlineHighlightRects READ inlineHighlightRects NOTIFY interactionChanged)
     Q_PROPERTY(QString documentGeneration READ documentGeneration NOTIFY layoutChanged)
@@ -99,6 +100,7 @@ class LayoutViewModel final : public QObject {
         rectangles.append(m_math_block_highlight_rects);
         return rectangles;
     }
+    [[nodiscard]] const QVariantList& tableGuidelines() const { return m_table_guidelines; }
     [[nodiscard]] QVariantList inlineHighlightRects() const {
         QVariantList rectangles = m_inline_environment_highlight_rects;
         rectangles.append(m_math_text_highlight_rects);
@@ -258,6 +260,7 @@ class LayoutViewModel final : public QObject {
     QVariantList m_inline_environment_highlight_rects;
     QVariantList m_math_block_highlight_rects;
     QVariantList m_math_text_highlight_rects;
+    QVariantList m_table_guidelines;
     qulonglong m_document_generation = 0;
     qulonglong m_font_generation = 0;
     qulonglong m_layout_revision = 0;

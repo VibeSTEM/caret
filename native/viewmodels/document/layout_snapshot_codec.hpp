@@ -28,6 +28,7 @@ struct ParsedLayoutSnapshot {
     QHash<QString, qsizetype> paragraph_line_counts;
     QVariantList selection_rects;
     QVariantList composition_rects;
+    QVariantList table_guidelines;
     QVariantList current_structure;
     QVariantList block_environment_highlight_rects;
     QVariantList inline_environment_highlight_rects;
@@ -67,5 +68,7 @@ bool parse_math_block_highlight_rects(const QJsonValue& value, const QVariantLis
                                       QVariantList& rectangles, QString& error);
 bool parse_math_text_highlight_rects(const QJsonValue& value, const QVariantList& page_sizes,
                                      QVariantList& rectangles, QString& error);
+bool parse_table_guidelines(const QJsonValue& value, const QVariantList& page_sizes,
+                            QVariantList& rectangles, QString& error);
 
 } // namespace caret::layout_snapshot

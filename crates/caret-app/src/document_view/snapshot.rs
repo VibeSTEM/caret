@@ -870,6 +870,12 @@ impl DocumentViewRuntime {
                 "currentStructure".to_owned(),
                 current_structure_state(&self.session),
             );
+        view.as_object_mut()
+            .ok_or_else(|| "layout.invalid_view_object".to_owned())?
+            .insert(
+                "tableGuidelines".to_owned(),
+                rectangle_values(snapshot.table_guidelines(&selection.focus)),
+            );
         let highlight_rectangles = highlight.rectangles(snapshot)?;
         view.as_object_mut()
             .ok_or_else(|| "layout.invalid_view_object".to_owned())?
@@ -1172,10 +1178,12 @@ impl DocumentViewRuntime {
                     .ok_or_else(|| "layout.invalid_caret_font_size".to_owned())?;
                 (caret, font_size_centipoints)
             };
+        let table_guidelines = rectangle_values(snapshot.table_guidelines(&selection.focus));
         let serialized = serde_json::to_string(&serde_json::json!({
             "documentGeneration": snapshot.document_generation.to_string(),
             "fontGeneration": snapshot.font_generation.to_string(),
             "selectionRects": rectangles,
+            "tableGuidelines": table_guidelines,
             "inputMethodContext": input_method_context,
             (Field::CommandLine.wire_name()): command_line,
             "currentStructure": current_structure,

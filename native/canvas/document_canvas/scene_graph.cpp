@@ -173,6 +173,7 @@ class CanvasRootNode final : public QSGNode {
     SelectionGroupNode* selection_group = nullptr;
     EnvironmentHighlightGroupNode* block_highlight_group = nullptr;
     EnvironmentHighlightGroupNode* inline_highlight_group = nullptr;
+    QSGNode* table_guideline_group = nullptr;
     QSGSimpleRectNode* caret_node = nullptr;
     quint64 glyph_revision = std::numeric_limits<quint64>::max();
     quint64 glyph_geometry_revision = std::numeric_limits<quint64>::max();
@@ -217,6 +218,38 @@ struct GlyphRectangles {
     QRectF target;
     QRectF source;
 };
+
+void append_shape_lines(QSGNode* parent, const QVector<QPointF>& points, QColor color,
+                        qreal width);
+
+// 编辑态表格辅助线：沿矩形四边绘制固定 dash/gap 的线段。
+void append_dashed_rect(QSGNode* parent, const QRectF& rect, QColor color) {
+    constexpr qreal dash_pt = 4.0;
+    constexpr qreal gap_pt = 3.0;
+    constexpr qreal width_pt = 1.2;
+    if (rect.isEmpty() || !color.isValid() || color.alpha() == 0) {
+        return;
+    }
+    const QVector<QPointF> corners = {
+        rect.topLeft(), rect.topRight(), rect.bottomRight(), rect.bottomLeft(), rect.topLeft()};
+    for (qsizetype edge = 0; edge + 1 < corners.size(); ++edge) {
+        const QPointF first = corners.at(edge);
+        const QPointF second = corners.at(edge + 1);
+        const QPointF delta = second - first;
+        const qreal length = std::hypot(delta.x(), delta.y());
+        if (!std::isfinite(length) || length <= std::numeric_limits<qreal>::epsilon()) {
+            continue;
+        }
+        const QPointF direction = delta / length;
+        QVector<QPointF> dashes;
+        for (qreal offset = 0.0; offset < length; offset += dash_pt + gap_pt) {
+            const qreal end = std::min(offset + dash_pt, length);
+            dashes.push_back(first + direction * offset);
+            dashes.push_back(first + direction * end);
+        }
+        append_shape_lines(parent, dashes, color, width_pt);
+    }
+}
 
 void append_shape_lines(QSGNode* parent, const QVector<QPointF>& points, QColor color,
                         qreal width) {
@@ -656,6 +689,8 @@ QSGNode* DocumentCanvas::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*
             root != nullptr ? root->block_highlight_group : nullptr;
         EnvironmentHighlightGroupNode* inline_highlight_group =
             root != nullptr ? root->inline_highlight_group : nullptr;
+        QSGNode* table_guideline_group =
+            root != nullptr ? root->table_guideline_group : nullptr;
         QSGSimpleRectNode* caret_node = root != nullptr ? root->caret_node : nullptr;
         if (root != nullptr) {
             root->removeChildNode(page_background_group);
@@ -663,6 +698,9 @@ QSGNode* DocumentCanvas::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*
             root->removeChildNode(selection_group);
             root->removeChildNode(block_highlight_group);
             root->removeChildNode(inline_highlight_group);
+            if (table_guideline_group != nullptr) {
+                root->removeChildNode(table_guideline_group);
+            }
             root->removeChildNode(caret_node);
         }
         delete root;
@@ -679,12 +717,15 @@ QSGNode* DocumentCanvas::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*
         root->inline_highlight_group = inline_highlight_group != nullptr
                                            ? inline_highlight_group
                                            : new EnvironmentHighlightGroupNode();
+        root->table_guideline_group =
+            table_guideline_group != nullptr ? table_guideline_group : new QSGNode();
         root->caret_node = caret_node != nullptr ? caret_node : new QSGSimpleRectNode();
         root->appendChildNode(root->page_background_group);
         root->appendChildNode(root->block_highlight_group);
         root->appendChildNode(root->inline_highlight_group);
         root->appendChildNode(root->selection_group);
         root->appendChildNode(root->glyph_group);
+        root->appendChildNode(root->table_guideline_group);
         root->appendChildNode(root->caret_node);
         root->page_count = page_count;
     }
@@ -721,6 +762,24 @@ QSGNode* DocumentCanvas::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*
     } else {
         for (QSGSimpleRectNode* rectangle : root->selection_group->rectangles) {
             rectangle->setColor(m_selection_color);
+        }
+    }
+    {
+        while (root->table_guideline_group->firstChild() != nullptr) {
+            QSGNode* child = root->table_guideline_group->firstChild();
+            root->table_guideline_group->removeChildNode(child);
+            delete child;
+        }
+        for (const QVariant& value : m_table_guidelines) {
+            const QVariantMap guideline = value.toMap();
+            const int page_index = guideline.value(QStringLiteral("pageIndex")).toInt();
+            const QRectF visible_rect =
+                canvas_detail::visible_canvas_rect(page_index, guideline, to_content, page_rect);
+            if (visible_rect.isEmpty()) {
+                continue;
+            }
+            append_dashed_rect(root->table_guideline_group, visible_rect,
+                               m_table_guideline_color);
         }
     }
     if (root->highlight_revision != m_highlight_revision ||

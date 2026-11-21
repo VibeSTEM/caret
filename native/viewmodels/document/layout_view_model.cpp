@@ -71,6 +71,7 @@ LayoutViewModel::LayoutViewModel(QObject* parent) : QObject(parent) {
     m_inline_environment_highlight_rects = parsed_snapshot.inline_environment_highlight_rects;
     m_math_block_highlight_rects = parsed_snapshot.math_block_highlight_rects;
     m_math_text_highlight_rects = parsed_snapshot.math_text_highlight_rects;
+    m_table_guidelines = parsed_snapshot.table_guidelines;
     m_document_generation = parsed_snapshot.document_generation;
     m_font_generation = parsed_snapshot.font_generation;
     m_session_id = parsed_snapshot.session_id;
@@ -166,7 +167,8 @@ bool LayoutViewModel::installSnapshot(layout_snapshot::ParsedLayoutSnapshot pars
         m_inline_environment_highlight_rects !=
             parsed_snapshot.inline_environment_highlight_rects ||
         m_math_block_highlight_rects != parsed_snapshot.math_block_highlight_rects ||
-        m_math_text_highlight_rects != parsed_snapshot.math_text_highlight_rects;
+        m_math_text_highlight_rects != parsed_snapshot.math_text_highlight_rects ||
+        m_table_guidelines != parsed_snapshot.table_guidelines;
     installed_snapshot() = parsed_snapshot;
     has_installed_snapshot() = true;
     m_page_sizes_pt = std::move(parsed_snapshot.page_sizes);
@@ -186,6 +188,7 @@ bool LayoutViewModel::installSnapshot(layout_snapshot::ParsedLayoutSnapshot pars
         std::move(parsed_snapshot.inline_environment_highlight_rects);
     m_math_block_highlight_rects = std::move(parsed_snapshot.math_block_highlight_rects);
     m_math_text_highlight_rects = std::move(parsed_snapshot.math_text_highlight_rects);
+    m_table_guidelines = std::move(parsed_snapshot.table_guidelines);
     m_input_method_context = std::move(parsed_snapshot.input_method_context);
     m_document_generation = parsed_snapshot.document_generation;
     m_font_generation = parsed_snapshot.font_generation;
@@ -304,6 +307,13 @@ bool LayoutViewModel::installInteraction(const QJsonObject& root) {
         }
         math_text_highlight_rects = std::move(parsed_math_text_highlight_rects);
     }
+    QVariantList table_guidelines = m_table_guidelines;
+    const QJsonValue table_guidelines_value = root.value(QStringLiteral("tableGuidelines"));
+    if (!table_guidelines_value.isUndefined() &&
+        !layout_snapshot::parse_table_guidelines(table_guidelines_value, m_page_sizes_pt,
+                                                  table_guidelines, m_error)) {
+        return false;
+    }
     QVariantList current_structure = m_current_structure;
     const QJsonValue current_structure_value = root.value(QStringLiteral("currentStructure"));
     if (!current_structure_value.isUndefined() &&
@@ -316,7 +326,8 @@ bool LayoutViewModel::installInteraction(const QJsonObject& root) {
         m_block_environment_highlight_rects != block_environment_highlight_rects ||
         m_inline_environment_highlight_rects != inline_environment_highlight_rects ||
         m_math_block_highlight_rects != math_block_highlight_rects ||
-        m_math_text_highlight_rects != math_text_highlight_rects) {
+        m_math_text_highlight_rects != math_text_highlight_rects ||
+        m_table_guidelines != table_guidelines) {
         m_selection_rects = selection_rectangles;
         m_input_method_context = input_context;
         m_command_line = command_line;
@@ -325,6 +336,7 @@ bool LayoutViewModel::installInteraction(const QJsonObject& root) {
         m_inline_environment_highlight_rects = std::move(inline_environment_highlight_rects);
         m_math_block_highlight_rects = std::move(math_block_highlight_rects);
         m_math_text_highlight_rects = std::move(math_text_highlight_rects);
+        m_table_guidelines = std::move(table_guidelines);
         emit interactionChanged();
     }
     installCaretGeometry(caret_value.toObject().toVariantMap());

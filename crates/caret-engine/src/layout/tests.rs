@@ -5557,6 +5557,15 @@ fn basic_table_layout_places_cells_and_shared_caret_geometry() {
     assert!(first_caret.x_pt >= page.margin_left_pt);
     assert!(first_caret.y0_pt >= page.margin_top_pt);
     assert!(first_caret.y1_pt > first_caret.y0_pt);
+    let guidelines = snapshot.table_guidelines(&first_pos);
+    assert_eq!(
+        guidelines.len(),
+        1,
+        "focused cell must publish one guideline rect"
+    );
+    assert_eq!(guidelines[0].page_index, first_caret.page_index);
+    assert!(guidelines[0].x1_pt > guidelines[0].x0_pt);
+    assert!(guidelines[0].y1_pt > guidelines[0].y0_pt);
     assert!(
         (first_glyph_x - first_caret.x_pt).abs() < 0.01,
         "cell glyph and caret must share the same x origin: {first_glyph_x} vs {}",

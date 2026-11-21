@@ -364,6 +364,27 @@ void ShellLayoutSnapshotValidationTest::
     QJsonObject invalid_selection_list = root;
     invalid_selection_list.insert(QStringLiteral("selectionRects"), QStringLiteral("bad"));
     QVERIFY(reject(invalid_selection_list));
+    QJsonObject invalid_table_guidelines = root;
+    invalid_table_guidelines.insert(
+        QStringLiteral("tableGuidelines"),
+        QJsonArray{QJsonObject{{QStringLiteral("pageIndex"), 0},
+                               {QStringLiteral("x0Pt"), 10.0},
+                               {QStringLiteral("y0Pt"), 10.0},
+                               {QStringLiteral("x1Pt"), 5.0},
+                               {QStringLiteral("y1Pt"), 20.0}}});
+    QVERIFY(reject(invalid_table_guidelines));
+    QJsonObject invalid_table_guideline_list = root;
+    invalid_table_guideline_list.insert(QStringLiteral("tableGuidelines"), QStringLiteral("bad"));
+    QVERIFY(reject(invalid_table_guideline_list));
+    QJsonObject valid_table_guidelines = root;
+    valid_table_guidelines.insert(
+        QStringLiteral("tableGuidelines"),
+        QJsonArray{QJsonObject{{QStringLiteral("pageIndex"), 0},
+                               {QStringLiteral("x0Pt"), 10.0},
+                               {QStringLiteral("y0Pt"), 10.0},
+                               {QStringLiteral("x1Pt"), 20.0},
+                               {QStringLiteral("y1Pt"), 20.0}}});
+    QVERIFY(!reject(valid_table_guidelines));
     QJsonObject invalid_composition_rectangles = root;
     invalid_composition_rectangles.insert(QStringLiteral("compositionRects"),
                                           QJsonArray{QStringLiteral("bad")});

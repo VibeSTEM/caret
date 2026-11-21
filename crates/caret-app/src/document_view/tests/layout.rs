@@ -3322,8 +3322,22 @@ fn inserted_table_renders_cell_paragraphs_and_navigates() -> Result<(), Box<dyn 
     let _first_paragraph = snapshot["paragraphs"][1]["paragraphId"]
         .as_str()
         .ok_or("cell paragraph id must serialize")?;
+    assert_eq!(
+        snapshot["tableGuidelines"].as_array().map(Vec::len),
+        Some(1),
+        "focused cell must publish one table guideline"
+    );
+    assert_eq!(
+        snapshot["tableGuidelines"][0]["pageIndex"],
+        serde_json::json!(0)
+    );
 
-    runtime.handle_editor_key_json("tab")?;
+    let interaction: Value = serde_json::from_str(&runtime.handle_editor_key_json("tab")?)?;
+    assert_eq!(
+        interaction["tableGuidelines"].as_array().map(Vec::len),
+        Some(1),
+        "selection-only navigation must refresh table guidelines"
+    );
     let json = runtime.layout_snapshot_json()?;
     let snapshot: Value = serde_json::from_str(&json)?;
     assert_eq!(snapshot["pages"].as_array().map(Vec::len), Some(1));
