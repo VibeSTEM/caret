@@ -5789,3 +5789,36 @@ fn table_cell_environment_title_and_body_are_laid_out() {
     );
     assert!(snapshot.page_glyphs(0).is_ok());
 }
+
+#[test]
+fn tall_cell_only_publishes_fragments_inside_the_page_content_box() {
+    let table = Table {
+        id: NodeId::generate(),
+        rows: vec![TableRow {
+            id: NodeId::generate(),
+            cells: vec![TableCell {
+                id: NodeId::generate(),
+                blocks: (0..60)
+                    .map(|index| Block::Paragraph(paragraph(&format!("line {index}"))))
+                    .collect(),
+            }],
+        }],
+    };
+    let mut document = Document::blank();
+    document.body = vec![Block::Table(table)];
+    let snapshot = layout_document(&document);
+    assert_eq!(snapshot.pages.len(), 1);
+    let page = &snapshot.pages[0];
+    let content_height_pt = page.height_pt - page.margin_top_pt - page.margin_bottom_pt;
+    assert!(!page.layout.fragments.is_empty());
+    assert!(page.layout.fragments.len() < 60);
+    for fragment in &page.layout.fragments {
+        assert!(
+            f64::from(fragment.y_offset_pt) <= content_height_pt,
+            "cell paragraph fragment must stay inside page content"
+        );
+    }
+    snapshot
+        .page_glyphs(0)
+        .unwrap_or_else(|error| panic!("clipped tall cell glyphs must extract: {error}"));
+}

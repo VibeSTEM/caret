@@ -3308,6 +3308,27 @@ fn paragraph_text_into(paragraph: &Paragraph, out: &mut String) {
 }
 
 #[test]
+fn tall_cell_layout_snapshot_stays_inside_page_bounds() -> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.handle_editor_key_json("insert-table")?;
+    for _ in 0..40 {
+        runtime.handle_editor_key_json("enter")?;
+    }
+    let json = runtime.layout_snapshot_json()?;
+    let snapshot: Value = serde_json::from_str(&json)?;
+    let pages = snapshot["pages"]
+        .as_array()
+        .ok_or("layout snapshot must publish pages")?;
+    assert!(!pages.is_empty());
+    let page_height = pages[0]["heightPt"].as_f64().ok_or("page height")?;
+    for fragment in pages[0]["fragments"].as_array().ok_or("page fragments")? {
+        let y_offset = fragment["yOffsetPt"].as_f64().ok_or("fragment offset")?;
+        assert!(y_offset <= page_height);
+    }
+    Ok(())
+}
+
+#[test]
 fn cell_display_equation_publishes_layout_and_accepts_typing()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut runtime = DocumentViewRuntime::new_blank()?;

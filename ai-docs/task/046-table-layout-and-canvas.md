@@ -79,6 +79,7 @@
 - 2026-11-22：单元格环境标题/正文布局接入（环境容器路径、标题 Story、块级测量复用）；表格编辑态虚线辅助线：engine `table_guidelines`（页面边界裁剪）、app 两类快照 `tableGuidelines`、native codec 严格校验、LayoutViewModel/DocumentCanvas 属性与 QSG dash 绘制、QML 绑定 `Theme.colorTableGuideline`（默认浅色主题深灰、深色主题白）。native 键位测试（Shift+Tab/Alt+T/行列键）与 C++ 辅助线校验测试通过。
 - 2026-11-22：性能基线：新增 50×8（400 cell）整表布局 Criterion 场景 `rust/table_layout`，记录输入/配置，不设时限门槛。
 - 2026-11-22：完成剩余实现切片：单元格环境布局、native 表格键位、编辑态虚线辅助线（engine→app→native/QML）、辅助线严格校验与 50×8 性能基线。待办：整表复制/结构删除与跨 cell 范围（当前显式拒绝，按 012 集成计划后续接入）、真实窗口人工验收、领域评审 + 独立 final review、PR/CI。
+- 2026-11-22：评审修复：cell 公式块几何/高亮接入页面放置；math 进入/退出/边界停靠容器化；表格键上下文仲裁；macOS 物理 Control；辅助线主题 token/页面裁剪；超高单元格内容按版心裁剪发布，app 级回归覆盖长单元格与 cell 公式快照。
 - 2026-11-22：实现收口：列宽 v1 等分（最小列宽约束）、行高由块级测量决定、行原子分页、单元格内 Paragraph/Equation/Align/InlineMath/环境标题与正文布局、cell 公式编辑（插入/输入/退出/继续输入/Undo）、cell 公式块几何/高亮、表格插入/行列命令/导航入口、编辑态主题化虚线辅助线与 native 严格快照契约均已落地；50×8 布局基线 8.97–9.33 ms。
 
 ## 性能基线与验证记录
@@ -91,6 +92,7 @@
 
 - **整表复制/结构范围删除、跨单元格选择**：当前仍显式返回 `edit.table_content_unsupported`。046 的“按需要”范围未包含结构范围对象协议；后续由 012 集成或独立任务补齐，不在本任务声称完成。
 - **单元格内嵌套表/显式分页符**：模型允许嵌套表（≤24 层），布局 v1 对单元格内嵌套表与 ExplicitBreak 显式 `layout.unsupported_content`；不做静默漏画。
+- **超高单元格行**：行原子分页不拆分行内内容；超过单页版心高度的内容只发布本页可见片段并裁剪，超出部分暂不显示（行内分页属“分页细化”后续切片）。发布边界已按版心过滤，native 不会因越页 fragment/guideline 拒绝整份快照。
 - **列宽策略**：v1 等分并受最小列宽约束，auto/固定列宽属后续。
 - **真实窗口人工验收**：本环境只运行 native headless CTest（含 QML 加载、键位与快照校验）；macOS/Windows 窗口内实际视觉验收由 012 总验收执行。
 - **性能**：仅记录单机 Criterion 基线，不设 CI 门槛。

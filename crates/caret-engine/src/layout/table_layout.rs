@@ -355,6 +355,9 @@ pub(super) fn expand_table_fragments(
             };
             let origin_x_pt = page.margin_left_pt + f64::from(fragment.x_offset_pt);
             let origin_y_pt = page.margin_top_pt + f64::from(fragment.y_offset_pt);
+            // 行原子分页不拆分超高行：只发布落在本页版心内的单元格内容行，
+            // 避免向 native 发布越页片段；被裁掉的部分在任务文档中记录为 v1 限制。
+            let page_content_bottom_pt = page.height_pt - page.margin_bottom_pt;
             for row_index in fragment.row_range.clone() {
                 let Some(shaped_row) = shaped.rows.get(row_index) else {
                     continue;
@@ -394,6 +397,9 @@ pub(super) fn expand_table_fragments(
                                     continue;
                                 };
                                 let paragraph_y_pt = content_y_pt + grid_block.top_pt;
+                                if paragraph_y_pt >= page_content_bottom_pt {
+                                    continue;
+                                }
                                 let mut y0_pt = paragraph_y_pt;
                                 for (line_index, line) in
                                     paragraph.layout.paragraph.lines.iter().enumerate()
@@ -429,6 +435,9 @@ pub(super) fn expand_table_fragments(
                                     continue;
                                 };
                                 let block_top_pt = content_y_pt + grid_block.top_pt;
+                                if block_top_pt >= page_content_bottom_pt {
+                                    continue;
+                                }
                                 page.table_math_placements.push(TableMathPlacement {
                                     math_id: math.math_id.clone(),
                                     object_x_pt: content_x_pt + f64::from(math.x_offset_pt),
