@@ -154,24 +154,26 @@ impl Session {
             .ok_or_else(|| EditError::UnknownParagraph(focus.paragraph_id.to_string()))?;
         TextMap::new(self.paragraph_for(anchor)?)?.validate_pos(anchor)?;
         TextMap::new(self.paragraph_for(focus)?)?.validate_pos(focus)?;
-        if anchor_location.block_path == focus_location.block_path {
+        if anchor_location.document_path == focus_location.document_path {
             return Err(EditError::CrossParagraphSelection);
         }
-        Ok(if anchor_location.block_path < focus_location.block_path {
-            (
-                anchor.clone(),
-                anchor_location,
-                focus.clone(),
-                focus_location,
-            )
-        } else {
-            (
-                focus.clone(),
-                focus_location,
-                anchor.clone(),
-                anchor_location,
-            )
-        })
+        Ok(
+            if anchor_location.document_path < focus_location.document_path {
+                (
+                    anchor.clone(),
+                    anchor_location,
+                    focus.clone(),
+                    focus_location,
+                )
+            } else {
+                (
+                    focus.clone(),
+                    focus_location,
+                    anchor.clone(),
+                    anchor_location,
+                )
+            },
+        )
     }
 
     /// 合并并校验跨段编辑范围，同时更新段落索引和文本映射缓存。

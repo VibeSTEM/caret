@@ -16,6 +16,7 @@ use super::history::{
 };
 use super::math_edit::{MathEditBranch, MathEditTarget, MathPositionAffinity, MathTextPosition};
 use crate::editing::StructureSelection;
+use crate::editing::paragraph_ops::BlockContainerPath;
 use std::mem;
 
 /// 供布局验证后安装的公式外组字候选。
@@ -119,7 +120,7 @@ fn math_composition_document_patch(
             let (_, _, after) = find_composition_math_block(&after.document.body, block_id, &[])
                 .ok_or(EditError::InvalidPosition)?;
             Ok(DocumentPatch::BlockRange {
-                parent_environment_ids,
+                container: BlockContainerPath::from_environment_ids(&parent_environment_ids),
                 sibling_index,
                 before: vec![before],
                 after: vec![after],

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
+use super::super::paragraph_ops::BlockContainerPath;
 use std::{collections::BTreeMap, ops::Range, sync::Arc};
 
 use super::super::grapheme::GraphemeMap;
@@ -115,7 +116,7 @@ pub(super) fn math_text_flow_boundary_is_shared(
 }
 
 struct DisplayMathInsertPlan {
-    parent_environment_ids: Vec<NodeId>,
+    container: BlockContainerPath,
     sibling_index: usize,
     before: Block,
     after: Vec<Block>,

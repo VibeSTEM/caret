@@ -3,7 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use super::super::paragraph_ops::{ParagraphIndex, validated_paragraph_location};
+use super::super::paragraph_ops::{
+    BlockContainerPath, ParagraphIndex, block_list_for_location, block_list_in_container_mut,
+    title_environment_in_container_mut, validated_paragraph_location,
+};
 use super::super::{HostCaretPosition, Pos, PositionMap, Selection, StoryId};
 use super::Session;
 use super::formatting::PendingInlineStyle;
@@ -81,6 +84,10 @@ pub(super) struct ParagraphState {
     pub parent_environment_ids: Vec<NodeId>,
     pub sibling_index: usize,
     pub is_title: bool,
+    /// 段落所属块容器；单元格内段落与普通段落共用同一历史补丁。
+    pub container: BlockContainerPath,
+    /// 文档顺序键，用于同一补丁内多段落的稳定排序。
+    pub document_path: Vec<usize>,
 }
 
 /// 公式源码投影在历史位置中的身份值；只用于同进程内的投影同一性比较。
@@ -149,9 +156,9 @@ pub(super) enum DocumentPatch {
         environment: Box<BlockEnvironment>,
         environment_estimated_bytes: usize,
     },
-    /// 同一父级下一段连续块的整体替换；用于插入或修改显示公式、对齐公式块。
+    /// 同一块容器内一段连续块的整体替换；用于插入或修改显示公式、对齐公式块。
     BlockRange {
-        parent_environment_ids: Vec<NodeId>,
+        container: BlockContainerPath,
         sibling_index: usize,
         before: Vec<Block>,
         after: Vec<Block>,
@@ -630,15 +637,12 @@ impl DocumentPatch {
                         .sum::<usize>()
             }
             Self::BlockRange {
-                parent_environment_ids,
+                container,
                 before,
                 after,
                 ..
             } => {
-                parent_environment_ids
-                    .iter()
-                    .map(node_id_bytes)
-                    .sum::<usize>()
+                container.estimated_bytes()
                     + before
                         .iter()
                         .chain(after)
@@ -806,17 +810,11 @@ impl DocumentPatch {
                 false,
             ),
             Self::BlockRange {
-                parent_environment_ids,
+                container,
                 sibling_index,
                 before,
                 after,
-            } => apply_block_range(
-                document,
-                parent_environment_ids,
-                *sibling_index,
-                after,
-                before,
-            ),
+            } => apply_block_range(document, container, *sibling_index, after, before),
             Self::Body { before, after } => apply_body(document, after, before),
             Self::EnvironmentInsertion {
                 parent_environment_ids,
@@ -914,17 +912,11 @@ impl DocumentPatch {
                 true,
             ),
             Self::BlockRange {
-                parent_environment_ids,
+                container,
                 sibling_index,
                 before,
                 after,
-            } => apply_block_range(
-                document,
-                parent_environment_ids,
-                *sibling_index,
-                before,
-                after,
-            ),
+            } => apply_block_range(document, container, *sibling_index, before, after),
             Self::Body { before, after } => apply_body(document, before, after),
             Self::EnvironmentInsertion {
                 parent_environment_ids,
@@ -1001,6 +993,8 @@ impl ParagraphState {
             parent_environment_ids,
             sibling_index,
             is_title: location.is_title,
+            container: location.container.clone(),
+            document_path: location.document_path.clone(),
         })
     }
 
@@ -1077,36 +1071,16 @@ fn apply_paragraph_states_in_place(
         return false;
     }
     let mut removals = current.iter().collect::<Vec<_>>();
-    removals.sort_by(|left, right| {
-        left.parent_environment_ids
-            .cmp(&right.parent_environment_ids)
-            .then_with(|| right.is_title.cmp(&left.is_title))
-            .then_with(|| right.sibling_index.cmp(&left.sibling_index))
-    });
+    removals.sort_by(|left, right| right.document_path.cmp(&left.document_path));
     for state in removals {
         if !remove_paragraph_state(document, state) {
             return false;
         }
     }
     for state in target.iter().filter(|state| state.is_title) {
-        let Some(environment_id) = state.parent_environment_ids.last() else {
-            return false;
-        };
-        let Some(parents) = state
-            .parent_environment_ids
-            .get(..state.parent_environment_ids.len() - 1)
+        let Some(environment) =
+            title_environment_in_container_mut(&mut document.body, &state.container)
         else {
-            return false;
-        };
-        let Some(siblings) = block_list_mut(&mut document.body, parents) else {
-            return false;
-        };
-        let Some(environment) = siblings.iter_mut().find_map(|block| match block {
-            Block::Environment(environment) if &environment.id == environment_id => {
-                Some(environment)
-            }
-            _ => None,
-        }) else {
             return false;
         };
         if environment.title.is_some() {
@@ -1118,13 +1092,9 @@ fn apply_paragraph_states_in_place(
         .iter()
         .filter(|state| !state.is_title)
         .collect::<Vec<_>>();
-    paragraphs.sort_by(|left, right| {
-        left.parent_environment_ids
-            .cmp(&right.parent_environment_ids)
-            .then_with(|| left.sibling_index.cmp(&right.sibling_index))
-    });
+    paragraphs.sort_by(|left, right| left.document_path.cmp(&right.document_path));
     for state in paragraphs {
-        let Some(blocks) = block_list_mut(&mut document.body, &state.parent_environment_ids) else {
+        let Some(blocks) = block_list_in_container_mut(&mut document.body, &state.container) else {
             return false;
         };
         if state.sibling_index > blocks.len() {
@@ -1140,18 +1110,9 @@ fn apply_paragraph_states_in_place(
 
 fn remove_paragraph_state(document: &mut Document, state: &ParagraphState) -> bool {
     if state.is_title {
-        let Some((environment_id, parent_ids)) = state.parent_environment_ids.split_last() else {
-            return false;
-        };
-        let Some(siblings) = block_list_mut(&mut document.body, parent_ids) else {
-            return false;
-        };
-        let Some(environment) = siblings.iter_mut().find_map(|block| match block {
-            Block::Environment(environment) if &environment.id == environment_id => {
-                Some(environment)
-            }
-            _ => None,
-        }) else {
+        let Some(environment) =
+            title_environment_in_container_mut(&mut document.body, &state.container)
+        else {
             return false;
         };
         if !environment
@@ -1165,7 +1126,7 @@ fn remove_paragraph_state(document: &mut Document, state: &ParagraphState) -> bo
         return true;
     }
 
-    let Some(siblings) = block_list_mut(&mut document.body, &state.parent_environment_ids) else {
+    let Some(siblings) = block_list_in_container_mut(&mut document.body, &state.container) else {
         return false;
     };
     if !matches!(
@@ -1291,12 +1252,12 @@ fn apply_environment_insertion(
 /// 把 `current` 所在的连续块替换为 `replacement`；位置或内容不符时不改文档。
 fn apply_block_range(
     document: &mut Document,
-    parent_environment_ids: &[NodeId],
+    container: &BlockContainerPath,
     sibling_index: usize,
     current: &[Block],
     replacement: &[Block],
 ) -> bool {
-    let Some(blocks) = block_list_mut(&mut document.body, parent_environment_ids) else {
+    let Some(blocks) = block_list_in_container_mut(&mut document.body, container) else {
         return false;
     };
     let Some(end) = sibling_index.checked_add(current.len()) else {
@@ -1864,11 +1825,10 @@ pub(super) fn include_adjacent_paragraph_id(
         return None;
     }
     let (&index, parent_path) = current.block_path.split_last()?;
+    let siblings = block_list_for_location(&document.body, current, parent_path)?;
     if direction == super::super::Direction::Backward
         && let Some(previous_index) = index.checked_sub(1)
-        && let Some(Block::Environment(environment)) =
-            block_list_at_path(&document.body, parent_path)
-                .and_then(|blocks| blocks.get(previous_index))
+        && let Some(Block::Environment(environment)) = siblings.get(previous_index)
         && environment.kind == BlockEnvironmentKind::Section
         && environment.children.is_empty()
         && let Some(title) = &environment.title
@@ -1877,31 +1837,22 @@ pub(super) fn include_adjacent_paragraph_id(
     }
     if direction == super::super::Direction::Backward && index == 0 {
         return paragraph_index.iter().find_map(|(id, location)| {
-            (location.is_title && location.block_path == parent_path).then(|| id.clone())
+            (location.is_title && location.container == current.container).then(|| id.clone())
         });
     }
     let target_index = match direction {
         super::super::Direction::Backward => index.checked_sub(1)?,
         super::super::Direction::Forward => index.checked_add(1)?,
     };
+    let prefix_len = current.document_path.len().saturating_sub(1);
+    let prefix = &current.document_path[..prefix_len];
     paragraph_index.iter().find_map(|(id, location)| {
         (location.story == StoryId::Body
-            && location.block_path.len() == parent_path.len() + 1
-            && location.block_path[..parent_path.len()] == *parent_path
-            && location.block_path.last() == Some(&target_index))
+            && location.document_path.len() == prefix.len() + 1
+            && location.document_path[..prefix.len()] == *prefix
+            && location.document_path.last() == Some(&target_index))
         .then(|| id.clone())
     })
-}
-
-fn block_list_at_path<'a>(blocks: &'a [Block], parent_path: &[usize]) -> Option<&'a [Block]> {
-    let mut current = blocks;
-    for block_index in parent_path {
-        let Block::Environment(environment) = current.get(*block_index)? else {
-            return None;
-        };
-        current = &environment.children;
-    }
-    Some(current)
 }
 
 pub(super) struct RestoredHistoryTransition {
@@ -1962,6 +1913,8 @@ mod tests {
             parent_environment_ids: Vec::new(),
             sibling_index,
             is_title: false,
+            container: BlockContainerPath::default(),
+            document_path: vec![sibling_index],
         }
     }
 

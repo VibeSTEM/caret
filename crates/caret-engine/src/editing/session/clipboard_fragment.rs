@@ -18,6 +18,7 @@ use super::super::{
 };
 use super::Session;
 use super::history::{DocumentEditSnapshot, DocumentPatch, ParagraphState, SessionHistoryState};
+use crate::editing::paragraph_ops::BlockContainerPath;
 use caret_doc::{
     Align, Block, ClipboardFragment, ClipboardFragmentShape, Equation, InlineMath, MathTree,
     NodeId, Paragraph, ParagraphContent, ParagraphLineSpacing, TextFlow,
@@ -615,10 +616,8 @@ impl Session {
             .paragraph_index
             .get(&end.paragraph_id)
             .ok_or(EditError::InvalidPosition)?;
-        Ok(
-            path > start_location.block_path.as_slice()
-                && path < end_location.block_path.as_slice(),
-        )
+        Ok(path > start_location.document_path.as_slice()
+            && path < end_location.document_path.as_slice())
     }
 }
 
@@ -1068,7 +1067,7 @@ impl Session {
         self.finalize_structure_edit(
             index,
             DocumentPatch::BlockRange {
-                parent_environment_ids,
+                container: BlockContainerPath::from_environment_ids(&parent_environment_ids),
                 sibling_index,
                 before: vec![before_block],
                 after,
@@ -1818,20 +1817,19 @@ impl Session {
                 let mut before: Option<(&ParagraphLocation, usize)> = None;
                 let mut after: Option<(&ParagraphLocation, usize)> = None;
                 for location in paragraph_index.values() {
-                    if location.block_path.as_slice() < block_path.as_slice() {
+                    if location.document_path.as_slice() < block_path.as_slice() {
                         let paragraph = paragraph_at_location(&document.body, location)
                             .ok_or(EditError::InvalidPosition)?;
                         let length = TextMap::new(paragraph)?.text.len();
-                        if before
-                            .as_ref()
-                            .is_none_or(|(current, _)| location.block_path > current.block_path)
-                        {
+                        if before.as_ref().is_none_or(|(current, _)| {
+                            location.document_path > current.document_path
+                        }) {
                             before = Some((location, length));
                         }
-                    } else if location.block_path.as_slice() > block_path.as_slice()
-                        && after
-                            .as_ref()
-                            .is_none_or(|(current, _)| location.block_path < current.block_path)
+                    } else if location.document_path.as_slice() > block_path.as_slice()
+                        && after.as_ref().is_none_or(|(current, _)| {
+                            location.document_path < current.document_path
+                        })
                     {
                         after = Some((location, 0));
                     }

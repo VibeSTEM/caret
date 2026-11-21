@@ -2398,3 +2398,201 @@ fn install_structure_selection_rejects_empty_coverage_without_side_effects() {
     assert_eq!(session.document_generation(), generation_before);
     assert_eq!(session.can_undo(), can_undo_before);
 }
+
+fn table_document_for_session() -> (Document, NodeId, NodeId, NodeId, NodeId) {
+    let value = serde_json::json!({
+        "type": "table",
+        "id": "table-1",
+        "rows": [{
+            "id": "row-1",
+            "cells": [{
+                "id": "cell-1",
+                "blocks": [{
+                    "type": "paragraph",
+                    "id": "cell-paragraph-1",
+                    "inlines": [{
+                        "type": "text",
+                        "runs": [{"text": "one", "props": {}}]
+                    }]
+                }]
+            }]
+        }]
+    });
+    let table: Block = serde_json::from_value(value)
+        .unwrap_or_else(|error| panic!("table fixture must parse: {error}"));
+    let mut document = Document::blank();
+    document.body.push(table);
+    (
+        document,
+        NodeId::parse("table-1").unwrap_or_else(|error| panic!("table id: {error}")),
+        NodeId::parse("row-1").unwrap_or_else(|error| panic!("row id: {error}")),
+        NodeId::parse("cell-1").unwrap_or_else(|error| panic!("cell id: {error}")),
+        NodeId::parse("cell-paragraph-1").unwrap_or_else(|error| panic!("paragraph id: {error}")),
+    )
+}
+
+#[test]
+fn table_cell_text_editing_uses_the_shared_history_and_document_validation() {
+    let (document, table_id, row_id, cell_id, paragraph_id) = table_document_for_session();
+    let mut session =
+        Session::new(document).unwrap_or_else(|error| panic!("table document must open: {error}"));
+    let story = StoryId::TableCell {
+        table_id: table_id.clone(),
+        row_id,
+        cell_id,
+    };
+    let anchor = Pos {
+        story: story.clone(),
+        paragraph_id: paragraph_id.clone(),
+        offset: 1,
+        affinity: Affinity::Downstream,
+    };
+    let focus = Pos {
+        offset: 3,
+        affinity: Affinity::Upstream,
+        ..anchor.clone()
+    };
+    session
+        .set_selection(Some(Selection { anchor, focus }))
+        .unwrap_or_else(|error| panic!("cell selection must be valid: {error}"));
+    session
+        .run(Command::InsertText("X".to_owned()))
+        .unwrap_or_else(|error| panic!("cell replacement must succeed: {error}"));
+    let location = session
+        .paragraph_index
+        .get(&paragraph_id)
+        .unwrap_or_else(|| panic!("cell paragraph must stay indexed"))
+        .clone();
+    let paragraph =
+        super::super::paragraph_ops::paragraph_at_location(&session.document.body, &location)
+            .unwrap_or_else(|| panic!("cell paragraph must resolve"));
+    assert_eq!(
+        TextMap::new(paragraph)
+            .unwrap_or_else(|error| panic!("cell text map failed: {error}"))
+            .text,
+        "oX"
+    );
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("cell undo must succeed: {error}"));
+    let paragraph =
+        super::super::paragraph_ops::paragraph_at_location(&session.document.body, &location)
+            .unwrap_or_else(|| panic!("cell paragraph must resolve after undo"));
+    assert_eq!(
+        TextMap::new(paragraph)
+            .unwrap_or_else(|error| panic!("cell text map failed: {error}"))
+            .text,
+        "one"
+    );
+}
+
+#[test]
+fn table_cell_enter_splits_inside_the_cell_transaction() {
+    let (document, table_id, row_id, cell_id, paragraph_id) = table_document_for_session();
+    let mut session =
+        Session::new(document).unwrap_or_else(|error| panic!("table document must open: {error}"));
+    let story = StoryId::TableCell {
+        table_id: table_id.clone(),
+        row_id: row_id.clone(),
+        cell_id: cell_id.clone(),
+    };
+    let position = Pos {
+        story,
+        paragraph_id,
+        offset: 3,
+        affinity: Affinity::Downstream,
+    };
+    session
+        .set_selection(Some(Selection {
+            anchor: position.clone(),
+            focus: position,
+        }))
+        .unwrap_or_else(|error| panic!("cell caret must be valid: {error}"));
+    session
+        .run(Command::InsertParagraphBreak)
+        .unwrap_or_else(|error| panic!("cell paragraph break must succeed: {error}"));
+    let cell_blocks = caret_structure::block_list_by_table_cell(
+        &session.document.body,
+        &[],
+        &table_id,
+        &row_id,
+        &cell_id,
+    )
+    .unwrap_or_else(|| panic!("cell blocks must resolve"));
+    assert_eq!(cell_blocks.len(), 2);
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("cell split undo must succeed: {error}"));
+    let cell_blocks = caret_structure::block_list_by_table_cell(
+        &session.document.body,
+        &[],
+        &table_id,
+        &row_id,
+        &cell_id,
+    )
+    .unwrap_or_else(|| panic!("cell blocks must resolve"));
+    assert_eq!(cell_blocks.len(), 1);
+}
+
+#[test]
+fn table_cell_display_math_insertion_uses_the_cell_container_transaction() {
+    let (document, table_id, row_id, cell_id, paragraph_id) = table_document_for_session();
+    let mut session =
+        Session::new(document).unwrap_or_else(|error| panic!("table document must open: {error}"));
+    let story = StoryId::TableCell {
+        table_id: table_id.clone(),
+        row_id: row_id.clone(),
+        cell_id: cell_id.clone(),
+    };
+    let position = Pos {
+        story,
+        paragraph_id,
+        offset: 3,
+        affinity: Affinity::Downstream,
+    };
+    session
+        .set_selection(Some(Selection {
+            anchor: position.clone(),
+            focus: position,
+        }))
+        .unwrap_or_else(|error| panic!("cell caret must be valid: {error}"));
+    assert!(session.can_insert_display_math(false));
+    session
+        .insert_display_math(false)
+        .unwrap_or_else(|error| panic!("cell display math insertion must succeed: {error}"));
+    let cell_blocks = caret_structure::block_list_by_table_cell(
+        &session.document.body,
+        &[],
+        &table_id,
+        &row_id,
+        &cell_id,
+    )
+    .unwrap_or_else(|| panic!("cell blocks must resolve"));
+    assert!(
+        cell_blocks
+            .iter()
+            .any(|block| matches!(block, Block::Equation(_))),
+        "display equation must be inserted inside the cell"
+    );
+    assert!(matches!(
+        session.current_math_edit_target(),
+        Some(crate::editing::MathEditTarget::Block { .. })
+    ));
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("cell math undo must succeed: {error}"));
+    let cell_blocks = caret_structure::block_list_by_table_cell(
+        &session.document.body,
+        &[],
+        &table_id,
+        &row_id,
+        &cell_id,
+    )
+    .unwrap_or_else(|| panic!("cell blocks must resolve"));
+    assert!(
+        !cell_blocks
+            .iter()
+            .any(|block| matches!(block, Block::Equation(_))),
+        "undo must remove the inserted equation"
+    );
+}

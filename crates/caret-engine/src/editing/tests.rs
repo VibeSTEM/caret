@@ -2752,7 +2752,7 @@ fn table_cell_paragraphs_share_the_paragraph_index_and_cell_story() {
         let location = index
             .get(paragraph_id)
             .unwrap_or_else(|| panic!("cell paragraph must enter the paragraph index"));
-        assert!(location.table_cell.is_some());
+        assert!(location.container.innermost_cell().is_some());
         let paragraph = paragraph_at_location(&document.body, location)
             .unwrap_or_else(|| panic!("cell paragraph must resolve through its container"));
         assert_eq!(&paragraph.id, paragraph_id);
@@ -2842,7 +2842,7 @@ fn table_cell_split_uses_the_shared_paragraph_transaction() {
     let right_location = index
         .get(&right_id)
         .unwrap_or_else(|| panic!("split paragraph indexed"));
-    assert!(right_location.table_cell.is_some());
+    assert!(right_location.container.innermost_cell().is_some());
     assert_eq!(right_location.paragraph_id, right_id);
     let row_id = NodeId::parse("row-1").unwrap_or_else(|error| panic!("row id: {error}"));
     let cell_id = NodeId::parse("cell-1").unwrap_or_else(|error| panic!("cell id: {error}"));

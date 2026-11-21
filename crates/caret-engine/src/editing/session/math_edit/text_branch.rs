@@ -16,6 +16,7 @@ use super::{
     MathTextPosition, MathTreePosition, first_placeholder_position, history_position,
     math_position_affinity_to_affinity, math_text_selection_range,
 };
+use crate::editing::paragraph_ops::BlockContainerPath;
 use caret_doc::Block;
 
 pub(super) mod format_tree_edit;
@@ -383,7 +384,9 @@ impl Session {
                 }
                 self.record_math_history_with_pending_style(
                     DocumentPatch::BlockRange {
-                        parent_environment_ids,
+                        container: BlockContainerPath::from_environment_ids(
+                            &parent_environment_ids,
+                        ),
                         sibling_index,
                         before: vec![before],
                         after: vec![after],

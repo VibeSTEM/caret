@@ -5,6 +5,7 @@
 
 use super::super::block_rows::{self, BackspaceAction};
 use super::*;
+use crate::editing::paragraph_ops::BlockContainerPath;
 
 /// Align 逻辑行删除采用的事务。
 #[derive(Clone, Copy)]
@@ -294,7 +295,7 @@ pub(super) fn commit_align_tree_edit(
     after_edit.branch = branch;
     session.record_math_history_with_pending_style(
         DocumentPatch::BlockRange {
-            parent_environment_ids: parents,
+            container: BlockContainerPath::from_environment_ids(&parents),
             sibling_index,
             before: vec![before],
             after: vec![after],

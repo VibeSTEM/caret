@@ -5,6 +5,7 @@
 
 use super::super::history::DocumentEditSnapshot;
 use super::*;
+use crate::editing::paragraph_ops::BlockContainerPath;
 
 impl Session {
     /// 空公式中退格：删除整个公式对象并退出编辑。
@@ -147,7 +148,7 @@ impl Session {
                 );
                 self.commit_document_edit(
                     DocumentPatch::BlockRange {
-                        parent_environment_ids: parent_ids,
+                        container: BlockContainerPath::from_environment_ids(&parent_ids),
                         sibling_index: index,
                         before: vec![removed],
                         after: Vec::new(),
@@ -749,7 +750,7 @@ impl Session {
                 self.advance_history_merge_epoch();
                 self.record_math_history(
                     DocumentPatch::BlockRange {
-                        parent_environment_ids: parent_ids,
+                        container: BlockContainerPath::from_environment_ids(&parent_ids),
                         sibling_index: index,
                         before: vec![before],
                         after: vec![block],

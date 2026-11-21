@@ -996,8 +996,8 @@ impl Session {
             .filter(|(_, location)| location.story == start.story)
             .collect();
         paragraphs.sort_by(|(_, left), (_, right)| {
-            left.block_path
-                .cmp(&right.block_path)
+            left.document_path
+                .cmp(&right.document_path)
                 .then_with(|| left.is_title.cmp(&right.is_title).reverse())
         });
         let start_index = paragraphs
