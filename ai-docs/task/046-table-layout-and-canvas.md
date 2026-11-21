@@ -67,6 +67,9 @@
 - 2026-11-09：将数学宿主的表格式行列组装、正文基准行高和编辑态白色虚线分隔辅助线纳入本任务；共用几何落在已有 `caret-grid-layout`，不新建转发 crate。
 - 2026-10-29：由 012 拆出表格的布局和画布职责；表格模块与公式 backend 分离，engine 复用 044 几何并在单元格坐标内组合。
 - 2026-11-22：045 已合并到 main（PR #167）。开始实现（分支 `yuki/task-046-table-layout`）：先审计现有页面/段落布局、`caret-grid-layout` 行列装配、引擎快照与 Qt 画布命中链路，确定表格布局 slice 与 shared 行框复用；按“单元格几何/内容布局→绘制与命中→caret/选区→分页/裁剪→用户入口（\table、native 键位与 cell 公式定位器）”的纵向顺序推进。
+- 2026-11-22：S1a：`caret-layout::table` 表格网格几何（等分列宽、行高/首基线、单元格内容盒、最小行度量），复用 `caret-grid-layout`，7 项测试。
+- 2026-11-22：S1b：分页协议扩展（`FragmentClip`、段落/公式片段 x/clip、`TableFragment` 行范围/原点/完整网格），`PaginationItem::Table` 行原子分页 + 续页负原点；3 项分页测试。
+- 2026-11-22：S1c：engine 接入 Table 布局（段落宽度进入塑形/复用键、cell 表格测量与网格、分页展开 cell 行位置与片段、page_glyphs 输出 cell 文本与表格边框）；hit/caret/range 使用同一行放置几何；`\table`/Alt+T/Shift+Tab/行列键/删除行列 native 意图、app 映射与 codec `table` kind；engine 954/app 354/workspace/clippy 通过。当前限制：cell 内公式/环境/嵌套表布局、cell 公式编辑/导航、整表复制与跨 cell 选择未接，遇到显式拒绝。
 
 ## 完成摘要
 
