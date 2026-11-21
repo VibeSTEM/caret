@@ -35,7 +35,7 @@ Caret 的 Block/Inline 编辑目前分散管理焦点位置、边界移动、选
 ## 前置条件与待决策
 
 - 071、074、081、082、083、090、091 已完成并合入；077 为 `implemented`（代码与自动验证完成，仅桌面 caret 视觉确认待补，不阻塞 080）。
-- 091 富剪贴板 v1 已合入 main（PR #159，squash `5cf2d64e`）；依赖 083、092 均完成。整链验收已执行：复制/粘贴 MathTree/Align/InlineMath 保真、TeX 回退、一次 Undo、失败原子性、覆盖率与分域评审；独立最终评审进行中。
+- 091 富剪贴板 v1 已合入 main（PR #159，squash `5cf2d64e`）；依赖 083、092 均完成。整链验收已执行：复制/粘贴 MathTree/Align/InlineMath 保真、TeX 回退、一次 Undo、失败原子性、覆盖率与分域评审；独立最终评审已通过（见「独立评审」与验证表）。
 - Math 内部局部选区、跨文档主题模板迁移、QML 剪贴板错误对话框与真实跨进程/跨平台剪贴板不属 080 验收范围（任务 105 跟进）。
 
 ## 实施步骤
@@ -68,7 +68,7 @@ Caret 的 Block/Inline 编辑目前分散管理焦点位置、边界移动、选
 | 日期 | 环境 / 命令 | 预期 | 实际结果 |
 | --- | --- | --- | --- |
 | 2026-11-18 | `cargo fmt --all -- --check`、`cargo test --locked -p caret-app vertical_navigation_leaves_math_block_boundary_for_adjacent_visual_paragraph`、`cargo check --locked -p caret-engine` | 块级公式外停靠的 Up/Down 先走视觉段落候选，Shift 扩展不误进公式 | 通过；Equation/Align 停靠到相邻 Paragraph 的定向场景 |
-| 2026-11-21 | 审计 081/082/083 文档与索引状态 | 子任务均完成并各自验收 | 081/082/083 均 `done`；071、074 `done`，077 `implemented`；091 `planned`（依赖 092 `ready`） |
+| 2026-11-21 | 审计 081/082/083 文档与索引状态 | 子任务均完成并各自验收 | 081/082/083 均 `done`；071、074 `done`，077 `implemented`；091 `planned`（依赖 092 `ready`；该行为当日审计状态，已被后续整链验收取代） |
 | 2026-11-21 | `cargo test --locked -p caret-engine editing::session::structure` / `editing::session::navigation` / `editing::session::math_edit::tests::selection_caret` / `editing::session::document_position` | 跨宿主删除/导航/选区/文档位置协议一致 | 通过：73 / 40 / 86 / 24 项 |
 | 2026-11-21 | `cargo test --locked -p caret-app vertical_navigation_leaves_math_block_boundary_for_adjacent_visual_paragraph` / `structural_selection_geometry_covers_equation_hosts_across_host_boundaries` / `backspace` / `inline_math` 过滤 | 块边界、跨宿主几何与空 inline 槽位回归 | 通过：1 / 1 / 14 / 36 项 |
 | 2026-11-21 | `cargo test --locked -p caret-engine empty_inline_math`、`cargo test --locked -p caret-app empty_inline_math` | 087 收尾：空 Inline 槽位/命中/删除/Undo/Redo/IME 回归 | 通过：9 / 5 项 |
