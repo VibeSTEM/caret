@@ -50,11 +50,11 @@
 | --- | --- | --- | --- |
 | 2026-11-22 | `cargo test -p caret-doc --lib`；`cargo test -p caret-tests --test document table` | 模型/存储往返、严格字段、结构不变量、能力推导与缺失声明预览 | 通过：113 项 + 黑盒 `.cdoc` 往返（含单元格内 InlineMath/Equation） |
 | 2026-11-22 | `cargo test -p caret-engine layout_errors_reject` | 含表文档得到明确 `layout.unsupported_content`，不发布半成品快照 | 通过 |
-| 2026-11-22 | `cargo test -p caret-engine --lib` | 单元格文本/Enter/继续键入、行列增删原子性、Tab/Shift+Tab 与结构边界、公式显式拒绝、section 标题拆分/合并索引 | 通过：944 项 |
+| 2026-11-22 | `cargo test -p caret-engine --lib` | 单元格文本/Enter/继续键入、行列增删原子性、Tab/Shift+Tab 与结构边界、公式显式拒绝、section 标题拆分/合并索引 | 通过：952 项 |
 | 2026-11-22 | workspace `cargo test --locked --offline --workspace` | 全量 Rust/native/QML 回归 | 通过（见完成摘要） |
 | 2026-11-22 | `cargo fmt`/`cargo format --check`、`cargo clippy -D warnings`、`cargo lint --check` 9/9 | 格式、跨层与静态检查 | 通过 |
 | 2026-11-22 | 领域评审（只读完整 diff） | 架构复用、容器路径、原子性、导航历史、测试真实性、文档一致性 | 完成：P1-1（cell Enter 后续输入 WrongStory）、P2-1（表格命令非原子）、P2-2（导航进历史）已修复；P1-2（cell 公式编辑/导航）降级为显式拒绝并移交 046；P2-5（文档夸大/矛盾）已按实际重写；P2-3/P2-4/P2-6 边界记录于下 |
-| 2026-11-22 | 独立 final review（只读完整 diff） | 最终合并前检查 | 首轮：无 P1，6 项 P2（结构方向键历史、纵向边界回退、复制过度拒绝、table-only 打开、单元格环境标题 Story、行内公式箭头进入）；已修复并补回归，二次复审见 PR 记录 |
+| 2026-11-22 | 独立 final review（只读完整 diff） | 最终合并前检查 | 首轮：无 P1，6 项 P2（结构方向键历史、纵向边界回退、复制过度拒绝、table-only 打开、单元格环境标题 Story、行内公式箭头进入）→ 已修复并补回归；二次复审：6 项全部确认解决、无新增 P1/P2，可创建 PR。P3（翻译条目、边界测试、错误码、空表复制）已顺手修复 |
 | — | macOS 表格快捷键检查 | 导航键和插入键按规范工作 | 未执行：native/QML 键位与窗口验证随 046/012 完成 |
 
 ## 风险、限制与 046 前置
