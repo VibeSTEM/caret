@@ -316,7 +316,7 @@ bool parse_current_structure_impl(const QJsonValue& value, QVariantList& result,
         const bool known_kind =
             kind == QStringLiteral("paragraph") || heading || kind == QStringLiteral("section") ||
             kind == QStringLiteral("custom") || kind == QStringLiteral("equation") ||
-            kind == QStringLiteral("align");
+            kind == QStringLiteral("align") || kind == QStringLiteral("table");
         const int heading_level = level.toInt(-1);
         const bool valid_level = heading
                                      ? level.isDouble() && heading_level >= 1 &&

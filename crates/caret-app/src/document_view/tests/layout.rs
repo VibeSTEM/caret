@@ -3306,3 +3306,26 @@ fn paragraph_text_into(paragraph: &Paragraph, out: &mut String) {
         }
     }
 }
+
+#[test]
+fn inserted_table_renders_cell_paragraphs_and_navigates() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    let json = runtime.handle_editor_key_json("insert-table")?;
+    let snapshot: Value = serde_json::from_str(&json)?;
+    assert_eq!(snapshot["pages"].as_array().map(Vec::len), Some(1));
+    assert_eq!(snapshot["paragraphs"].as_array().map(Vec::len), Some(5));
+    assert_eq!(
+        snapshot["pages"][0]["fragments"].as_array().map(Vec::len),
+        Some(5)
+    );
+    let _first_paragraph = snapshot["paragraphs"][1]["paragraphId"]
+        .as_str()
+        .ok_or("cell paragraph id must serialize")?;
+
+    runtime.handle_editor_key_json("tab")?;
+    let json = runtime.layout_snapshot_json()?;
+    let snapshot: Value = serde_json::from_str(&json)?;
+    assert_eq!(snapshot["pages"].as_array().map(Vec::len), Some(1));
+    Ok(())
+}

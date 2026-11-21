@@ -595,6 +595,7 @@ fn table_item<'a>(
 ) -> PaginationItem<'a> {
     PaginationItem::Table(super::TablePaginationInput {
         table_id: id,
+        x_offset_pt: 0.0,
         layout,
         space_before_pt: before,
         space_after_pt: after,

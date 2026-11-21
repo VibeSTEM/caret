@@ -52,8 +52,41 @@ void DocumentCanvas::keyPressEvent(QKeyEvent* event) {
         event->accept();
         return;
     }
+    if (event->key() == Qt::Key_Backtab ||
+        (semantic_modifiers == Qt::ShiftModifier && event->key() == Qt::Key_Tab)) {
+        emit editorKeyRequested(QStringLiteral("shift-tab"));
+        event->accept();
+        return;
+    }
     if (semantic_modifiers == Qt::NoModifier && event->key() == Qt::Key_Tab) {
         emit editorKeyRequested(QStringLiteral("tab"));
+        event->accept();
+        return;
+    }
+    if (keyboard::isToggleTableInsert(semantic_modifiers, event->key())) {
+        emit editorKeyRequested(QStringLiteral("insert-table"));
+        event->accept();
+        return;
+    }
+    if (keyboard::isTableShapeInsert(semantic_modifiers, event->key())) {
+        const QString intent = event->key() == Qt::Key_Up
+            ? QStringLiteral("table-insert-row-before")
+            : event->key() == Qt::Key_Down
+            ? QStringLiteral("table-insert-row-after")
+            : event->key() == Qt::Key_Left
+            ? QStringLiteral("table-insert-col-before")
+            : QStringLiteral("table-insert-col-after");
+        emit editorKeyRequested(intent);
+        event->accept();
+        return;
+    }
+    if (keyboard::isDeleteTableRow(semantic_modifiers, event->key())) {
+        emit editorKeyRequested(QStringLiteral("table-delete-row"));
+        event->accept();
+        return;
+    }
+    if (keyboard::isDeleteTableColumn(semantic_modifiers, event->key())) {
+        emit editorKeyRequested(QStringLiteral("table-delete-column"));
         event->accept();
         return;
     }

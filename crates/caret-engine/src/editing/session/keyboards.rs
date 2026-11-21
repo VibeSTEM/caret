@@ -70,6 +70,11 @@ impl Session {
                     Ok(Effect::default())
                 }
             }
+            EditorKey::InsertTable => self.insert_table(),
+            EditorKey::TableInsertRow(direction) => self.insert_table_row(direction),
+            EditorKey::TableDeleteRow => self.delete_table_row(),
+            EditorKey::TableInsertColumn(direction) => self.insert_table_column(direction),
+            EditorKey::TableDeleteColumn => self.delete_table_column(),
             EditorKey::ShiftEnter => self.handle_enter(true),
             EditorKey::Backspace => self.handle_backspace(),
             EditorKey::Delete => self.handle_delete(),

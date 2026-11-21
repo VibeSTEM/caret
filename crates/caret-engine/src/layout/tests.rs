@@ -12,7 +12,7 @@ use caret_doc::{
     Align, Block, BlockEnvironment, BlockEnvironmentKind, Document, Equation, ExplicitBreak,
     InlineEnvironment, InlineEnvironmentKind, InlineMath, MathAlignRow, NodeId, OpaqueNode,
     Orientation, PageGeometry, PageMargins, PaperSize, Paragraph, ParagraphContent, Run, SoftBreak,
-    TextFlow,
+    Table, TableCell, TableRow, TextFlow,
 };
 use caret_layout::{FontCatalog, FontCatalogError, HitAffinity, ShapingStyle, VisualAffinity};
 use std::collections::BTreeMap;
@@ -3225,24 +3225,6 @@ fn layout_errors_reject_the_entire_document_and_leave_the_service_reusable() {
     opaque_block.body.push(Block::Opaque(OpaqueNode {
         raw: serde_json::json!({"type": "future_block", "content": "preserved"}),
     }));
-    let mut table_block = Document::blank();
-    let table: Block = serde_json::from_value(serde_json::json!({
-        "type": "table",
-        "id": "table-1",
-        "rows": [{
-            "id": "row-1",
-            "cells": [
-                {"id": "cell-1", "blocks": [
-                    {"type": "paragraph", "id": "paragraph-1", "inlines": []}
-                ]},
-                {"id": "cell-2", "blocks": [
-                    {"type": "paragraph", "id": "paragraph-2", "inlines": []}
-                ]}
-            ]
-        }]
-    }))
-    .unwrap_or_else(|error| panic!("table test block must parse: {error}"));
-    table_block.body.push(table);
     let mut unknown_empty_mark = Document::blank();
     let Block::Paragraph(empty) = &mut unknown_empty_mark.body[0] else {
         unreachable!();
@@ -3257,7 +3239,6 @@ fn layout_errors_reject_the_entire_document_and_leave_the_service_reusable() {
         (invalid_model, "layout.invalid_document:"),
         (unknown_break, "layout.unknown_break_kind: column"),
         (opaque_block, "layout.unsupported_content"),
-        (table_block, "layout.unsupported_content"),
         (
             unknown_empty_mark,
             "layout.unsupported_paragraph_mark_style",
@@ -5513,4 +5494,70 @@ fn empty_optional_slots_keep_structural_depth() {
         (caret_height(index_caret) - 1.0).abs() < 1e-9,
         "empty root index caret keeps the minimum visible height"
     );
+}
+
+#[test]
+fn basic_table_layout_places_cells_and_shared_caret_geometry() {
+    let make_cell = |text: &str| TableCell {
+        id: NodeId::generate(),
+        blocks: vec![Block::Paragraph(paragraph(text))],
+    };
+    let first = make_cell("a");
+    let second = make_cell("b");
+    let third = make_cell("c");
+    let fourth = make_cell("d");
+    let first_paragraph = match &first.blocks[0] {
+        Block::Paragraph(paragraph) => paragraph.id.clone(),
+        _ => panic!("cell must hold a paragraph"),
+    };
+    let first_cell_id = first.id.clone();
+    let row0 = TableRow {
+        id: NodeId::generate(),
+        cells: vec![first, second],
+    };
+    let row1 = TableRow {
+        id: NodeId::generate(),
+        cells: vec![third, fourth],
+    };
+    let row0_id = row0.id.clone();
+    let table = Table {
+        id: NodeId::generate(),
+        rows: vec![row0, row1],
+    };
+    let table_id = table.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![Block::Table(table)];
+
+    let snapshot = layout_document(&document);
+    assert_eq!(snapshot.pages.len(), 1);
+    let page = &snapshot.pages[0];
+    assert_eq!(page.layout.table_fragments.len(), 1);
+    assert_eq!(page.layout.fragments.len(), 4);
+    assert!(page.layout.table_fragments[0].row_range == (0..2));
+
+    let first_pos = Pos {
+        story: StoryId::TableCell {
+            table_id: table_id.clone(),
+            row_id: row0_id,
+            cell_id: first_cell_id,
+        },
+        paragraph_id: first_paragraph,
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
+    let first_caret = snapshot
+        .caret_geometry(&first_pos, VisualAffinity::Downstream)
+        .unwrap_or_else(|| panic!("cell caret geometry must resolve"));
+    assert!(first_caret.x_pt >= page.margin_left_pt);
+    assert!(first_caret.y0_pt >= page.margin_top_pt);
+    assert!(first_caret.y1_pt > first_caret.y0_pt);
+    let hit = snapshot
+        .hit_test(
+            first_caret.page_index,
+            (first_caret.x_pt + 1.0).min(page.width_pt - 1.0),
+            (first_caret.y0_pt + first_caret.y1_pt) / 2.0,
+        )
+        .unwrap_or_else(|| panic!("cell hit must resolve"));
+    assert_eq!(hit.position.paragraph_id, first_pos.paragraph_id);
+    assert_eq!(hit.position.story, first_pos.story);
 }

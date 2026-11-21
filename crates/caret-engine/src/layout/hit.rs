@@ -17,7 +17,7 @@ impl DocumentLayoutSnapshot {
             return None;
         }
         let content_y = y_pt - page.margin_top_pt;
-        let mut closest_line: Option<(f64, usize, usize, f64)> = None;
+        let mut closest_line: Option<(f64, usize, usize, f64, f64)> = None;
         for fragment in &page.layout.fragments {
             let Some(&paragraph_index) = self.paragraph_lookup.get(&fragment.paragraph_id) else {
                 continue;
@@ -25,11 +25,24 @@ impl DocumentLayoutSnapshot {
             let Some(paragraph) = self.paragraphs.get(paragraph_index) else {
                 continue;
             };
-            let mut line_top = f64::from(fragment.y_offset_pt);
             for line_index in fragment.line_range.clone() {
                 let Some(line) = paragraph.layout.paragraph.lines.get(line_index) else {
                     continue;
                 };
+                let Some(location) = paragraph
+                    .line_locations
+                    .get(line_index)
+                    .and_then(|location| location.as_ref())
+                else {
+                    continue;
+                };
+                // 单元格行只能命中其内容矩形；正文行没有裁剪框。
+                if let Some(clip) = location.clip
+                    && (x_pt < clip[0] || x_pt > clip[2])
+                {
+                    continue;
+                }
+                let line_top = location.y0_pt - page.margin_top_pt;
                 let line_bottom = line_top + f64::from(line.metrics.height_pt);
                 let vertical_distance = if content_y < line_top {
                     line_top - content_y
@@ -40,18 +53,23 @@ impl DocumentLayoutSnapshot {
                 };
                 if closest_line
                     .as_ref()
-                    .is_none_or(|(distance, _, _, _)| vertical_distance < *distance)
+                    .is_none_or(|(distance, _, _, _, _)| vertical_distance < *distance)
                 {
-                    closest_line = Some((vertical_distance, paragraph_index, line_index, line_top));
+                    closest_line = Some((
+                        vertical_distance,
+                        paragraph_index,
+                        line_index,
+                        line_top,
+                        location.x0_pt,
+                    ));
                 }
-                line_top = line_bottom;
             }
         }
-        let (_, paragraph_index, line_index, line_top) = closest_line?;
+        let (_, paragraph_index, line_index, line_top, line_x0_pt) = closest_line?;
         let paragraph = self.paragraphs.get(paragraph_index)?;
         let cursor = paragraph
             .layout
-            .cursor_from_point_on_line((x_pt - page.margin_left_pt) as f32, line_index)?;
+            .cursor_from_point_on_line((x_pt - line_x0_pt) as f32, line_index)?;
         let cursor_bounds = paragraph.layout.cursor_geometry(cursor.cursor, 0.0);
         let line = paragraph.layout.paragraph.lines.get(line_index)?;
         let caret_y0 = page.margin_top_pt + line_top;
@@ -68,7 +86,7 @@ impl DocumentLayoutSnapshot {
             visual_affinity: cursor.cursor.affinity(),
             caret: PageCaretGeometry {
                 page_index,
-                x_pt: cursor_bounds.x0 + page.margin_left_pt,
+                x_pt: cursor_bounds.x0 + line_x0_pt,
                 y0_pt: caret_y0,
                 y1_pt: caret_y0 + f64::from(line.metrics.height_pt),
             },

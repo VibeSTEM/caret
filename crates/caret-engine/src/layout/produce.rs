@@ -24,6 +24,7 @@ impl LaidOutParagraph {
             environment_ids: Arc::from(input.environment_ids),
             source_paragraph: Arc::new(input.source_paragraph),
             resolved_style: input.resolved_style,
+            layout_width_pt: input.layout_width_pt,
             math_caret_height_pt: input.math_caret_height_pt,
             math_caret_baseline_pt: input.math_caret_baseline_pt,
             text: Arc::from(input.text),
@@ -43,11 +44,13 @@ impl LaidOutParagraph {
         environment_ids: &[NodeId],
         paragraph: &Paragraph,
         resolved_style: ResolvedParagraphStyle,
+        layout_width_pt: f32,
     ) -> bool {
         self.story == *story
             && self.environment_ids.as_ref() == environment_ids
             && self.source_paragraph.as_ref() == paragraph
             && self.resolved_style == resolved_style
+            && self.layout_width_pt == layout_width_pt
     }
 
     pub(super) fn reused_for_layout(&self, story: StoryId, environment_ids: &[NodeId]) -> Self {
@@ -57,6 +60,7 @@ impl LaidOutParagraph {
             environment_ids: Arc::from(environment_ids),
             source_paragraph: Arc::clone(&self.source_paragraph),
             resolved_style: self.resolved_style,
+            layout_width_pt: self.layout_width_pt,
             math_caret_height_pt: self.math_caret_height_pt,
             math_caret_baseline_pt: self.math_caret_baseline_pt,
             text: Arc::clone(&self.text),
@@ -84,6 +88,26 @@ impl LaidOutParagraph {
             .unwrap_or((0, 0));
         let checkpoint_prefix = self.text.get(checkpoint_byte..byte_offset)?;
         Some(checkpoint_utf16 + checkpoint_prefix.encode_utf16().count())
+    }
+}
+
+const TABLE_CELL_PADDING_PT: f64 = 4.0;
+const TABLE_BORDER_WIDTH_PT: f64 = 0.5;
+const TABLE_MIN_COLUMN_WIDTH_PT: f64 = 24.0;
+
+fn table_layout_options(
+    content_width_pt: f32,
+    column_count: usize,
+) -> caret_layout::TableLayoutOptions {
+    caret_layout::TableLayoutOptions {
+        content_width_pt: f64::from(content_width_pt),
+        column_count,
+        cell_padding_pt: TABLE_CELL_PADDING_PT,
+        border_width_pt: TABLE_BORDER_WIDTH_PT,
+        column_gap_pt: 0.0,
+        minimum_column_width_pt: TABLE_MIN_COLUMN_WIDTH_PT,
+        minimum_row_ascent_pt: 10.0,
+        minimum_row_descent_pt: 4.0,
     }
 }
 
@@ -264,109 +288,162 @@ impl DocumentLayoutService {
         reuse: Option<(&DocumentLayoutSnapshot, Option<&NodeId>)>,
         catalog: &mut FontCatalog,
         settings: ParagraphShapingSettings<'_>,
-    ) -> Result<(Vec<LaidOutParagraph>, Vec<ResolvedParagraphStyle>), DocumentLayoutError> {
-        let ParagraphShapingSettings {
-            base_style,
-            text_settings,
-            content_width_pt,
-        } = settings;
+    ) -> Result<ShapedParagraphs, DocumentLayoutError> {
         let paragraph_count = ordered_inputs
             .iter()
             .filter(|item| matches!(item, LayoutInput::Paragraph { .. }))
             .count();
         let mut paragraphs = Vec::with_capacity(paragraph_count);
         let mut resolved_styles = Vec::with_capacity(paragraph_count);
+        let mut shaped_tables = Vec::new();
         for item in ordered_inputs {
-            let LayoutInput::Paragraph {
-                paragraph,
-                story,
-                environment_ids,
-            } = item
-            else {
-                continue;
-            };
-            let style =
-                resolve_paragraph_style(&document.global_settings, paragraph.layout.as_ref())
-                    .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))?;
-            if let Some((previous, changed_paragraph_id)) = reuse
-                && changed_paragraph_id.is_none_or(|changed_id| &paragraph.id != changed_id)
-                && let Some(previous_paragraph) = previous.paragraph_by_id(&paragraph.id)
-                && previous_paragraph.can_reuse(story, environment_ids.as_slice(), paragraph, style)
-            {
-                paragraphs.push(
-                    previous_paragraph.reused_for_layout(story.clone(), environment_ids.as_slice()),
-                );
-                resolved_styles.push(style);
-                continue;
+            match item {
+                LayoutInput::Paragraph {
+                    paragraph,
+                    story,
+                    environment_ids,
+                    width_pt,
+                } => {
+                    let (laid_out, style) = self.shape_paragraph(
+                        document,
+                        paragraph,
+                        story.clone(),
+                        environment_ids,
+                        *width_pt,
+                        reuse,
+                        catalog,
+                        &settings,
+                    )?;
+                    paragraphs.push(laid_out);
+                    resolved_styles.push(style);
+                }
+                LayoutInput::Table {
+                    table,
+                    environment_ids,
+                    space_before_pt,
+                    space_after_pt,
+                } => {
+                    let (laid_out, styles, shaped) = self.shape_table(
+                        document,
+                        table,
+                        environment_ids,
+                        *space_before_pt,
+                        *space_after_pt,
+                        reuse,
+                        catalog,
+                        &settings,
+                    )?;
+                    for (paragraph, style) in laid_out.into_iter().zip(styles) {
+                        paragraphs.push(paragraph);
+                        resolved_styles.push(style);
+                    }
+                    shaped_tables.push(shaped);
+                }
+                LayoutInput::ExplicitBreak | LayoutInput::MathBlock { .. } => {}
             }
-            let line_grid_metrics = self.resolve_line_grid_metrics(
+        }
+
+        Ok((paragraphs, resolved_styles, shaped_tables))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn shape_paragraph(
+        &mut self,
+        document: &Document,
+        paragraph: &Paragraph,
+        story: StoryId,
+        environment_ids: &[NodeId],
+        width_pt: f32,
+        reuse: Option<(&DocumentLayoutSnapshot, Option<&NodeId>)>,
+        catalog: &mut FontCatalog,
+        settings: &ParagraphShapingSettings<'_>,
+    ) -> Result<(LaidOutParagraph, ResolvedParagraphStyle), DocumentLayoutError> {
+        let ParagraphShapingSettings {
+            base_style,
+            text_settings,
+            ..
+        } = settings;
+        let style = resolve_paragraph_style(&document.global_settings, paragraph.layout.as_ref())
+            .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))?;
+        if let Some((previous, changed_paragraph_id)) = reuse
+            && changed_paragraph_id.is_none_or(|changed_id| &paragraph.id != changed_id)
+            && let Some(previous_paragraph) = previous.paragraph_by_id(&paragraph.id)
+            && previous_paragraph.can_reuse(&story, environment_ids, paragraph, style, width_pt)
+        {
+            return Ok((
+                previous_paragraph.reused_for_layout(story, environment_ids),
+                style,
+            ));
+        }
+        let line_grid_metrics = self.resolve_line_grid_metrics(
+            catalog,
+            text_settings,
+            base_style,
+            text_settings.default_language(),
+        )?;
+        let paragraph_caret_metrics =
+            calculate_line_metrics_with_grid(line_grid_metrics, &[], &[], style.line_spacing)
+                .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))?;
+        let needs_mark_metrics = paragraph_has_empty_line(paragraph);
+        if needs_mark_metrics && !paragraph.mark_style.is_empty() {
+            return Err(DocumentLayoutError::UnsupportedParagraphMarkStyle);
+        }
+        let inline_layouts = if let Some(engine) = self.math_layout_engine.as_ref() {
+            let mut inline_context = MathLayoutContext {
+                engine: Some(engine),
                 catalog,
+                settings: text_settings,
+                base_style,
+                text_layouter: &mut self.layouter,
+                font_size_centipoints: base_style.font_size_centipoints,
+                content_width_pt: width_pt,
+                line_grid_metrics,
+                line_spacing: style.line_spacing,
+                space_before_pt: style.space_before_pt,
+                space_after_pt: style.space_after_pt,
+                caret_metrics: paragraph_caret_metrics,
+            };
+            let previous_paragraph =
+                reuse.and_then(|(previous, _)| previous.paragraph_by_id(&paragraph.id));
+            collect_inline_math_layouts(paragraph, &mut inline_context, previous_paragraph)?
+        } else {
+            InlineMathLayouts {
+                objects: Vec::new(),
+                layouts: Vec::new(),
+                ids: Vec::new(),
+                text_layouts: Vec::new(),
+            }
+        };
+        let InlineMathLayouts {
+            objects: inline_object_layouts,
+            layouts: inline_math_layouts,
+            ids: inline_math_ids,
+            text_layouts: inline_math_text_layouts,
+        } = inline_layouts;
+        let (text, layout) = self
+            .layouter
+            .layout_with_inline_objects(
+                catalog,
+                paragraph,
                 text_settings,
                 base_style,
-                text_settings.default_language(),
-            )?;
-            let paragraph_caret_metrics =
-                calculate_line_metrics_with_grid(line_grid_metrics, &[], &[], style.line_spacing)
-                    .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))?;
-            let needs_mark_metrics = paragraph_has_empty_line(paragraph);
-            if needs_mark_metrics && !paragraph.mark_style.is_empty() {
-                return Err(DocumentLayoutError::UnsupportedParagraphMarkStyle);
-            }
-            let inline_layouts = if let Some(engine) = self.math_layout_engine.as_ref() {
-                let mut inline_context = MathLayoutContext {
-                    engine: Some(engine),
-                    catalog,
-                    settings: text_settings,
-                    base_style,
-                    text_layouter: &mut self.layouter,
-                    font_size_centipoints: base_style.font_size_centipoints,
-                    content_width_pt,
+                ParagraphLayoutOptions {
+                    width_pt,
+                    spacing: style.line_spacing,
                     line_grid_metrics,
-                    line_spacing: style.line_spacing,
-                    space_before_pt: style.space_before_pt,
-                    space_after_pt: style.space_after_pt,
-                    caret_metrics: paragraph_caret_metrics,
-                };
-                let previous_paragraph =
-                    reuse.and_then(|(previous, _)| previous.paragraph_by_id(&paragraph.id));
-                collect_inline_math_layouts(paragraph, &mut inline_context, previous_paragraph)?
-            } else {
-                InlineMathLayouts {
-                    objects: Vec::new(),
-                    layouts: Vec::new(),
-                    ids: Vec::new(),
-                    text_layouts: Vec::new(),
-                }
-            };
-            let InlineMathLayouts {
-                objects: inline_object_layouts,
-                layouts: inline_math_layouts,
-                ids: inline_math_ids,
-                text_layouts: inline_math_text_layouts,
-            } = inline_layouts;
-            let (text, layout) = self
-                .layouter
-                .layout_with_inline_objects(
-                    catalog,
-                    paragraph,
-                    text_settings,
-                    base_style,
-                    ParagraphLayoutOptions {
-                        width_pt: content_width_pt,
-                        spacing: style.line_spacing,
-                        line_grid_metrics,
-                        line_grid_font_size_centipoints: base_style.font_size_centipoints,
-                        first_line_indent_chars: style.first_line_indent_chars,
-                    },
-                    &inline_object_layouts,
-                )
-                .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))?;
-            resolved_styles.push(style);
-            paragraphs.push(LaidOutParagraph::new(LaidOutParagraphInput {
-                source_paragraph: (*paragraph).clone(),
-                story: story.clone(),
-                environment_ids: environment_ids.clone(),
+                    line_grid_font_size_centipoints: base_style.font_size_centipoints,
+                    first_line_indent_chars: style.first_line_indent_chars,
+                },
+                &inline_object_layouts,
+            )
+            .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))?;
+        Ok((
+            LaidOutParagraph::new(LaidOutParagraphInput {
+                source_paragraph: paragraph.clone(),
+                story,
+                environment_ids: environment_ids.to_vec(),
                 resolved_style: style,
+                layout_width_pt: width_pt,
                 math_caret_height_pt: paragraph_caret_metrics.height_pt,
                 math_caret_baseline_pt: paragraph_caret_metrics.baseline_pt,
                 text,
@@ -378,10 +455,138 @@ impl DocumentLayoutService {
                     .map(|object| object.source_bytes.clone())
                     .collect(),
                 inline_math_text_layouts,
-            }));
-        }
+            }),
+            style,
+        ))
+    }
 
-        Ok((paragraphs, resolved_styles))
+    #[allow(clippy::too_many_arguments)]
+    fn shape_table(
+        &mut self,
+        document: &Document,
+        table: &caret_doc::Table,
+        environment_ids: &[NodeId],
+        space_before_pt: f32,
+        space_after_pt: f32,
+        reuse: Option<(&DocumentLayoutSnapshot, Option<&NodeId>)>,
+        catalog: &mut FontCatalog,
+        settings: &ParagraphShapingSettings<'_>,
+    ) -> Result<
+        (
+            Vec<LaidOutParagraph>,
+            Vec<ResolvedParagraphStyle>,
+            ShapedTable,
+        ),
+        DocumentLayoutError,
+    > {
+        let column_count = table.rows.first().map_or(0, |row| row.cells.len());
+        if column_count == 0 {
+            return Err(DocumentLayoutError::UnsupportedContent);
+        }
+        let options = table_layout_options(settings.content_width_pt, column_count);
+        let column_width_pt = caret_layout::table_column_width_pt(&options)
+            .map_err(|error| DocumentLayoutError::Pagination(error.to_string()))?;
+        let line_grid_metrics = self.resolve_line_grid_metrics(
+            catalog,
+            settings.text_settings,
+            settings.base_style,
+            settings.text_settings.default_language(),
+        )?;
+        let table_id = table.id.clone();
+        let mut paragraphs = Vec::new();
+        let mut styles = Vec::new();
+        let mut measured_rows = Vec::with_capacity(table.rows.len());
+        let mut shaped_rows = Vec::with_capacity(table.rows.len());
+        for row in &table.rows {
+            let mut measured_cells = Vec::with_capacity(row.cells.len());
+            let mut shaped_cells = Vec::with_capacity(row.cells.len());
+            for cell in &row.cells {
+                let story = StoryId::TableCell {
+                    table_id: table_id.clone(),
+                    row_id: row.id.clone(),
+                    cell_id: cell.id.clone(),
+                };
+                let mut cell_paragraphs = Vec::new();
+                let mut paragraph_offsets = Vec::new();
+                let mut content_height_pt = 0.0_f64;
+                let mut previous_space_after_pt = 0.0_f64;
+                for block in &cell.blocks {
+                    let Block::Paragraph(paragraph) = block else {
+                        // 单元格内公式/环境/嵌套表的布局随 046 后续切片接入；
+                        // 当前明确拒绝而不是静默漏画。
+                        return Err(DocumentLayoutError::UnsupportedContent);
+                    };
+                    let (laid_out, style) = self.shape_paragraph(
+                        document,
+                        paragraph,
+                        story.clone(),
+                        environment_ids,
+                        column_width_pt as f32,
+                        reuse,
+                        catalog,
+                        settings,
+                    )?;
+                    let index = paragraphs.len();
+                    let paragraph_height_pt = laid_out
+                        .layout
+                        .paragraph
+                        .lines
+                        .iter()
+                        .map(|line| f64::from(line.metrics.height_pt))
+                        .sum::<f64>();
+                    let space_before_pt = f64::from(style.space_before_pt);
+                    if !cell_paragraphs.is_empty() {
+                        content_height_pt += previous_space_after_pt.max(space_before_pt);
+                    }
+                    paragraph_offsets.push(content_height_pt);
+                    content_height_pt += paragraph_height_pt;
+                    previous_space_after_pt = f64::from(style.space_after_pt);
+                    paragraphs.push(laid_out);
+                    styles.push(style);
+                    cell_paragraphs.push(index);
+                }
+                if cell_paragraphs.is_empty() {
+                    return Err(DocumentLayoutError::UnsupportedContent);
+                }
+                let first_baseline_pt = paragraph_offsets.first().copied().unwrap_or(0.0)
+                    + f64::from(
+                        paragraphs[*cell_paragraphs.first().unwrap_or(&0)]
+                            .layout
+                            .paragraph
+                            .lines
+                            .first()
+                            .map_or(0.0, |line| line.metrics.baseline_pt),
+                    );
+                measured_cells.push(caret_layout::TableCellMeasurement {
+                    content_height_pt,
+                    first_baseline_pt,
+                });
+                shaped_cells.push(ShapedTableCell {
+                    paragraphs: cell_paragraphs,
+                    paragraph_offsets,
+                });
+            }
+            measured_rows.push(caret_layout::TableRowMeasurement {
+                cells: measured_cells,
+            });
+            shaped_rows.push(ShapedTableRow {
+                cells: shaped_cells,
+            });
+        }
+        let _ = line_grid_metrics;
+        let grid = caret_layout::layout_table_grid(&measured_rows, options)
+            .map_err(|error| DocumentLayoutError::Pagination(error.to_string()))?;
+        Ok((
+            paragraphs,
+            styles,
+            ShapedTable {
+                table_id,
+                grid,
+                rows: shaped_rows,
+                space_before_pt,
+                space_after_pt,
+            },
+        ))
     }
 
     fn layout_with_reuse(
@@ -474,7 +679,7 @@ impl DocumentLayoutService {
             )?;
         }
 
-        let (mut paragraphs, resolved_styles) = self.shape_paragraphs(
+        let (mut paragraphs, resolved_styles, shaped_tables) = self.shape_paragraphs(
             document,
             &ordered_inputs,
             reuse,
@@ -488,17 +693,20 @@ impl DocumentLayoutService {
 
         let page_geometries = PageGeometries::paginate_and_index(
             &ordered_inputs,
+            &shaped_tables,
             &mut paragraphs,
             &resolved_styles,
-            page_width_pt,
-            page_height_pt,
-            [
-                geometry.margins.left,
-                geometry.margins.top,
-                geometry.margins.right,
-                geometry.margins.bottom,
-            ],
-            content_height_pt,
+            PaginationGeometry {
+                page_width_pt,
+                page_height_pt,
+                margins_pt: [
+                    geometry.margins.left,
+                    geometry.margins.top,
+                    geometry.margins.right,
+                    geometry.margins.bottom,
+                ],
+                content_height_pt,
+            },
         )?;
         // 消费布局输入，单次派生全部块级公式映射；值字段直接移动，只有三张映射的键
         // 需要克隆两次。
@@ -553,24 +761,54 @@ impl DocumentLayoutService {
     }
 }
 
+struct PaginationGeometry {
+    page_width_pt: f64,
+    page_height_pt: f64,
+    margins_pt: [f64; 4],
+    content_height_pt: f64,
+}
+
 impl PageGeometries {
     fn paginate_and_index(
         ordered_inputs: &[LayoutInput<'_>],
+        shaped_tables: &[ShapedTable],
         paragraphs: &mut [LaidOutParagraph],
         resolved_styles: &[ResolvedParagraphStyle],
-        page_width_pt: f64,
-        page_height_pt: f64,
-        margins_pt: [f64; 4],
-        content_height_pt: f64,
+        geometry: PaginationGeometry,
     ) -> Result<Self, DocumentLayoutError> {
+        let PaginationGeometry {
+            page_width_pt,
+            page_height_pt,
+            margins_pt,
+            content_height_pt,
+        } = geometry;
+        let content_width_pt = page_width_pt - margins_pt[0] - margins_pt[2];
         let mut math_block_environment_ids = HashMap::new();
         let page_layouts = {
             let mut pagination_items = Vec::with_capacity(ordered_inputs.len());
             let mut paragraph_index = 0;
+            let mut table_index = 0;
             for item in ordered_inputs {
                 match item {
                     LayoutInput::ExplicitBreak => {
                         pagination_items.push(PaginationItem::ExplicitPageBreak);
+                    }
+                    LayoutInput::Table { .. } => {
+                        let shaped = shaped_tables.get(table_index).ok_or_else(|| {
+                            DocumentLayoutError::InvalidDocument("missing laid out table".into())
+                        })?;
+                        table_index += 1;
+                        let width_pt = shaped.grid.width_pt as f32;
+                        let x_offset_pt = ((content_width_pt as f32 - width_pt) / 2.0).max(0.0);
+                        pagination_items.push(PaginationItem::Table(
+                            caret_layout::TablePaginationInput {
+                                table_id: &shaped.table_id,
+                                x_offset_pt,
+                                layout: &shaped.grid,
+                                space_before_pt: shaped.space_before_pt,
+                                space_after_pt: shaped.space_after_pt,
+                            },
+                        ));
                     }
                     LayoutInput::Paragraph { .. } => {
                         let paragraph = paragraphs.get(paragraph_index).ok_or_else(|| {
@@ -625,7 +863,7 @@ impl PageGeometries {
             paginate_paragraphs(&pagination_items, content_height_pt as f32)
                 .map_err(|error| DocumentLayoutError::Pagination(error.to_string()))?
         };
-        let pages: Vec<_> = page_layouts
+        let mut pages: Vec<_> = page_layouts
             .into_iter()
             .map(|layout| PageLayoutSnapshot {
                 width_pt: page_width_pt,
@@ -651,17 +889,32 @@ impl PageGeometries {
                     continue;
                 };
                 let mut y0_pt = page.margin_top_pt + f64::from(fragment.y_offset_pt);
+                let x0_pt = page.margin_left_pt + f64::from(fragment.x_offset_pt);
+                let clip = fragment.clip.map(|clip| {
+                    [
+                        page.margin_left_pt + f64::from(clip.x0_pt),
+                        page.margin_top_pt + f64::from(clip.y0_pt),
+                        page.margin_left_pt + f64::from(clip.x1_pt),
+                        page.margin_top_pt + f64::from(clip.y1_pt),
+                    ]
+                });
                 for line_index in fragment.line_range.clone() {
                     let Some(line) = paragraph.layout.paragraph.lines.get(line_index) else {
                         continue;
                     };
                     if let Some(location) = paragraph.line_locations.get_mut(line_index) {
-                        *location = Some(CaretLineLocation { page_index, y0_pt });
+                        *location = Some(CaretLineLocation {
+                            page_index,
+                            x0_pt,
+                            y0_pt,
+                            clip,
+                        });
                     }
                     y0_pt += f64::from(line.metrics.height_pt);
                 }
             }
         }
+        expand_table_fragments(&mut pages, shaped_tables, paragraphs)?;
         let environment_ranges = collect_environment_ranges(
             &pages,
             paragraphs,
@@ -696,6 +949,88 @@ impl MathProjectionIndex {
             by_id,
         }
     }
+}
+
+/// 把表格片段展开为单元格段落的页面行位置与绘制片段，并写入同一几何来源。
+fn expand_table_fragments(
+    pages: &mut [PageLayoutSnapshot],
+    shaped_tables: &[ShapedTable],
+    paragraphs: &mut [LaidOutParagraph],
+) -> Result<(), DocumentLayoutError> {
+    for (page_index, page) in pages.iter_mut().enumerate() {
+        let fragments = page.layout.table_fragments.clone();
+        for fragment in fragments {
+            let Some(shaped) = shaped_tables
+                .iter()
+                .find(|table| table.table_id == fragment.table_id)
+            else {
+                return Err(DocumentLayoutError::InvalidDocument("missing table".into()));
+            };
+            let origin_x_pt = page.margin_left_pt + f64::from(fragment.x_offset_pt);
+            let origin_y_pt = page.margin_top_pt + f64::from(fragment.y_offset_pt);
+            for row_index in fragment.row_range.clone() {
+                let Some(shaped_row) = shaped.rows.get(row_index) else {
+                    continue;
+                };
+                let Some(grid_row) = shaped.grid.rows.get(row_index) else {
+                    continue;
+                };
+                for (cell_index, shaped_cell) in shaped_row.cells.iter().enumerate() {
+                    let Some(grid_cell) = grid_row.cells.get(cell_index) else {
+                        continue;
+                    };
+                    let content_x_pt = origin_x_pt + grid_cell.content_x_pt;
+                    let content_y_pt = origin_y_pt + grid_cell.content_y_pt;
+                    let clip = [
+                        content_x_pt,
+                        origin_y_pt + grid_row.top_pt,
+                        content_x_pt + grid_cell.content_width_pt,
+                        origin_y_pt + grid_row.top_pt + grid_row.height_pt,
+                    ];
+                    for (paragraph_offset, paragraph_index) in
+                        shaped_cell.paragraphs.iter().enumerate()
+                    {
+                        let Some(paragraph) = paragraphs.get_mut(*paragraph_index) else {
+                            continue;
+                        };
+                        let paragraph_y_pt = content_y_pt
+                            + shaped_cell
+                                .paragraph_offsets
+                                .get(paragraph_offset)
+                                .copied()
+                                .unwrap_or(0.0);
+                        let mut y0_pt = paragraph_y_pt;
+                        for (line_index, line) in
+                            paragraph.layout.paragraph.lines.iter().enumerate()
+                        {
+                            if let Some(location) = paragraph.line_locations.get_mut(line_index) {
+                                *location = Some(CaretLineLocation {
+                                    page_index,
+                                    x0_pt: content_x_pt,
+                                    y0_pt,
+                                    clip: Some(clip),
+                                });
+                            }
+                            y0_pt += f64::from(line.metrics.height_pt);
+                        }
+                        page.layout.fragments.push(caret_layout::ParagraphFragment {
+                            paragraph_id: paragraph.id.clone(),
+                            line_range: 0..paragraph.layout.paragraph.lines.len(),
+                            x_offset_pt: (content_x_pt - page.margin_left_pt) as f32,
+                            y_offset_pt: (paragraph_y_pt - page.margin_top_pt) as f32,
+                            clip: Some(caret_layout::FragmentClip {
+                                x0_pt: (clip[0] - page.margin_left_pt) as f32,
+                                y0_pt: (clip[1] - page.margin_top_pt) as f32,
+                                x1_pt: (clip[2] - page.margin_left_pt) as f32,
+                                y1_pt: (clip[3] - page.margin_top_pt) as f32,
+                            }),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn collect_math_hosts(blocks: &[Block], hosts: &mut HashMap<NodeId, MathTextLayoutHost>) {
@@ -1890,11 +2225,45 @@ struct MathLayoutContext<'a> {
     caret_metrics: LineMetrics,
 }
 
+/// 一次表格布局中已测量的单元格段落索引与网格几何。
+struct ShapedTable {
+    table_id: NodeId,
+    grid: caret_layout::TableGridLayout,
+    rows: Vec<ShapedTableRow>,
+    space_before_pt: f32,
+    space_after_pt: f32,
+}
+
+struct ShapedTableRow {
+    cells: Vec<ShapedTableCell>,
+}
+
+type ShapedParagraphs = (
+    Vec<LaidOutParagraph>,
+    Vec<ResolvedParagraphStyle>,
+    Vec<ShapedTable>,
+);
+
+struct ShapedTableCell {
+    /// 指向本次布局 `paragraphs` 向量的索引。
+    paragraphs: Vec<usize>,
+    /// 每个段落内容顶边相对单元格内容区顶边的偏移，单位为 pt。
+    paragraph_offsets: Vec<f64>,
+}
+
 enum LayoutInput<'a> {
     Paragraph {
         paragraph: &'a Paragraph,
         story: StoryId,
         environment_ids: Vec<NodeId>,
+        /// 该段落可用的版心宽度；正文为全局版心，单元格为列内容宽度。
+        width_pt: f32,
+    },
+    Table {
+        table: &'a caret_doc::Table,
+        environment_ids: Vec<NodeId>,
+        space_before_pt: f32,
+        space_after_pt: f32,
     },
     ExplicitBreak,
     MathBlock {
@@ -1946,6 +2315,7 @@ fn collect_blocks<'a>(
                 paragraph,
                 story: StoryId::Body,
                 environment_ids: environment_ids.clone(),
+                width_pt: context.content_width_pt,
             }),
             Block::Environment(environment) => {
                 environment_ids.push(environment.id.clone());
@@ -1954,6 +2324,7 @@ fn collect_blocks<'a>(
                         paragraph: title,
                         story: StoryId::EnvironmentTitle(environment.id.clone()),
                         environment_ids: environment_ids.clone(),
+                        width_pt: context.content_width_pt,
                     });
                 }
                 collect_blocks(
@@ -2116,9 +2487,12 @@ fn collect_blocks<'a>(
                     context,
                 )?;
             }
-            // 045 只交付模型与编辑；表格画布/网格布局由 046 承接，在此之前
-            // 含表文档打开时得到明确的“不支持内容”错误而不是半成品快照。
-            Block::Table(_) => return Err(DocumentLayoutError::UnsupportedContent),
+            Block::Table(table) => ordered.push(LayoutInput::Table {
+                table,
+                environment_ids: environment_ids.clone(),
+                space_before_pt: context.space_before_pt,
+                space_after_pt: context.space_after_pt,
+            }),
             Block::Opaque(_) => return Err(DocumentLayoutError::UnsupportedContent),
         }
     }

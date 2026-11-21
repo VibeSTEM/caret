@@ -24,8 +24,9 @@ pub use line_metrics::{
     row_spacing_for_line_spacing,
 };
 pub use pagination::{
-    MathBlockFragment, MathBlockPaginationInput, PageLayout, PaginationError, PaginationItem,
-    ParagraphFragment, ParagraphPaginationInput, paginate_paragraphs,
+    FragmentClip, MathBlockFragment, MathBlockPaginationInput, PageLayout, PaginationError,
+    PaginationItem, ParagraphFragment, ParagraphPaginationInput, TableFragment,
+    TablePaginationInput, paginate_paragraphs,
 };
 pub use paragraph::{
     HitAffinity, InlineObjectLayout, ParagraphHit, ParagraphLayout, ParagraphLayoutError,
@@ -38,7 +39,7 @@ pub use parley::{FontData as GlyphFontData, PositionedLayoutItem as PositionedGl
 pub use shaping::{FontRole, ShapingStyle, UnicodeBoundaries, paragraph_text, run_has_underline};
 pub use table::{
     TableCellGeometry, TableCellMeasurement, TableGridLayout, TableLayoutError, TableLayoutOptions,
-    TableRowGeometry, TableRowMeasurement, layout_table_grid,
+    TableRowGeometry, TableRowMeasurement, layout_table_grid, table_column_width_pt,
 };
 
 #[cfg(test)]

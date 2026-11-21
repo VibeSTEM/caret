@@ -55,7 +55,7 @@ impl Session {
         }
     }
 
-    fn insert_table(&mut self) -> Result<Effect, EditError> {
+    pub(super) fn insert_table(&mut self) -> Result<Effect, EditError> {
         let location = self
             .paragraph_index
             .get(&self.selection.focus.paragraph_id)
@@ -80,7 +80,7 @@ impl Session {
         )
     }
 
-    fn insert_table_row(&mut self, direction: Direction) -> Result<Effect, EditError> {
+    pub(super) fn insert_table_row(&mut self, direction: Direction) -> Result<Effect, EditError> {
         let context = self.table_context().ok_or(EditError::InvalidPosition)?;
         let before = self.current_table(&context)?;
         let columns = before
@@ -99,7 +99,7 @@ impl Session {
         self.replace_table(context, before, table, target)
     }
 
-    fn delete_table_row(&mut self) -> Result<Effect, EditError> {
+    pub(super) fn delete_table_row(&mut self) -> Result<Effect, EditError> {
         let context = self.table_context().ok_or(EditError::InvalidPosition)?;
         let before = self.current_table(&context)?;
         if before.rows.len() <= 1 {
@@ -112,7 +112,10 @@ impl Session {
         self.replace_table(context, before, table, target)
     }
 
-    fn insert_table_column(&mut self, direction: Direction) -> Result<Effect, EditError> {
+    pub(super) fn insert_table_column(
+        &mut self,
+        direction: Direction,
+    ) -> Result<Effect, EditError> {
         let context = self.table_context().ok_or(EditError::InvalidPosition)?;
         let before = self.current_table(&context)?;
         let mut table = before.clone();
@@ -127,7 +130,7 @@ impl Session {
         self.replace_table(context, before, table, target)
     }
 
-    fn delete_table_column(&mut self) -> Result<Effect, EditError> {
+    pub(super) fn delete_table_column(&mut self) -> Result<Effect, EditError> {
         let context = self.table_context().ok_or(EditError::InvalidPosition)?;
         let before = self.current_table(&context)?;
         if before.rows.first().is_none_or(|row| row.cells.len() <= 1) {

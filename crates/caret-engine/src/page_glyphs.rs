@@ -304,7 +304,12 @@ impl DocumentLayoutSnapshot {
                 return Err(PageGlyphError::InvalidLineRange);
             }
             let mut page_line_top_pt = page.margin_top_pt + f64::from(fragment.y_offset_pt);
-            if !page_line_top_pt.is_finite() || fragment.y_offset_pt < 0.0 {
+            let fragment_x_pt = page.margin_left_pt + f64::from(fragment.x_offset_pt);
+            if !page_line_top_pt.is_finite()
+                || !fragment_x_pt.is_finite()
+                || fragment.y_offset_pt < 0.0
+                || fragment.x_offset_pt < 0.0
+            {
                 return Err(PageGlyphError::InvalidLineGeometry);
             }
             for line_index in line_range.clone() {
@@ -346,7 +351,7 @@ impl DocumentLayoutSnapshot {
                     .get(line_index)
                     .ok_or(PageGlyphError::InvalidGlyphSource)?;
                 for (bounds, color) in paragraph.layout.underline_geometry_for_line(line_index) {
-                    let x_pt = page.margin_left_pt + bounds.x0;
+                    let x_pt = fragment_x_pt + bounds.x0;
                     let y_pt = page_line_top_pt + bounds.y0;
                     let width_pt = bounds.x1 - bounds.x0;
                     let height_pt = bounds.y1 - bounds.y0;
@@ -415,7 +420,7 @@ impl DocumentLayoutSnapshot {
                     if let Some(run) = page_run_from_positioned_glyphs(
                         &item,
                         PageGlyphRunOrigin {
-                            x_pt: page.margin_left_pt,
+                            x_pt: fragment_x_pt,
                             baseline_y_pt: run_baseline_y_pt,
                             paint_order: next_paint_order,
                             paragraph_id: &paragraph.id,
@@ -470,6 +475,7 @@ impl DocumentLayoutSnapshot {
                 &mut next_paint_order,
             )?;
         }
+        append_table_borders(page, &mut shapes, &mut next_paint_order);
         Ok(PageGlyphSnapshot {
             session_id: self.session_id.clone(),
             document_generation: self.document_generation,
@@ -768,6 +774,71 @@ struct PageGlyphRunOrigin<'a> {
 }
 
 /// 将正文或数学文本岛的同类 Parley glyph run 转为页面快照。
+const TABLE_BORDER_COLOR: [u8; 4] = [0, 0, 0, 255];
+const TABLE_BORDER_WIDTH_PT: f64 = 0.5;
+
+/// 表格边框作为页面形状输出，与字形共享页面局部坐标和绘制顺序。
+fn append_table_borders(
+    page: &super::PageLayoutSnapshot,
+    shapes: &mut Vec<PageMathShape>,
+    next_paint_order: &mut u64,
+) {
+    for fragment in &page.layout.table_fragments {
+        let origin_x_pt = page.margin_left_pt + f64::from(fragment.x_offset_pt);
+        let origin_y_pt = page.margin_top_pt + f64::from(fragment.y_offset_pt);
+        let rows = &fragment.layout.rows;
+        let Some(first_row) = rows.get(fragment.row_range.start) else {
+            continue;
+        };
+        let Some(last_row) = rows.get(fragment.row_range.end.saturating_sub(1)) else {
+            continue;
+        };
+        let x0_pt = origin_x_pt;
+        let x1_pt = origin_x_pt + fragment.layout.width_pt;
+        let y0_pt = origin_y_pt + first_row.top_pt;
+        let y1_pt = origin_y_pt + last_row.top_pt + last_row.height_pt;
+        if !x0_pt.is_finite() || !x1_pt.is_finite() || !y0_pt.is_finite() || !y1_pt.is_finite() {
+            continue;
+        }
+        let mut push_line = |x_pt: f64, y_pt: f64, dx_pt: f64, dy_pt: f64| {
+            shapes.push(PageMathShape {
+                paint_order: *next_paint_order,
+                kind: PageMathShapeKind::Line,
+                x_pt,
+                y_pt,
+                dx_pt,
+                dy_pt,
+                width_pt: 0.0,
+                height_pt: 0.0,
+                fill: None,
+                stroke: Some(TABLE_BORDER_COLOR),
+                stroke_width_pt: TABLE_BORDER_WIDTH_PT,
+                line_clip_y_pt: None,
+            });
+            *next_paint_order += 1;
+        };
+        for row_index in fragment.row_range.clone() {
+            let Some(row) = rows.get(row_index) else {
+                continue;
+            };
+            let top_pt = origin_y_pt + row.top_pt;
+            push_line(x0_pt, top_pt, x1_pt - x0_pt, 0.0);
+        }
+        push_line(x0_pt, y0_pt, 0.0, y1_pt - y0_pt);
+        push_line(x1_pt, y0_pt, 0.0, y1_pt - y0_pt);
+        for (column_x, _) in &fragment.layout.columns {
+            push_line(origin_x_pt + column_x, y0_pt, 0.0, y1_pt - y0_pt);
+        }
+        let last_column_x = fragment
+            .layout
+            .columns
+            .last()
+            .map_or(x1_pt, |(x, width)| origin_x_pt + x + width);
+        push_line(last_column_x, y0_pt, 0.0, y1_pt - y0_pt);
+        push_line(x0_pt, y1_pt, x1_pt - x0_pt, 0.0);
+    }
+}
+
 fn page_run_from_positioned_glyphs(
     item: &PositionedGlyphLayoutItem<'_, [u8; 4]>,
     origin: PageGlyphRunOrigin<'_>,

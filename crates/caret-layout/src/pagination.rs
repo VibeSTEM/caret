@@ -55,6 +55,8 @@ pub enum PaginationItem<'a> {
 pub struct TablePaginationInput<'a> {
     /// 文档中表格的稳定节点 ID。
     pub table_id: &'a NodeId,
+    /// 表格原点相对页面内容区左边的水平偏移，单位为 pt。
+    pub x_offset_pt: f32,
     /// 已测量的表格网格几何；坐标相对表格原点，单位为 pt。
     pub layout: &'a TableGridLayout,
     /// 表格前的段落间距；与正文段落使用相同的相邻间距合并策略。
@@ -171,6 +173,8 @@ pub struct TableFragment {
     pub table_id: NodeId,
     /// 本片段在表格内的行范围，`end` 为开区间。
     pub row_range: Range<usize>,
+    /// 表格原点相对页面内容区左边的水平偏移，单位为 pt。
+    pub x_offset_pt: f32,
     /// 表格原点相对页面内容区顶部的偏移，单位为 pt；续页时可为负。
     pub y_offset_pt: f32,
     /// 完整表格网格几何；渲染/命中用 `row_range` 过滤。
@@ -338,6 +342,7 @@ pub fn paginate_paragraphs(
                         _ => page.table_fragments.push(TableFragment {
                             table_id: table.table_id.clone(),
                             row_range: row_index..row_index + 1,
+                            x_offset_pt: table.x_offset_pt,
                             y_offset_pt,
                             layout: std::sync::Arc::clone(&layout),
                         }),

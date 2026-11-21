@@ -663,12 +663,21 @@ impl DocumentLayoutSnapshot {
         let (bounds, line_index) = paragraph.layout.cursor_geometry_with_line(cursor, 0.0)?;
         let line = paragraph.layout.paragraph.lines.get(line_index)?;
         let location = paragraph.line_locations.get(line_index)?.as_ref()?;
-        Some(PageCaretGeometry {
+        let page = self.pages.get(location.page_index)?;
+        let mut geometry = PageCaretGeometry {
             page_index: location.page_index,
-            x_pt: self.pages.get(location.page_index)?.margin_left_pt + bounds.x0,
+            x_pt: location.x0_pt + bounds.x0,
             y0_pt: location.y0_pt,
             y1_pt: location.y0_pt + f64::from(line.metrics.height_pt),
-        })
+        };
+        if let Some(clip) = location.clip {
+            geometry.x_pt = geometry.x_pt.clamp(clip[0], clip[2]);
+            geometry.y0_pt = geometry.y0_pt.max(clip[1]).min(page.height_pt);
+            if geometry.y1_pt <= geometry.y0_pt {
+                return None;
+            }
+        }
+        Some(geometry)
     }
 
     /// 返回裁切到可见分页片段内的选区矩形。
@@ -915,8 +924,15 @@ impl DocumentLayoutSnapshot {
                         location.y0_pt + f64::from(line.metrics.height_pt),
                     )
                 };
-                let x0_pt = bounds.x0 + page.margin_left_pt;
-                let x1_pt = bounds.x1 + page.margin_left_pt;
+                let mut x0_pt = bounds.x0 + location.x0_pt;
+                let mut x1_pt = bounds.x1 + location.x0_pt;
+                let (mut y0, mut y1) = (y0, y1);
+                if let Some(clip) = location.clip {
+                    x0_pt = x0_pt.max(clip[0]);
+                    x1_pt = x1_pt.min(clip[2]);
+                    y0 = y0.max(clip[1]);
+                    y1 = y1.min(clip[3]);
+                }
                 // Qt 快照校验拒绝零宽几何；退化行内对象不应让整份选区投影失败。
                 if x1_pt <= x0_pt || y1 <= y0 {
                     continue;

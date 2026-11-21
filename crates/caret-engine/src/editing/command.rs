@@ -49,7 +49,7 @@ pub enum EditorKey {
     Escape,
     Enter,
     Tab,
-    /// Shift+Tab；表格内移动到上一格，046 前不作为普通文档键暴露。
+    /// Shift+Tab；表格内移动到上一格。
     ShiftTab,
     ShiftEnter,
     Backspace,
@@ -63,6 +63,12 @@ pub enum EditorKey {
         redo: bool,
     },
     ModSpace,
+    /// 插入表格（046 起由命令面板/Alt+T 触发）。
+    InsertTable,
+    TableInsertRow(Direction),
+    TableDeleteRow,
+    TableInsertColumn(Direction),
+    TableDeleteColumn,
     LeftArrow {
         candidate: Option<NavigationCandidate>,
         extend: bool,
@@ -270,6 +276,21 @@ impl Command {
             Self::EditorKey(EditorKey::Enter) => "interaction.enter",
             Self::EditorKey(EditorKey::Tab) => "interaction.tab",
             Self::EditorKey(EditorKey::ShiftTab) => "interaction.shift_tab",
+            Self::EditorKey(EditorKey::InsertTable) => "interaction.insert_table",
+            Self::EditorKey(EditorKey::TableInsertRow(Direction::Backward)) => {
+                command_ids::TABLE_INSERT_ROW_BEFORE
+            }
+            Self::EditorKey(EditorKey::TableInsertRow(Direction::Forward)) => {
+                command_ids::TABLE_INSERT_ROW_AFTER
+            }
+            Self::EditorKey(EditorKey::TableDeleteRow) => command_ids::TABLE_DELETE_ROW,
+            Self::EditorKey(EditorKey::TableInsertColumn(Direction::Backward)) => {
+                command_ids::TABLE_INSERT_COL_BEFORE
+            }
+            Self::EditorKey(EditorKey::TableInsertColumn(Direction::Forward)) => {
+                command_ids::TABLE_INSERT_COL_AFTER
+            }
+            Self::EditorKey(EditorKey::TableDeleteColumn) => command_ids::TABLE_DELETE_COL,
             Self::EditorKey(EditorKey::ShiftEnter) => "interaction.shift_enter",
             Self::EditorKey(EditorKey::ModBackspace) => "interaction.mod_backspace",
             Self::EditorKey(EditorKey::LeftArrow { .. }) => "navigation.left",

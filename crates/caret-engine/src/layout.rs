@@ -88,6 +88,7 @@ pub struct LaidOutParagraph {
     pub environment_ids: Arc<[NodeId]>,
     source_paragraph: Arc<Paragraph>,
     resolved_style: ResolvedParagraphStyle,
+    layout_width_pt: f32,
     math_caret_height_pt: f32,
     math_caret_baseline_pt: f32,
     pub text: Arc<str>,
@@ -101,13 +102,18 @@ pub struct LaidOutParagraph {
     /// 行内公式 token 到同一布局代际 Parley 文本岛 sidecar 的映射。
     inline_math_text_layouts: Arc<[HashMap<u64, MathTextSidecar>]>,
     utf16_checkpoints: Arc<[(usize, usize)]>,
-    line_locations: Vec<Option<CaretLineLocation>>,
+    pub(crate) line_locations: Vec<Option<CaretLineLocation>>,
 }
 
 #[derive(Debug, Clone, Copy)]
-struct CaretLineLocation {
-    page_index: usize,
-    y0_pt: f64,
+pub(crate) struct CaretLineLocation {
+    pub(crate) page_index: usize,
+    /// 行左边缘的页面局部 x 坐标（已含页边距与单元格位置），单位为 pt。
+    pub(crate) x0_pt: f64,
+    /// 行顶边的页面局部 y 坐标，单位为 pt。
+    pub(crate) y0_pt: f64,
+    /// 页面局部的矩形裁剪框；正文行为 None。
+    pub(crate) clip: Option<[f64; 4]>,
 }
 
 #[derive(Debug, Clone)]
@@ -135,6 +141,7 @@ struct LaidOutParagraphInput {
     story: StoryId,
     environment_ids: Vec<NodeId>,
     resolved_style: ResolvedParagraphStyle,
+    layout_width_pt: f32,
     math_caret_height_pt: f32,
     math_caret_baseline_pt: f32,
     text: String,

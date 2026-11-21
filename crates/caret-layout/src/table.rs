@@ -294,3 +294,21 @@ pub fn layout_table_grid(
     }
     Ok(result)
 }
+
+/// 计算 v1 等分列宽；调用方可用于在测量单元格内容前确定每段可用宽度。
+///
+/// 结果与 [`layout_table_grid`] 内部使用的列宽一致：可用宽度扣除列间隙后等分，
+/// 再与最小列宽取较大值。
+pub fn table_column_width_pt(options: &TableLayoutOptions) -> Result<f64, TableLayoutError> {
+    options.validate()?;
+    let gaps = options.column_gap_pt * (options.column_count.saturating_sub(1) as f64);
+    let available = options.content_width_pt - gaps;
+    if !available.is_finite() {
+        return Err(TableLayoutError::NonFiniteResult);
+    }
+    let width = (available / options.column_count as f64).max(options.minimum_column_width_pt);
+    if !width.is_finite() || width <= 0.0 {
+        return Err(TableLayoutError::NonFiniteResult);
+    }
+    Ok(width)
+}
