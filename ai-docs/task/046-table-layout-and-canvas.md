@@ -71,6 +71,14 @@
 - 2026-11-22：S1b：分页协议扩展（`FragmentClip`、段落/公式片段 x/clip、`TableFragment` 行范围/原点/完整网格），`PaginationItem::Table` 行原子分页 + 续页负原点；3 项分页测试。
 - 2026-11-22：S1c：engine 接入 Table 布局（段落宽度进入塑形/复用键、cell 表格测量与网格、分页展开 cell 行位置与片段、page_glyphs 输出 cell 文本与表格边框）；hit/caret/range 使用同一行放置几何；`\table`/Alt+T/Shift+Tab/行列键/删除行列 native 意图、app 映射与 codec `table` kind；engine 954/app 354/workspace/clippy 通过。当前限制：cell 内公式/环境/嵌套表布局、cell 公式编辑/导航、整表复制与跨 cell 选择未接，遇到显式拒绝。
 
-## 完成摘要
+## 当前状态与后续切片
 
-未完成。
+已完成 S1（可插入→布局→绘制→命中/光标，命令面板与 native 表键入口）：`caret-layout::table` 网格几何、分页表格片段、engine 表格测量/放置、cell 段落行位置与矩形裁剪、page_glyphs 文本与边框、hit/caret/range 同源几何、`\table` 与 Alt+T/Shift+Tab/行列插入/删除行列意图、codec `table` kind。engine 954、caret-app 354、workspace 测试与 clippy 通过。
+
+剩余（按优先级）：
+1. **单元格内公式布局与编辑/导航**：`shape_table` 目前对 Equation/Align/InlineMath 单元格或环境/嵌套表返回 `layout.unsupported_content`；需先把 `find_block_path`/`find_inline_math_in_blocks`/`paragraph_beside_block`/composition 公式定位统一为容器路径（共享 `BlockContainerPath`），再开放 cell 内公式编辑（移除 `edit.table_cell_math_unsupported` 门禁），并补 `collect_math_hosts`/`collect_math_projections` 的 cell 递归、命中/高亮/选区矩形裁剪。
+2. **表格几何快照与编辑辅助线**：向 app/native 暴露表格片段/单元格矩形（命中可选），在布局快照中加入 `tableGuidelines`（焦点相关虚线，主题 token + QSG 虚线层），完成白色虚线在浅色主题的可对比策略（需维护者确认产品意图）。
+3. **整表复制/结构删除与跨 cell 选择**：结构范围对象、剪贴板投影与文本回退；当前仍显式 `edit.table_content_unsupported`。
+4. **单元格环境/嵌套表/ExplicitBreak 语义**：环境标题/子块布局、嵌套表（模型允许 24 层）、cell 内分页符策略；当前显式拒绝。
+5. **分页细化**：行原子分页已可跨页并记录负原点；单元格内多段跨页拆分、行高/列宽策略（auto/固定）、宽内容裁剪测试与性能基线。
+6. **验证与收口**：native/Qt 键位与快照严格校验测试、真实窗口验收、Rust/C++/QML 测试补齐、领域评审 + 独立 final review、PR 与 CI。
