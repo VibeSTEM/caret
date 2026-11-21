@@ -71,6 +71,7 @@
 - 2026-11-22：S1b：分页协议扩展（`FragmentClip`、段落/公式片段 x/clip、`TableFragment` 行范围/原点/完整网格），`PaginationItem::Table` 行原子分页 + 续页负原点；3 项分页测试。
 - 2026-11-22：S1c：engine 接入 Table 布局（段落宽度进入塑形/复用键、cell 表格测量与网格、分页展开 cell 行位置与片段、page_glyphs 输出 cell 文本与表格边框）；hit/caret/range 使用同一行放置几何；`\table`/Alt+T/Shift+Tab/行列键/删除行列 native 意图、app 映射与 codec `table` kind；engine 954/app 354/workspace/clippy 通过。当前限制：cell 内公式/环境/嵌套表布局、cell 公式编辑/导航、整表复制与跨 cell 选择未接，遇到显式拒绝。
 - 2026-11-22：架构审计（只读完整 diff）后完成 Gate0/1 收敛：表格几何单点持有（`snapshot.table_layouts`，页面片段只存放置引用）、规则线由 `caret-layout::table` 统一生成并供 painter 读取、表格测量/展开拆入 `layout/table_layout.rs`、塑形参数请求化并删除 clippy allow、默认样式集中；修复表宽超版心、边框线坐标、cell 行内公式布局拒绝、表格插入单一谓词（标题/单元格内拒绝）。engine 956/caret-layout 160/workspace/clippy 通过。
+- 2026-11-22：Gate2 基础：容器定位器下沉 `caret-structure`（`BlockContainerPath`/`TableCellPath`/`block_list_by_container(_mut)`）；`DocumentNodeLocation.container` 记录环境+表格单元格真实容器；`find_block_container_path` 与 `find_block_by_id`、`find_inline_math_in_blocks` 改为容器感知，cell 内块/行内公式可解析；engine 删除私有容器解析副本，遍历状态收敛。结构测试 15/engine 957/workspace/clippy 通过。剩余：`find_block_path` 兼容投影迁移（entry_exit/range_extension/history/clipboard）、layout `LaidOutParagraph` 改持容器路径。
 
 ## 当前状态与后续切片
 
