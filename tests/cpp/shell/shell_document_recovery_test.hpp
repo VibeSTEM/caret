@@ -10,5 +10,6 @@ class ShellDocumentRecoveryTest final : public ShellTestBase {
 #ifdef CARET_ENABLE_APP
     void recoveryEntriesCanBeRestoredExportedAndDiscarded();
     void missingRecoveryEntryFailsWithoutReplacingTheOpenDocument();
+    void startupRecoveryEntryIsVisibleAndRestoreReportsEditedThenSaved();
 #endif
 };

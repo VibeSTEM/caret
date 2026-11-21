@@ -19,5 +19,7 @@ class ShellDocumentCloseTest final : public ShellTestBase {
     void recoveryWriteFailureReopensCloseConfirmation();
     void closeRequestDuringFailedSaveDoesNotReopenConfirmation();
     void unrelatedFileFailuresDoNotCorruptCloseSaveState();
+    void editingWhileAutoSaveFlushIsInFlightPreventsAutomaticClose();
+    void conflictRecoveryCopySurvivesCloseCancelAndIsClearedByDiscard();
 #endif
 };

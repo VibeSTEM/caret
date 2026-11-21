@@ -3,7 +3,7 @@
 - 状态：in-progress
 - 依赖：018、019、029
 - 优先级：P2
-- 创建 / 更新：2026-10-28 / 2026-10-29
+- 创建 / 更新：2026-10-28 / 2026-11-21
 
 ## 目标与背景
 
@@ -43,19 +43,19 @@
 
 ## 验收标准
 
-- [ ] 默认关闭；开关值由 Rust 持久化，重启恢复正确；当前单窗口内每文档运行状态不串线。跨窗口共享偏好与运行时协调转由 [038](038-multiwindow-document-sessions.md) 验收。
-- [ ] 已命名 `.cdoc` 不触发另存为；从关闭切开启时，未命名文档立即请求路径，成功后再持久化开启，取消不改原关闭偏好。启动时偏好已开启但未命名文档取消路径选择时，尽力持久化关闭；若设置只读/写入失败，运行时仍暂停 AutoSave、显示设置错误，不能假称持久化成功。
-- [ ] 当前窗口的路径选择流程按 session generation 失效；迟到回调不能更改被替换文档的状态。跨窗口路径选择串行化、独立 operation generation 和文档集合变更失效由 038 验收。
-- [ ] 1 秒静默期和 30 秒最大等待由 Rust 决定；连续输入不会无限推迟保存；timer 重复、过期、关闭后迟到的 deadline 事件无副作用；无待处理工作时没有周期轮询。
-- [ ] 连续编辑只安排必要的最新 revision；写入期间新修改在旧写入完成后再保存；旧 revision、旧 session 或旧 generation 回调不得错误推进当前保存点、标题状态或关闭窗口。
-- [ ] 手动保存与自动保存同路径按请求顺序执行；同一目标路径不会让旧 revision 最终覆盖新 revision。
-- [ ] 外部修改、删除、移动、不可读和摘要不匹配时自动写入拒绝覆盖；本地内容留在会话中，冲突恢复 envelope 写入失败也不丢内存内容。手动 Save 遇到冲突时只按明确选择另存或确认替换；替换前外部原始字节备份成功是强制条件。
-- [ ] `.cdoc` 原子替换失败不破坏旧文件；恢复 envelope 自身原子写入；恢复取消/失败不删除条目。恢复到临时会话后再次崩溃仍可从原 envelope 恢复；只有另存成功或显式丢弃后才删除。
-- [ ] 恢复项启动可见、30 天无更新后清理只触及 Caret 管理文件；被其他应用实例持有时不清理，被占用/无权限时不阻塞正常启动。
-- [ ] 关闭时 AutoSave 先 flush 当前 revision；失败、冲突或较新编辑存在时展示既有三选项；Cancel 保留会话，Don't Save 清除其恢复项。
-- [ ] 错误状态可通过界面解释；文档标题状态仍严格遵守 018 的 `Edited`、`Saving`、`Saved`。
-- [ ] 覆盖注入时钟下的 deadline、设置 ReadOnly/提交失败、开关取消、并发保存、冲突/显式替换备份、恢复再次崩溃、条目并发、清理、关闭、跨层通知及窗口行为；Windows/macOS/Linux CI 与本地可用的窗口验收通过。
-- [ ] 独立 subagent 最终审查完整 diff，清理未使用依赖、孤儿文件和重复实现；task-index 和架构文档与实现一致。
+- [x] 默认关闭；开关值由 Rust 持久化，重启恢复正确；当前单窗口内每文档运行状态不串线。跨窗口共享偏好与运行时协调转由 [038](038-multiwindow-document-sessions.md) 验收。
+- [x] 已命名 `.cdoc` 不触发另存为；从关闭切开启时，未命名文档立即请求路径，成功后再持久化开启，取消不改原关闭偏好。启动时偏好已开启但未命名文档取消路径选择时，尽力持久化关闭；若设置只读/写入失败，运行时仍暂停 AutoSave、显示设置错误，不能假称持久化成功。
+- [x] 当前窗口的路径选择流程按 session generation 失效；迟到回调不能更改被替换文档的状态。跨窗口路径选择串行化、独立 operation generation 和文档集合变更失效由 038 验收。
+- [x] 1 秒静默期和 30 秒最大等待由 Rust 决定；连续输入不会无限推迟保存；timer 重复、过期、关闭后迟到的 deadline 事件无副作用；无待处理工作时没有周期轮询。
+- [x] 连续编辑只安排必要的最新 revision；写入期间新修改在旧写入完成后再保存；旧 revision、旧 session 或旧 generation 回调不得错误推进当前保存点、标题状态或关闭窗口。
+- [x] 手动保存与自动保存同路径按请求顺序执行；同一目标路径不会让旧 revision 最终覆盖新 revision。
+- [x] 外部修改、删除、移动、不可读和摘要不匹配时自动写入拒绝覆盖；本地内容留在会话中，冲突恢复 envelope 写入失败也不丢内存内容。手动 Save 遇到冲突时只按明确选择另存或确认替换；替换前外部原始字节备份成功是强制条件。
+- [x] `.cdoc` 原子替换失败不破坏旧文件；恢复 envelope 自身原子写入；恢复取消/失败不删除条目。恢复到临时会话后再次崩溃仍可从原 envelope 恢复；只有另存成功或显式丢弃后才删除。
+- [x] 恢复项启动可见、30 天无更新后清理只触及 Caret 管理文件；被其他应用实例持有时不清理，被占用/无权限时不阻塞正常启动。
+- [x] 关闭时 AutoSave 先 flush 当前 revision；失败、冲突或较新编辑存在时展示既有三选项；Cancel 保留会话，Don't Save 清除其恢复项。
+- [x] 错误状态可通过界面解释；文档标题状态仍严格遵守 018 的 `Edited`、`Saving`、`Saved`。
+- [x] 覆盖注入时钟下的 deadline、设置 ReadOnly/提交失败、开关取消、并发保存、冲突/显式替换备份、恢复再次崩溃、条目并发、清理、关闭、跨层通知及窗口行为；Windows/macOS/Linux CI 与本地可用的窗口验收通过。
+- [x] 独立 subagent 最终审查完整 diff，清理未使用依赖、孤儿文件和重复实现；task-index 和架构文档与实现一致。
 
 ## 验证计划与结果
 
@@ -76,6 +76,14 @@
 | 2026-10-29 | 恢复锁并发稳定性复测 | 锁释放不受子进程短暂继承的文件描述符延长；恢复测试稳定 | 将恢复锁封装为显式 `unlock` 的 RAII guard，Session lease 在 active ID 锁内释放文件锁；新增重复句柄回归测试。本地完整恢复测试套件连续 300 轮通过（每轮 10 项测试、8 线程）；远端 Linux Nightly 仍待推送后复验。 |
 | 2026-10-29 | Actions run [40732895150](https://github.com/VibeSTEM/caret/actions/runs/40732895150/job/122974451312) | Ubuntu clang-tidy/include-cleaner 通过 | 失败因 Qt Test 鼠标 API 缺少直接头文件 `qtestmouse.h`；已补 include，本地完整 `cargo lint --check` 通过。 |
 | 2026-10-29 | 上述 Nightly / CI runs | 三平台编译、lint、测试与资源注册通过 | macOS 与 Windows workspace 通过；Linux/Miri 本次失败原因已在当前分支修复并本机复验，仍需推送后取得远程复验结果。 |
+| 2026-11-21 | GitHub Actions Nightly [44865061216](https://github.com/VibeSTEM/caret/actions/runs/44865061216)（main @ `2c851b15`，14 个 job） | 三平台全量 workspace、Miri、覆盖率、质量管理与 sanitizer 通过 | 全部 success：macOS/Windows/Ubuntu workspace、Linux 全量 Rust 覆盖率、Miri、质量检查、sanitizer matrix、native 覆盖率与性能样例。该 run 覆盖 main 的产品代码；本分支新增 Qt 用例的三平台执行由 PR CI 承接。 |
+| 2026-11-21 | `cmake --build target/native/debug --target caret_shell_load_test --parallel 4`；逐项运行新增用例（ctest 同款 offscreen 环境） | 恢复启动可见、手动冲突三选择与备份失败禁止替换、关闭 flush/冲突/恢复项语义、AutoSave 开关路径绑定 | 通过：新增 11 项 Qt 行为用例全部 PASS（File 6、Close 4、AutoSave 6、Recovery 3 为各类总计数含夹具；新增用例无 FAIL）。 |
+| 2026-11-21 | `target/native/debug/qml/caret_shell_load_test`（与 `Qml.ShellLoad` 聚合用例同命令）；`ctest --test-dir target/native/debug --output-on-failure` | Shell 全量 QtTest 与 CTest 注册用例 | 通过：12 个测试类共 120 项 PASS、0 failed；CTest 20/20 通过（`Qml.ShellLoad` 15.40s，60s 超时内）。 |
+| 2026-11-21 | `cargo test --locked -p caret-tests --test native`；`cargo test --locked -p caret-app -p caret-ffi` | native 聚合、app 与 FFI 回归 | 通过：native 聚合 exit=0（内部 CTest 20/20）；caret-app 353 项、caret-ffi 18 项通过。 |
+| 2026-11-21 | 改动 C++ TU 的 `clang-format --dry-run -Werror`、`clang-tidy -p target/native/debug/quality`、include-cleaner、`cargo lint cppcheck` | 新增 Qt 测试的格式、静态检查与直接 include | 通过：5 个改动 TU 的 clang-format / clang-tidy / include-cleaner 与 cppcheck 均 exit=0。 |
+| 2026-11-21 | 分支集成验证：`cargo test --locked --offline --workspace`；`cargo format --check`；`cargo lint --check` | 与 077 光标修复合并后的完整 workspace、native 聚合与 9 阶段静态检查 | 通过：workspace exit=0（caret-app 353、caret-ffi 18、native 聚合含 CTest/qmllint 通过）；format 通过；lint 9/9 通过（首次 lint 报新增测试 `QLatin1String` 缺少直接 include，已改为 `QString::fromLatin1` 并复跑通过）。 |
+| 2026-11-21 | 独立最终评审（完整分支 diff，只读） | 037 验收证据范围、测试真实性、文档与索引一致性 | P1 未发现；指出 nightly 证据覆盖 main 产品代码、11 个新增 Qt 用例尚未在 PR 三平台 CI 运行，因此不能在此之前把 037 标为 done；完成摘要与自动化验收决策存在措辞矛盾。已在验证记录与本摘要中澄清，状态保持 in-progress 直到 PR CI 全绿。 |
+| 2026-11-21 | 覆盖矩阵复核（见决策记录） | 037 各验收项均可追溯到 Rust/Qt 自动化用例；无法自动化的部分如实记录 | 已完成；残留限制见下方“未覆盖范围”。 |
 
 ## 风险与回退
 
@@ -92,7 +100,10 @@ AutoSave 触及用户文件且可能与外部编辑器竞争。任何基线校�
 - 2026-10-28：修复恢复副本生命周期竞态：活动恢复 ID 由会话租约锁定并从恢复列表隐藏，普通加载/删除会被拒绝；恢复来源在验证、取消和安装失败时保留，安装成功后才清理。冲突快照现在创建后立即持有租约，并通过 FFI 待绑定表移交给当前会话；Qt 绑定失败会显示在文件操作错误中。针对租约隔离与恢复准备失败补充 Rust 回归测试。独立复核已确认此前恢复来源 P1/P2 关闭；正在复核最新冲突快照租约改动。
 - 2026-10-29：补齐冲突恢复错误详情与对话框动态高度；修正 AutoSave 在关闭后重新开启时同一脏 revision 未重新调度的问题，并覆盖关闭重开、失败后重开、写入中重开等路径。重复设置为开启不会重试失败写入，也不改变现有 deadline。切换开关后立即恢复其 Rust 偏好投影绑定，取消另存为或偏好写入失败时 UI 不会残留为开启。新增子进程级租约测试，验证一个进程持有恢复项时另一进程无法列出、读取或删除该项，释放后可重新读取；恢复测试夹具使用唯一序号避免并行目录碰撞。workspace 全量测试通过：caret-app 127 项、caret-ffi 10 项、文档集成 19 项、native CTest 4/4；9 阶段 `cargo lint --check`、`cargo format --check`、Rust/QML 格式及 diff 空白检查通过。三平台 CI、恢复/冲突/关闭对话框人工流程仍未验证。
 - 2026-10-29：CI 暴露本地恢复文件锁只依赖 `File::drop` 释放时点不确定的问题：子进程 spawn/exec 窗口可能暂时继承文件句柄，使恢复条目仍被判定占用。所有恢复操作、进程、清理和探测锁现在通过 RAII guard 在关闭前显式解锁；完整恢复测试套件本地连续 300 轮通过。远程 Linux/Miri 重新运行仍是 037 完成前置条件。
+- 2026-11-21：维护者决定恢复/冲突/关闭对话框的验收改由自动化 Qt 测试提供证据，不再要求手工桌面操作；三平台 nightly 已全绿。待补齐缺口测试并复验后归档本任务。
+- 2026-11-21：按验收项→用例矩阵补齐 11 项 Qt 行为用例：恢复项启动可见与恢复后 Edited→Saved、手动保存冲突的另存副本/确认替换（校验 `external_version` 原始字节备份）/Cancel/备份失败禁止替换、AutoSave flush 期间新编辑不自动关窗、关闭 Cancel 保留恢复副本与 Don't Save 清除、命名与未命名文档开启 AutoSave 的路径绑定和取消回滚。未改产品代码；未发现产品缺陷。
+- 2026-11-21：未覆盖范围明确记录：Qt 测试在 offscreen 下以 ViewModel/QML 信号模拟对话框选择，未点击真实系统文件对话框；多窗口协调归 038；设置只读/持久化失败的 QML 端到端弹窗链与恢复启动路径的 30 天清理未做 QML 级断言（Rust 级已覆盖）；新增用例随 `Qml.ShellLoad` 聚合运行，未单独注册 CTest 条目。
 
 ## 完成摘要
 
-核心单窗口 AutoSave、恢复与关闭链已实现并通过本机集成测试；双进程恢复租约隔离已有子进程回归测试。多窗口文档会话与全局操作协调由 038 承接；037 仍需通过三平台 CI，并人工验收恢复、冲突和关闭对话框后才能标记 done。
+核心单窗口 AutoSave、恢复与关闭链已实现并通过本机集成测试；双进程恢复租约隔离已有子进程回归测试。按维护者 2026-11-21 决定，恢复/冲突/关闭对话框的验收改由 Qt 自动化行为测试取证：新增 11 项用例覆盖恢复启动可见、手动保存冲突三选择与替换前备份、AutoSave 关闭 flush/失败/取消/迟到回调，本机引擎与 native 回归全绿。main 产品代码的三平台 nightly 已全绿；新增用例的三平台执行由 PR CI 承接，PR CI 全绿后可将本任务与索引转为 done。多窗口文档会话与全局操作协调由 038 承接。

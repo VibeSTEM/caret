@@ -8,6 +8,7 @@
 #include <QtCore/qobject.h>
 #include <QtCore/qregularexpression.h>
 #include <QtCore/qstring.h>
+#include <QtCore/qtestsupport_core.h>
 #include <QtGui/qcolor.h>
 #include <QtGui/qtestsupport_gui.h>
 #include <QtQuick/qquickwindow.h>
@@ -175,5 +176,17 @@ QObject* AppFixture::child(const QString& name) const { return window->findChild
 bool AppFixture::click(const QString& name) const {
     QObject* button = child(name);
     return button != nullptr && QMetaObject::invokeMethod(button, "clicked", Qt::DirectConnection);
+}
+
+bool waitForStartupScan(const AppFixture& fixture) {
+    for (int elapsed = 0; elapsed < 10000; elapsed += 10) {
+        if (fixture.window != nullptr && fixture.view_model != nullptr &&
+            !fixture.window->property("pendingRecoveryScan").toBool() &&
+            !fixture.view_model->documentFileBusy()) {
+            return true;
+        }
+        QTest::qWait(10);
+    }
+    return false;
 }
 #endif

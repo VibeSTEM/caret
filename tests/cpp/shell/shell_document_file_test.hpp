@@ -12,5 +12,9 @@ class ShellDocumentFileTest final : public ShellTestBase {
     void saveConflictCannotReplaceAPreviousDocumentAfterSaveAs();
     void confirmedConflictReplacementWritesCurrentDocument();
     void documentHistoryUndoRedoTracksRustSession();
+    void manualSaveConflictCanSaveACopyWithoutReplacingTheExternalFile();
+    void manualSaveConflictReplaceBacksUpExternalBytesBeforeWriting();
+    void manualSaveConflictCancelKeepsExternalFileAndLocalEdits();
+    void manualSaveConflictWithoutRecoveryBackupForbidsReplace();
 #endif
 };
