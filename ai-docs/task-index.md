@@ -121,7 +121,7 @@
 | 087 | 数学排版 | [空 InlineMath 行内推进与聚焦高亮契约](task/087-empty-inline-math-advance-and-highlight.md) | P1 | 044、072、074 | M | done |
 | 088 | 数学排版 | [收敛空 InlineMath 插入槽与正文命中优先级](task/088-unify-empty-inline-math-hit-slot.md) | P2 | 087、069 | S | planned |
 | 089 | 行内格式 | [InlineEnvironment 普通 Backspace 清理语义](task/089-inline-environment-backspace-cleanup.md) | P1 | 031、044、075 | S | done |
-| 090 | 画布交互 | [拖选跨公式块/块环境的实时预览](task/090-drag-selection-live-preview.md) | P1 | 027、031、044、083 | M | implemented |
+| 090 | 画布交互 | [拖选跨公式块/块环境的实时预览](task/090-drag-selection-live-preview.md) | P1 | 027、031、044、083 | M | done |
 | 091 | 剪贴板 | [富剪贴板与数学片段接入](task/091-rich-clipboard-integration.md) | P1 | 083、092 | M | done |
 | 092 | 数学排版 | [共享数学片段转换接口](task/092-checked-math-fragment-converter.md) | P1 | 043 | M | done |
 | 093 | 质量清理 | [全仓 Brooks Sweep 质量清理记录](task/093-brooks-sweep-quality-cleanup.md) | P2 | — | L | done |

@@ -1,9 +1,9 @@
 # 090 — 拖选跨公式块/块环境的实时预览
 
-- 状态：implemented
+- 状态：done
 - 依赖：027、031、044、083
 - 优先级：P1
-- 创建 / 更新：2026-11-12 / 2026-11-16
+- 创建 / 更新：2026-11-12 / 2026-11-21
 
 ## 目标与背景
 
@@ -45,7 +45,7 @@
 
 ## 验收标准
 
-- [ ] body 拖选跨 Equation/Align 与块环境时，拖动中出现与松手一致的高亮矩形；未跨对象时不出现额外矩形。（Align 缺少 app 级预览矩形断言。）
+- [x] body 拖选跨 Equation/Align 与块环境时，拖动中出现与松手一致的高亮矩形；未跨对象时不出现额外矩形。Align 逐行矩形由 app 级 `structural_selection_geometry_covers_align_hosts_across_host_boundaries` 断言（与 body 拖选提交共用 `setSelection`/`selectionRects` 路径），Equation/块环境由既有结构选区几何用例覆盖。
 - [x] 公式文本岛拖选仍使用片段预览，松手提交；native 测试覆盖跨页预览。
 - [x] QML lint、app 测试、native CTest、workspace 测试通过；性能与 Qt 实机手感记录为未验证/待观察。
 
@@ -56,7 +56,8 @@
 | 2026-11-12 | `cargo test --locked -p caret-app --lib` | 新增 5 条拖选预览回归通过 | 通过：325 passed / 0 failed |
 | 2026-11-12 | native `ctest`（`Qml.ShellLoad`） | 拖动中 selectionRects 非空、预览矩形为空、跨页矩形存在 | 通过：11/11 CTest |
 | 2026-11-12 | `cargo lint qmllint --check`、workspace clippy/fmt/测试 | 无警告/回归 | 通过 |
-| — | Qt 桌面真实鼠标/触控板、拖动中布局变化/IME、性能 | 手感与开销可接受 | 未验证（本环境无窗口） |
+| 2026-11-21 | `cargo test --locked -p caret-app`，新增 `structural_selection_geometry_covers_align_hosts_across_host_boundaries`；`cargo clippy --locked -p caret-app --all-targets -- -D warnings`、`cargo fmt --all -- --check` | Align 结构选区逐行 selectionRects 与释放后一致、块高亮层为空 | 通过：app 353 项；clippy/fmt 通过 |
+| — | Qt 桌面真实鼠标/触控板、拖动中布局变化/IME、性能 | 手感与开销可接受 | 未验证（本环境无窗口；已按验收记录为待观察，不影响 done） |
 
 ## 风险与回退
 
