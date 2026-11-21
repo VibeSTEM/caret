@@ -37,8 +37,6 @@ pub(super) type ShapedParagraphs = (
 pub(super) struct ShapedTableCell {
     /// 指向本次布局 `paragraphs` 向量的索引。
     paragraphs: Vec<usize>,
-    /// 每个段落内容顶边相对单元格内容区顶边的偏移，单位为 pt。
-    paragraph_offsets: Vec<f64>,
 }
 
 pub(super) struct TableShapingRequest<'a> {
@@ -121,9 +119,7 @@ impl DocumentLayoutService {
                     cell_index,
                 )));
                 let mut cell_paragraphs = Vec::new();
-                let mut paragraph_offsets = Vec::new();
-                let mut content_height_pt = 0.0_f64;
-                let mut previous_space_after_pt = 0.0_f64;
+                let mut measured_blocks = Vec::new();
                 for block in &cell.blocks {
                     let Block::Paragraph(paragraph) = block else {
                         // 单元格内公式/环境/嵌套表的布局随 046 后续切片接入；
@@ -155,13 +151,18 @@ impl DocumentLayoutService {
                         .iter()
                         .map(|line| f64::from(line.metrics.height_pt))
                         .sum::<f64>();
-                    let space_before_pt = f64::from(style.space_before_pt);
-                    if !cell_paragraphs.is_empty() {
-                        content_height_pt += previous_space_after_pt.max(space_before_pt);
-                    }
-                    paragraph_offsets.push(content_height_pt);
-                    content_height_pt += paragraph_height_pt;
-                    previous_space_after_pt = f64::from(style.space_after_pt);
+                    let first_baseline_pt = laid_out
+                        .layout
+                        .paragraph
+                        .lines
+                        .first()
+                        .map_or(0.0, |line| f64::from(line.metrics.baseline_pt));
+                    measured_blocks.push(caret_layout::MeasuredCellBlock {
+                        height_pt: paragraph_height_pt,
+                        first_baseline_pt,
+                        space_before_pt: f64::from(style.space_before_pt),
+                        space_after_pt: f64::from(style.space_after_pt),
+                    });
                     paragraphs.push(laid_out);
                     styles.push(style);
                     cell_paragraphs.push(index);
@@ -169,22 +170,11 @@ impl DocumentLayoutService {
                 if cell_paragraphs.is_empty() {
                     return Err(DocumentLayoutError::UnsupportedContent);
                 }
-                let first_baseline_pt = paragraph_offsets.first().copied().unwrap_or(0.0)
-                    + f64::from(
-                        paragraphs[*cell_paragraphs.first().unwrap_or(&0)]
-                            .layout
-                            .paragraph
-                            .lines
-                            .first()
-                            .map_or(0.0, |line| line.metrics.baseline_pt),
-                    );
                 measured_cells.push(caret_layout::TableCellMeasurement {
-                    content_height_pt,
-                    first_baseline_pt,
+                    blocks: measured_blocks,
                 });
                 shaped_cells.push(ShapedTableCell {
                     paragraphs: cell_paragraphs,
-                    paragraph_offsets,
                 });
             }
             measured_rows.push(caret_layout::TableRowMeasurement {
@@ -254,12 +244,10 @@ pub(super) fn expand_table_fragments(
                         let Some(paragraph) = paragraphs.get_mut(*paragraph_index) else {
                             continue;
                         };
-                        let paragraph_y_pt = content_y_pt
-                            + shaped_cell
-                                .paragraph_offsets
-                                .get(paragraph_offset)
-                                .copied()
-                                .unwrap_or(0.0);
+                        let Some(grid_block) = grid_cell.blocks.get(paragraph_offset) else {
+                            continue;
+                        };
+                        let paragraph_y_pt = content_y_pt + grid_block.top_pt;
                         let mut y0_pt = paragraph_y_pt;
                         for (line_index, line) in
                             paragraph.layout.paragraph.lines.iter().enumerate()

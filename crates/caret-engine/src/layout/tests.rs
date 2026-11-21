@@ -5612,3 +5612,43 @@ fn table_cell_inline_math_is_rejected_without_partial_snapshot() {
         .unwrap_or_else(|error| panic!("service must stay reusable: {error}"));
     assert_eq!(valid.document_generation, 2);
 }
+
+#[test]
+fn table_cell_block_measurements_place_multiple_paragraphs() {
+    let cell = TableCell {
+        id: NodeId::generate(),
+        blocks: vec![
+            Block::Paragraph(paragraph("first")),
+            Block::Paragraph(paragraph("second")),
+        ],
+    };
+    let table = Table {
+        id: NodeId::generate(),
+        rows: vec![TableRow {
+            id: NodeId::generate(),
+            cells: vec![cell],
+        }],
+    };
+    let mut document = Document::blank();
+    document.body = vec![Block::Table(table)];
+    let snapshot = layout_document(&document);
+    let grid = snapshot
+        .table_layouts
+        .values()
+        .next()
+        .unwrap_or_else(|| panic!("table grid must be registered"));
+    let cell_geometry = &grid.rows[0].cells[0];
+    assert_eq!(cell_geometry.blocks.len(), 2);
+    assert!(cell_geometry.blocks[1].top_pt > cell_geometry.blocks[0].top_pt);
+    assert!(
+        cell_geometry.blocks[1].first_baseline_y_pt > cell_geometry.blocks[0].first_baseline_y_pt
+    );
+    let page = &snapshot.pages[0];
+    let cell_fragments = page
+        .layout
+        .fragments
+        .iter()
+        .filter(|fragment| matches!(fragment.host, caret_layout::FragmentHost::TableCell { .. }))
+        .collect::<Vec<_>>();
+    assert_eq!(cell_fragments.len(), 2);
+}

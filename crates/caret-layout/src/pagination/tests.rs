@@ -578,8 +578,12 @@ fn table_layout(row_heights: &[f64]) -> crate::TableGridLayout {
         .iter()
         .map(|height| crate::TableRowMeasurement {
             cells: vec![crate::TableCellMeasurement {
-                content_height_pt: *height,
-                first_baseline_pt: 0.0,
+                blocks: vec![crate::MeasuredCellBlock {
+                    height_pt: *height,
+                    first_baseline_pt: 0.0,
+                    space_before_pt: 0.0,
+                    space_after_pt: 0.0,
+                }],
             }],
         })
         .collect::<Vec<_>>();

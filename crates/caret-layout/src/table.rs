@@ -82,25 +82,81 @@ impl TableLayoutOptions {
     }
 }
 
-/// 一个已测量单元格的内容盒度量。
+/// 单元格内一个已测量块（段落、公式盒或嵌套表盒）的垂直度量。
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TableCellMeasurement {
-    /// 单元格内容总高度（不含内边距），单位为 pt；必须有限且非负。
-    pub content_height_pt: f64,
-    /// 首个内容基线与内容区顶边的距离，单位为 pt；必须有限且非负。
+pub struct MeasuredCellBlock {
+    /// 块自身高度，单位为 pt；必须有限且非负。
+    pub height_pt: f64,
+    /// 块顶到首基线的距离，单位为 pt；无基线的盒为 0。
     pub first_baseline_pt: f64,
+    /// 与上一块的段前距；首块忽略，单位为 pt。
+    pub space_before_pt: f64,
+    /// 与下一块的段后距，单位为 pt。
+    pub space_after_pt: f64,
 }
 
-impl TableCellMeasurement {
+impl MeasuredCellBlock {
     fn validate(&self) -> Result<(), TableLayoutError> {
-        if !self.content_height_pt.is_finite()
-            || self.content_height_pt < 0.0
-            || !self.first_baseline_pt.is_finite()
-            || self.first_baseline_pt < 0.0
+        let values = [
+            self.height_pt,
+            self.first_baseline_pt,
+            self.space_before_pt,
+            self.space_after_pt,
+        ];
+        if values
+            .iter()
+            .any(|value| !value.is_finite() || *value < 0.0)
         {
             return Err(TableLayoutError::InvalidMeasurement);
         }
         Ok(())
+    }
+}
+
+/// 一个已测量单元格的内容盒度量。
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableCellMeasurement {
+    pub blocks: Vec<MeasuredCellBlock>,
+}
+
+impl TableCellMeasurement {
+    fn validate(&self) -> Result<(), TableLayoutError> {
+        if self.blocks.is_empty() {
+            return Err(TableLayoutError::InvalidMeasurement);
+        }
+        for block in &self.blocks {
+            block.validate()?;
+        }
+        Ok(())
+    }
+
+    /// 块顶（含块间段距）与高度；首块段前距忽略。
+    fn block_tops(&self) -> Vec<f64> {
+        let mut tops = Vec::with_capacity(self.blocks.len());
+        let mut y = 0.0_f64;
+        let mut previous_space_after = 0.0_f64;
+        for (index, block) in self.blocks.iter().enumerate() {
+            if index > 0 {
+                y += previous_space_after.max(block.space_before_pt);
+            }
+            tops.push(y);
+            y += block.height_pt;
+            previous_space_after = block.space_after_pt;
+        }
+        tops
+    }
+
+    fn content_height_pt(&self) -> f64 {
+        self.blocks
+            .last()
+            .zip(self.block_tops().last())
+            .map_or(0.0, |(block, top)| top + block.height_pt)
+    }
+
+    fn first_baseline_pt(&self) -> f64 {
+        self.blocks
+            .first()
+            .map_or(0.0, |block| block.first_baseline_pt)
     }
 }
 
@@ -110,8 +166,17 @@ pub struct TableRowMeasurement {
     pub cells: Vec<TableCellMeasurement>,
 }
 
-/// 单个单元格在表格内的几何位置。
+/// 单元格内一个块的放置几何；坐标相对单元格内容区顶边。
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TableCellBlockGeometry {
+    pub top_pt: f64,
+    /// 块首基线相对单元格内容区顶边的 y 坐标；无基线时为 `top_pt`。
+    pub first_baseline_y_pt: f64,
+    pub height_pt: f64,
+}
+
+/// 单个单元格在表格内的几何位置。
+#[derive(Debug, Clone, PartialEq)]
 pub struct TableCellGeometry {
     /// 列下标，从零开始。
     pub column_index: usize,
@@ -123,6 +188,8 @@ pub struct TableCellGeometry {
     pub content_height_pt: f64,
     /// 首基线相对表格原点的 y 坐标，单位为 pt。
     pub first_baseline_y_pt: f64,
+    /// 单元格内各块相对内容区顶边的放置信息。
+    pub blocks: Vec<TableCellBlockGeometry>,
 }
 
 /// 一行的几何范围与各单元格位置。
@@ -205,9 +272,9 @@ pub fn layout_table_grid(
                     .iter()
                     .map(|cell| CellMetrics {
                         width: column_width,
-                        ascent: options.cell_padding_pt + cell.first_baseline_pt,
-                        descent: options.cell_padding_pt + cell.content_height_pt
-                            - cell.first_baseline_pt,
+                        ascent: options.cell_padding_pt + cell.first_baseline_pt(),
+                        descent: options.cell_padding_pt + cell.content_height_pt()
+                            - cell.first_baseline_pt(),
                     })
                     .collect(),
             )
@@ -242,16 +309,28 @@ pub fn layout_table_grid(
             let Some((column_x, _)) = grid.columns.get(column_index).copied() else {
                 return Err(TableLayoutError::NonFiniteResult);
             };
+            let tops = cell.block_tops();
+            let blocks = cell
+                .blocks
+                .iter()
+                .zip(tops)
+                .map(|(block, top_pt)| TableCellBlockGeometry {
+                    top_pt,
+                    first_baseline_y_pt: top_pt + block.first_baseline_pt,
+                    height_pt: block.height_pt,
+                })
+                .collect();
             cells.push(TableCellGeometry {
                 column_index,
                 content_x_pt: horizontal_inset + column_x,
                 content_y_pt: vertical_inset + grid_row.top + options.cell_padding_pt,
                 content_width_pt: column_width,
-                content_height_pt: cell.content_height_pt,
+                content_height_pt: cell.content_height_pt(),
                 first_baseline_y_pt: vertical_inset
                     + grid_row.top
                     + options.cell_padding_pt
-                    + cell.first_baseline_pt,
+                    + cell.first_baseline_pt(),
+                blocks,
             });
         }
         laid_out_rows.push(TableRowGeometry {

@@ -4,8 +4,8 @@
 // 署名：Yuki Lu
 
 use super::{
-    TableCellMeasurement, TableLayoutError, TableLayoutOptions, TableRowMeasurement,
-    layout_table_grid,
+    MeasuredCellBlock, TableCellMeasurement, TableLayoutError, TableLayoutOptions,
+    TableRowMeasurement, layout_table_grid,
 };
 
 fn options() -> TableLayoutOptions {
@@ -23,8 +23,12 @@ fn options() -> TableLayoutOptions {
 
 fn cell(content_height_pt: f64, first_baseline_pt: f64) -> TableCellMeasurement {
     TableCellMeasurement {
-        content_height_pt,
-        first_baseline_pt,
+        blocks: vec![MeasuredCellBlock {
+            height_pt: content_height_pt,
+            first_baseline_pt,
+            space_before_pt: 0.0,
+            space_after_pt: 0.0,
+        }],
     }
 }
 

@@ -38,8 +38,9 @@ pub use paragraph_style::{ParagraphStyleError, ResolvedParagraphStyle, resolve_p
 pub use parley::{FontData as GlyphFontData, PositionedLayoutItem as PositionedGlyphLayoutItem};
 pub use shaping::{FontRole, ShapingStyle, UnicodeBoundaries, paragraph_text, run_has_underline};
 pub use table::{
-    TableCellGeometry, TableCellMeasurement, TableGridLayout, TableLayoutError, TableLayoutOptions,
-    TableRowGeometry, TableRowMeasurement, layout_table_grid, table_column_width_pt,
+    MeasuredCellBlock, TableCellBlockGeometry, TableCellGeometry, TableCellMeasurement,
+    TableGridLayout, TableLayoutError, TableLayoutOptions, TableRowGeometry, TableRowMeasurement,
+    layout_table_grid, table_column_width_pt,
 };
 
 #[cfg(test)]
