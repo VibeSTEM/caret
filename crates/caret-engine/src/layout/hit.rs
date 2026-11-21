@@ -17,7 +17,10 @@ impl DocumentLayoutSnapshot {
             return None;
         }
         let content_y = y_pt - page.margin_top_pt;
-        let mut closest_line: Option<(f64, usize, usize, f64, f64)> = None;
+        // 单元格行（有裁剪框）优先于正文行：点击落在 cell 内容矩形内时，
+        // 即使正文行垂直距离更近，也不能把光标移出单元格。
+        let mut closest_clipped_line: Option<(f64, usize, usize, f64, f64)> = None;
+        let mut closest_body_line: Option<(f64, usize, usize, f64, f64)> = None;
         for fragment in &page.layout.fragments {
             let Some(&paragraph_index) = self.paragraph_lookup.get(&fragment.paragraph_id) else {
                 continue;
@@ -42,6 +45,7 @@ impl DocumentLayoutSnapshot {
                 {
                     continue;
                 }
+                let is_clipped_line = location.clip.is_some();
                 let line_top = location.y0_pt - page.margin_top_pt;
                 let line_bottom = line_top + f64::from(line.metrics.height_pt);
                 let vertical_distance = if content_y < line_top {
@@ -51,21 +55,28 @@ impl DocumentLayoutSnapshot {
                 } else {
                     0.0
                 };
-                if closest_line
+                let candidate = (
+                    vertical_distance,
+                    paragraph_index,
+                    line_index,
+                    line_top,
+                    location.x0_pt,
+                );
+                let target = if is_clipped_line {
+                    &mut closest_clipped_line
+                } else {
+                    &mut closest_body_line
+                };
+                if target
                     .as_ref()
                     .is_none_or(|(distance, _, _, _, _)| vertical_distance < *distance)
                 {
-                    closest_line = Some((
-                        vertical_distance,
-                        paragraph_index,
-                        line_index,
-                        line_top,
-                        location.x0_pt,
-                    ));
+                    *target = Some(candidate);
                 }
             }
         }
-        let (_, paragraph_index, line_index, line_top, line_x0_pt) = closest_line?;
+        let (_, paragraph_index, line_index, line_top, line_x0_pt) =
+            closest_clipped_line.or(closest_body_line)?;
         let paragraph = self.paragraphs.get(paragraph_index)?;
         let cursor = paragraph
             .layout

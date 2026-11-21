@@ -689,10 +689,16 @@ fn math_caret_geometry(
             .ok_or_else(|| "layout.invalid_math_caret_geometry".to_owned());
     }
     if let Some((target, position)) = math_tree_context {
-        return snapshot
-            .math_tree_caret(target, position)
-            .map(Some)
-            .ok_or_else(|| "layout.invalid_math_tree_caret_geometry".to_owned());
+        if let Some(caret) = snapshot.math_tree_caret(target, position) {
+            return Ok(Some(caret));
+        }
+        if let caret_engine::MathEditTarget::Block { block_id, .. } = target
+            && snapshot.is_hidden_table_math(block_id)
+        {
+            // 被版心裁剪的 cell 公式没有可见光标；降级为空光标，不阻塞编辑快照。
+            return Ok(None);
+        }
+        return Err("layout.invalid_math_tree_caret_geometry".to_owned());
     }
     Ok(None)
 }

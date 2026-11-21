@@ -3329,6 +3329,53 @@ fn tall_cell_layout_snapshot_stays_inside_page_bounds() -> Result<(), Box<dyn st
 }
 
 #[test]
+fn body_before_table_keeps_cell_caret_and_fragment_identity()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.insert_text_json("BODYTEXT".to_owned())?;
+    runtime.handle_editor_key_json("insert-table")?;
+    runtime.insert_text_json("CELLTEXT".to_owned())?;
+    let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+    assert!(
+        interaction["caretGeometry"].is_object(),
+        "cell caret geometry must publish when body precedes the table"
+    );
+    let json = runtime.layout_snapshot_json()?;
+    let snapshot: Value = serde_json::from_str(&json)?;
+    let paragraphs = snapshot["paragraphs"]
+        .as_array()
+        .ok_or("paragraph layout array")?;
+    let body_id = paragraphs[0]["paragraphId"]
+        .as_str()
+        .ok_or("body paragraph id")?;
+    let cell_id = paragraphs
+        .iter()
+        .find_map(|paragraph| {
+            (paragraph["text"].as_str() == Some("CELLTEXT"))
+                .then(|| paragraph["paragraphId"].as_str())
+                .flatten()
+        })
+        .ok_or("cell paragraph id")?;
+    let pages = snapshot["pages"].as_array().ok_or("pages")?;
+    let fragment_ids: Vec<&str> = pages
+        .iter()
+        .flat_map(|page| page["fragments"].as_array().into_iter().flatten())
+        .filter_map(|fragment| fragment["paragraphId"].as_str())
+        .collect();
+    assert_eq!(
+        fragment_ids.iter().filter(|id| **id == body_id).count(),
+        1,
+        "body paragraph must appear exactly once"
+    );
+    assert_eq!(
+        fragment_ids.iter().filter(|id| **id == cell_id).count(),
+        1,
+        "cell paragraph must appear exactly once"
+    );
+    Ok(())
+}
+
+#[test]
 fn cell_display_equation_publishes_layout_and_accepts_typing()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut runtime = DocumentViewRuntime::new_blank()?;

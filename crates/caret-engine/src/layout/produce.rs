@@ -318,7 +318,8 @@ impl DocumentLayoutService {
                     space_before_pt,
                     space_after_pt,
                 } => {
-                    let (laid_out, styles, shaped) = self.shape_table(
+                    let paragraph_base = paragraphs.len();
+                    let (laid_out, styles, mut shaped) = self.shape_table(
                         catalog,
                         super::table_layout::TableShapingRequest {
                             document,
@@ -333,6 +334,15 @@ impl DocumentLayoutService {
                     for (paragraph, style) in laid_out.into_iter().zip(styles) {
                         paragraphs.push(paragraph);
                         resolved_styles.push(style);
+                    }
+                    // shape_table 内部使用表内局部段落下标；并入全局段落序列时统一加基址，
+                    // 避免表格前有正文段落时 cell 片段索引指向错误段落。
+                    for table in &mut shaped {
+                        for row in &mut table.rows {
+                            for cell in &mut row.cells {
+                                cell.shift_paragraph_indices(paragraph_base);
+                            }
+                        }
                     }
                     shaped_tables.extend(shaped);
                 }

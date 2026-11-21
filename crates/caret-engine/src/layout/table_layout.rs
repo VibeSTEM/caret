@@ -52,6 +52,15 @@ pub(super) struct ShapedTableCell {
     pub(super) math_blocks: Vec<ShapedCellMathBlock>,
 }
 
+impl ShapedTableCell {
+    /// 表格段落并入全局段落序列后，局部段落下标统一平移到全局基址。
+    pub(super) fn shift_paragraph_indices(&mut self, base: usize) {
+        for index in &mut self.paragraphs {
+            *index += base;
+        }
+    }
+}
+
 pub(super) struct ShapedCellMathBlock {
     pub(super) math_id: NodeId,
     pub(super) source: super::MathBlockSource,

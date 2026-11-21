@@ -788,6 +788,24 @@ impl DocumentLayoutSnapshot {
         )
     }
 
+    /// 块级公式属于表格单元格但被版心裁剪到不可见区域时返回 `true`；
+    /// 这类目标没有可见光标/高亮投影，交互层应降级而非报过期错误。
+    pub fn is_hidden_table_math(&self, block_id: &NodeId) -> bool {
+        if !self.table_math_ids.contains(block_id) {
+            return false;
+        }
+        !self
+            .math_projection_index
+            .by_id
+            .get(block_id)
+            .is_some_and(|indices| {
+                indices
+                    .iter()
+                    .filter_map(|index| self.math_projection_index.projections.get(*index))
+                    .any(|projection| projection.inline_index.is_none())
+            })
+    }
+
     /// 返回选中块级公式在同一代布局中的整栏矩形。
     ///
     /// 每个矩形横跨页面版心宽度，纵向采用该公式片段的 MathBox 范围并裁切到页面，

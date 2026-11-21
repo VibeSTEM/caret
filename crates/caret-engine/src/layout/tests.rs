@@ -5815,6 +5815,7 @@ fn hidden_tall_cell_math_degrades_to_empty_highlight_instead_of_stale_error() {
     let mut document = Document::blank();
     document.body = vec![Block::Table(table)];
     let snapshot = layout_document(&document);
+    assert!(snapshot.is_hidden_table_math(&equation_id));
     assert_eq!(
         snapshot.math_block_geometry(std::slice::from_ref(&equation_id)),
         Some(Vec::new()),
@@ -5853,4 +5854,104 @@ fn tall_cell_only_publishes_fragments_inside_the_page_content_box() {
     snapshot
         .page_glyphs(0)
         .unwrap_or_else(|error| panic!("clipped tall cell glyphs must extract: {error}"));
+}
+
+#[test]
+fn body_before_table_keeps_cell_paragraph_indices_and_hit_geometry_consistent() {
+    let body_paragraph = paragraph("BODYTEXT");
+    let body_id = body_paragraph.id.clone();
+    let cell_paragraph = paragraph("CELLTEXT");
+    let cell_id = cell_paragraph.id.clone();
+    let table = Table {
+        id: NodeId::generate(),
+        rows: vec![TableRow {
+            id: NodeId::generate(),
+            cells: vec![TableCell {
+                id: NodeId::generate(),
+                blocks: vec![Block::Paragraph(cell_paragraph)],
+            }],
+        }],
+    };
+    let table_id = table.id.clone();
+    let table_row_id = table.rows[0].id.clone();
+    let table_cell_id = table.rows[0].cells[0].id.clone();
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(body_paragraph), Block::Table(table)];
+    let snapshot = layout_document(&document);
+    assert_eq!(snapshot.paragraphs.len(), 2);
+
+    let body = snapshot
+        .paragraph_by_id(&body_id)
+        .unwrap_or_else(|| panic!("body paragraph must be laid out"));
+    let cell = snapshot
+        .paragraph_by_id(&cell_id)
+        .unwrap_or_else(|| panic!("cell paragraph must be laid out"));
+    assert_eq!(body.story, StoryId::Body);
+    assert_eq!(
+        cell.story,
+        StoryId::TableCell {
+            table_id: table_id.clone(),
+            row_id: table_row_id.clone(),
+            cell_id: table_cell_id.clone(),
+        }
+    );
+
+    let page = &snapshot.pages[0];
+    let body_fragments = page
+        .layout
+        .fragments
+        .iter()
+        .filter(|fragment| fragment.paragraph_id == body_id)
+        .count();
+    let cell_fragments = page
+        .layout
+        .fragments
+        .iter()
+        .filter(|fragment| fragment.paragraph_id == cell_id)
+        .count();
+    assert_eq!(body_fragments, 1, "body paragraph must have one fragment");
+    assert_eq!(cell_fragments, 1, "cell paragraph must have one fragment");
+
+    let cell_position = Pos {
+        story: cell.story.clone(),
+        paragraph_id: cell_id.clone(),
+        offset: 0,
+        affinity: Affinity::Upstream,
+    };
+    let caret = snapshot
+        .caret_geometry(&cell_position, VisualAffinity::Upstream)
+        .unwrap_or_else(|| panic!("cell caret geometry must exist"));
+    let grid = snapshot
+        .table_layouts
+        .get(&table_id)
+        .unwrap_or_else(|| panic!("table grid must be laid out"));
+    let grid_cell = &grid.rows[0].cells[0];
+    assert!(caret.x_pt >= page.margin_left_pt + grid_cell.content_x_pt - 0.01);
+    assert!(
+        caret.x_pt
+            <= page.margin_left_pt + grid_cell.content_x_pt + grid_cell.content_width_pt + 0.01
+    );
+
+    let body_hit = snapshot
+        .hit_test(
+            0,
+            page.margin_left_pt + 5.0,
+            page.margin_top_pt + f64::from(body.layout.paragraph.lines[0].metrics.height_pt),
+        )
+        .unwrap_or_else(|| panic!("body hit must resolve"));
+    assert_eq!(body_hit.position.paragraph_id, body_id);
+    let cell_clip = cell.line_locations[0]
+        .as_ref()
+        .and_then(|location| location.clip)
+        .unwrap_or_else(|| panic!("cell line must publish its clip"));
+    let cell_hit = snapshot
+        .hit_test(0, cell_clip.x0_pt + 2.0, cell_clip.y0_pt + 2.0)
+        .unwrap_or_else(|| panic!("cell hit must resolve"));
+    assert_eq!(cell_hit.position.paragraph_id, cell_id);
+    assert_eq!(cell_hit.position.story, cell.story);
+
+    let glyphs = snapshot
+        .page_glyphs(0)
+        .unwrap_or_else(|error| panic!("glyphs must extract: {error}"));
+    assert!(!glyphs.runs.is_empty());
 }
