@@ -24,8 +24,8 @@ pub use line_metrics::{
     row_spacing_for_line_spacing,
 };
 pub use pagination::{
-    FragmentClip, MathBlockFragment, MathBlockPaginationInput, PageLayout, PaginationError,
-    PaginationItem, ParagraphFragment, ParagraphPaginationInput, TableFragment,
+    FragmentClip, FragmentHost, MathBlockFragment, MathBlockPaginationInput, PageLayout,
+    PaginationError, PaginationItem, ParagraphFragment, ParagraphPaginationInput, TableFragment,
     TablePaginationInput, paginate_paragraphs,
 };
 pub use paragraph::{

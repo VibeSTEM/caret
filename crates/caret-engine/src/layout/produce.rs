@@ -767,12 +767,12 @@ impl PageGeometries {
                 let mut y0_pt = page.margin_top_pt + f64::from(fragment.y_offset_pt);
                 let x0_pt = page.margin_left_pt + f64::from(fragment.x_offset_pt);
                 let clip = fragment.clip.map(|clip| {
-                    [
+                    PageClip::from_array([
                         page.margin_left_pt + f64::from(clip.x0_pt),
                         page.margin_top_pt + f64::from(clip.y0_pt),
                         page.margin_left_pt + f64::from(clip.x1_pt),
                         page.margin_top_pt + f64::from(clip.y1_pt),
-                    ]
+                    ])
                 });
                 for line_index in fragment.line_range.clone() {
                     let Some(line) = paragraph.layout.paragraph.lines.get(line_index) else {
@@ -949,11 +949,19 @@ fn collect_math_projections(
             else {
                 continue;
             };
-            let mut line_top = page.margin_top_pt + f64::from(fragment.y_offset_pt);
             for line_index in fragment.line_range.clone() {
                 let Some(line_box) = paragraph.layout.paragraph.lines.get(line_index) else {
                     continue;
                 };
+                let Some(location) = paragraph
+                    .line_locations
+                    .get(line_index)
+                    .and_then(Option::as_ref)
+                else {
+                    continue;
+                };
+                let line_top = location.y0_pt;
+                let line_x = location.x0_pt;
                 let height = f64::from(line_box.metrics.height_pt);
                 if let Some(line) = paragraph.layout.layout.get(line_index) {
                     for item in line.items() {
@@ -976,7 +984,7 @@ fn collect_math_projections(
                         projections.push(MathPageProjection {
                             math_id: math_id.clone(),
                             page_index,
-                            object_x_pt: page.margin_left_pt + f64::from(inline_box.x),
+                            object_x_pt: line_x + f64::from(inline_box.x),
                             baseline_y_pt,
                             caret_line_top_pt: line_top,
                             caret_baseline_y_pt: line_top
@@ -985,14 +993,21 @@ fn collect_math_projections(
                             clip_y_pt: line_box
                                 .metrics
                                 .clip_ink_to_line_height
-                                .then_some([line_top, line_top + height]),
+                                .then_some([line_top, line_top + height])
+                                .or_else(|| {
+                                    location.clip.map(|clip| {
+                                        [
+                                            clip.y0_pt.max(line_top),
+                                            clip.y1_pt.min(line_top + height),
+                                        ]
+                                    })
+                                }),
                             row_clips: Vec::new(),
                             row_baselines: Vec::new(),
                             inline_index: Some(index),
                         });
                     }
                 }
-                line_top += height;
             }
         }
     }

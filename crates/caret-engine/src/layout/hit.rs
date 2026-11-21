@@ -38,7 +38,7 @@ impl DocumentLayoutSnapshot {
                 };
                 // 单元格行只能命中其内容矩形；正文行没有裁剪框。
                 if let Some(clip) = location.clip
-                    && (x_pt < clip[0] || x_pt > clip[2])
+                    && !clip.contains(x_pt, y_pt)
                 {
                     continue;
                 }

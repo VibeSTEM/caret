@@ -269,7 +269,7 @@ pub(super) fn expand_table_fragments(
                                     page_index,
                                     x0_pt: content_x_pt,
                                     y0_pt,
-                                    clip: Some(clip),
+                                    clip: Some(super::PageClip::from_array(clip)),
                                 });
                             }
                             y0_pt += f64::from(line.metrics.height_pt);
@@ -279,6 +279,11 @@ pub(super) fn expand_table_fragments(
                             line_range: 0..paragraph.layout.paragraph.lines.len(),
                             x_offset_pt: (content_x_pt - page.margin_left_pt) as f32,
                             y_offset_pt: (paragraph_y_pt - page.margin_top_pt) as f32,
+                            host: caret_layout::FragmentHost::TableCell {
+                                table_id: fragment.table_id.clone(),
+                                row_index,
+                                cell_index,
+                            },
                             clip: Some(caret_layout::FragmentClip {
                                 x0_pt: (clip[0] - page.margin_left_pt) as f32,
                                 y0_pt: (clip[1] - page.margin_top_pt) as f32,

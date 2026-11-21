@@ -670,12 +670,10 @@ impl DocumentLayoutSnapshot {
             y0_pt: location.y0_pt,
             y1_pt: location.y0_pt + f64::from(line.metrics.height_pt),
         };
-        if let Some(clip) = location.clip {
-            geometry.x_pt = geometry.x_pt.clamp(clip[0], clip[2]);
-            geometry.y0_pt = geometry.y0_pt.max(clip[1]).min(page.height_pt);
-            if geometry.y1_pt <= geometry.y0_pt {
-                return None;
-            }
+        if let Some(clip) = location.clip
+            && (!clip.clamp_caret(&mut geometry) || geometry.y0_pt > page.height_pt)
+        {
+            return None;
         }
         Some(geometry)
     }
@@ -925,26 +923,23 @@ impl DocumentLayoutSnapshot {
                         location.y0_pt + f64::from(line.metrics.height_pt),
                     )
                 };
-                let mut x0_pt = bounds.x0 + location.x0_pt;
-                let mut x1_pt = bounds.x1 + location.x0_pt;
-                let (mut y0, mut y1) = (y0, y1);
-                if let Some(clip) = location.clip {
-                    x0_pt = x0_pt.max(clip[0]);
-                    x1_pt = x1_pt.min(clip[2]);
-                    y0 = y0.max(clip[1]);
-                    y1 = y1.min(clip[3]);
-                }
-                // Qt 快照校验拒绝零宽几何；退化行内对象不应让整份选区投影失败。
-                if x1_pt <= x0_pt || y1 <= y0 {
+                let mut rectangle = PageSelectionRect {
+                    page_index: location.page_index,
+                    x0_pt: bounds.x0 + location.x0_pt,
+                    y0_pt: y0,
+                    x1_pt: bounds.x1 + location.x0_pt,
+                    y1_pt: y1,
+                };
+                if let Some(clip) = location.clip
+                    && !clip.clamp_rect(&mut rectangle)
+                {
                     continue;
                 }
-                rectangles.push(PageSelectionRect {
-                    page_index: location.page_index,
-                    x0_pt,
-                    y0_pt: y0,
-                    x1_pt,
-                    y1_pt: y1,
-                });
+                // Qt 快照校验拒绝零宽几何；退化行内对象不应让整份选区投影失败。
+                if rectangle.x1_pt <= rectangle.x0_pt || rectangle.y1_pt <= rectangle.y0_pt {
+                    continue;
+                }
+                rectangles.push(rectangle);
             }
         }
         Some(rectangles)

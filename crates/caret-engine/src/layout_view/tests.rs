@@ -224,6 +224,7 @@ fn page_with_paragraphs(paragraph_ids: &[NodeId]) -> PageLayoutSnapshot {
                     x_offset_pt: 0.0,
                     y_offset_pt: 0.0,
                     clip: None,
+                    host: caret_layout::FragmentHost::Body,
                 })
                 .collect(),
             math_fragments: vec![],

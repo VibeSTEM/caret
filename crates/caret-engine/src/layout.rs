@@ -32,6 +32,7 @@ mod math_text;
 mod produce;
 mod query;
 mod table_layout;
+pub use caret_layout::FragmentHost;
 pub(crate) use produce::math_flow_is_empty_host;
 mod shared;
 use shared::*;
@@ -115,7 +116,49 @@ pub(crate) struct CaretLineLocation {
     /// 行顶边的页面局部 y 坐标，单位为 pt。
     pub(crate) y0_pt: f64,
     /// 页面局部的矩形裁剪框；正文行为 None。
-    pub(crate) clip: Option<[f64; 4]>,
+    pub(crate) clip: Option<PageClip>,
+}
+
+/// 页面局部矩形裁剪框；caret/选区/命中/绘制共用同一判断。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct PageClip {
+    pub(crate) x0_pt: f64,
+    pub(crate) y0_pt: f64,
+    pub(crate) x1_pt: f64,
+    pub(crate) y1_pt: f64,
+}
+
+impl PageClip {
+    pub(crate) fn from_array(values: [f64; 4]) -> Self {
+        Self {
+            x0_pt: values[0],
+            y0_pt: values[1],
+            x1_pt: values[2],
+            y1_pt: values[3],
+        }
+    }
+
+    /// 点是否落在裁剪框内（包含边界）。
+    pub(crate) fn contains(&self, x_pt: f64, y_pt: f64) -> bool {
+        x_pt >= self.x0_pt && x_pt <= self.x1_pt && y_pt >= self.y0_pt && y_pt <= self.y1_pt
+    }
+
+    /// 将插入点几何裁剪进可见区域；完全不可见时返回 false。
+    pub(crate) fn clamp_caret(&self, caret: &mut PageCaretGeometry) -> bool {
+        caret.x_pt = caret.x_pt.clamp(self.x0_pt, self.x1_pt);
+        caret.y0_pt = caret.y0_pt.clamp(self.y0_pt, self.y1_pt);
+        caret.y1_pt = caret.y1_pt.clamp(self.y0_pt, self.y1_pt);
+        caret.y1_pt > caret.y0_pt
+    }
+
+    /// 将选区矩形裁剪进可见区域；裁剪后为空时返回 false。
+    pub(crate) fn clamp_rect(&self, rect: &mut PageSelectionRect) -> bool {
+        rect.x0_pt = rect.x0_pt.clamp(self.x0_pt, self.x1_pt);
+        rect.x1_pt = rect.x1_pt.clamp(self.x0_pt, self.x1_pt);
+        rect.y0_pt = rect.y0_pt.clamp(self.y0_pt, self.y1_pt);
+        rect.y1_pt = rect.y1_pt.clamp(self.y0_pt, self.y1_pt);
+        rect.x1_pt > rect.x0_pt && rect.y1_pt > rect.y0_pt
+    }
 }
 
 #[derive(Debug, Clone)]

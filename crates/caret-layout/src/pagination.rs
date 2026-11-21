@@ -121,6 +121,19 @@ pub struct ParagraphFragment {
     pub y_offset_pt: f32,
     /// 单元格内容等需要按矩形裁剪时的页面内容区局部裁剪框。
     pub clip: Option<FragmentClip>,
+    /// 片段所属宿主；正文片段为 `Body`。
+    pub host: FragmentHost,
+}
+
+/// 片段所属的文档宿主；正文之外的单元格内容不能进入正文拖选/选择域。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FragmentHost {
+    Body,
+    TableCell {
+        table_id: NodeId,
+        row_index: usize,
+        cell_index: usize,
+    },
 }
 
 /// 页面内容区局部的矩形裁剪框，单位为 pt。
@@ -486,6 +499,7 @@ pub fn paginate_paragraphs(
                         x_offset_pt: 0.0,
                         y_offset_pt,
                         clip: None,
+                        host: FragmentHost::Body,
                     });
                 }
                 page.used_height_pt = y_offset_pt + line_height_pt;

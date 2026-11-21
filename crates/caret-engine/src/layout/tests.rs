@@ -5515,6 +5515,22 @@ fn basic_table_layout_places_cells_and_shared_caret_geometry() {
     let page = &snapshot.pages[0];
     assert_eq!(page.layout.table_fragments.len(), 1);
     assert_eq!(page.layout.fragments.len(), 4);
+    assert!(
+        page.layout
+            .fragments
+            .iter()
+            .all(|fragment| matches!(fragment.host, caret_layout::FragmentHost::TableCell { .. }))
+    );
+    let glyphs = snapshot
+        .page_glyphs(0)
+        .unwrap_or_else(|error| panic!("table glyphs must resolve: {error}"));
+    let first_glyph_x = glyphs
+        .runs
+        .iter()
+        .find(|run| run.paragraph_id == first_paragraph)
+        .and_then(|run| run.glyphs.first())
+        .map(|glyph| glyph.x_pt)
+        .unwrap_or_else(|| panic!("first cell must render a glyph"));
     let laid_out = snapshot
         .paragraph_by_id(&first_paragraph)
         .unwrap_or_else(|| panic!("cell paragraph must be laid out"));
@@ -5541,6 +5557,11 @@ fn basic_table_layout_places_cells_and_shared_caret_geometry() {
     assert!(first_caret.x_pt >= page.margin_left_pt);
     assert!(first_caret.y0_pt >= page.margin_top_pt);
     assert!(first_caret.y1_pt > first_caret.y0_pt);
+    assert!(
+        (first_glyph_x - first_caret.x_pt).abs() < 0.01,
+        "cell glyph and caret must share the same x origin: {first_glyph_x} vs {}",
+        first_caret.x_pt
+    );
     let hit = snapshot
         .hit_test(
             first_caret.page_index,
