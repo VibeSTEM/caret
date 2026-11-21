@@ -8,6 +8,7 @@
 // 署名：Yuki Lu
 
 mod backend;
+mod clipboard;
 mod dimension;
 mod fonts;
 mod fragment;
@@ -21,6 +22,9 @@ use std::{fmt, ops::Range};
 
 use caret_doc::{Align, MathTree};
 
+pub use clipboard::{
+    PlainTextMathScan, PlainTextMathSegment, PlainTextMathSpan, scan_plain_text_math, wrap_tex,
+};
 pub use fragment::{
     MathFragment, MathFragmentError, MathFragmentLoss, MathFragmentPath, MathFragmentPathStep,
     MathLossReason,

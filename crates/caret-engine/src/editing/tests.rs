@@ -1851,6 +1851,19 @@ fn public_command_ids_and_error_codes_remain_stable() {
             "text.insert.two_character_width_space",
         ),
         (Command::PasteText("text".to_owned()), "clipboard.paste"),
+        (
+            Command::PasteClipboardFragment(Box::new(caret_doc::ClipboardFragment {
+                shape: caret_doc::ClipboardFragmentShape::Inline,
+                start_clipped: false,
+                end_clipped: false,
+                blocks: vec![Block::Paragraph(Paragraph::empty(NodeId::generate()))],
+            })),
+            "clipboard.paste_fragment",
+        ),
+        (
+            Command::PasteExternalClipboardText("text".to_owned()),
+            "clipboard.paste_external",
+        ),
         (Command::InsertSoftBreak, "text.soft_break"),
         (Command::InsertParagraphBreak, "text.split_paragraph"),
         (Command::Delete(Direction::Forward), "text.delete"),
@@ -1925,6 +1938,11 @@ fn public_command_ids_and_error_codes_remain_stable() {
             "edit.invalid_page_geometry: invalid margins",
         ),
         (EditError::UnknownCommand, "edit.unknown_command"),
+        (EditError::ClipboardHostMismatch, "clipboard.host_mismatch"),
+        (
+            EditError::ClipboardMathLoss("opaque extension field".to_owned()),
+            "clipboard.math_loss: opaque extension field",
+        ),
     ];
     for (error, expected) in errors {
         assert_eq!(error.to_string(), expected);

@@ -39,11 +39,12 @@ mod generated {
     use crate::document::{
         DocumentRuntime, auto_save_deadline_fired, auto_save_deadline_json,
         auto_save_write_finished, cancel_pending_recovery_lease, cancel_prepared_document,
-        clear_selection_json, command_line_command_json, configure_document_recovery,
-        current_caret_json, delete_backward_json, discard_document_recovery, discard_recovery,
-        document_hit_test_json, document_save_snapshot, document_session_generation,
-        document_status_json, drag_hit_map_json, drag_start_domain_json, export_recovery,
-        handle_editor_key_json, input_method_event_json, insert_soft_break_json, insert_text_json,
+        clear_selection_json, clipboard_copy_json, clipboard_paste_json, command_line_command_json,
+        configure_document_recovery, current_caret_json, delete_backward_json,
+        discard_document_recovery, discard_recovery, document_hit_test_json,
+        document_save_snapshot, document_session_generation, document_status_json,
+        drag_hit_map_json, drag_start_domain_json, export_recovery, handle_editor_key_json,
+        input_method_event_json, insert_soft_break_json, insert_text_json,
         install_prepared_document, interaction_state_json, layout_snapshot_json,
         mark_document_saved_json, move_structure_json, move_to_visual_line_edge_json,
         move_vertical_caret_json, move_visual_caret_json, new_blank_document_runtime,
@@ -420,6 +421,14 @@ mod generated {
             fn clear_selection_json(runtime: &mut DocumentRuntime) -> String;
             /// 以 JSON 返回按文档顺序提取的选中文本。
             fn selected_text_json(runtime: &mut DocumentRuntime) -> String;
+            /// 以 JSON 返回 Caret 片段信封与纯文本回退；空选区不覆盖系统剪贴板。
+            fn clipboard_copy_json(runtime: &mut DocumentRuntime) -> String;
+            /// 优先按严格解码的 Caret 片段粘贴；空片段走外部纯文本公式识别。
+            fn clipboard_paste_json(
+                runtime: &mut DocumentRuntime,
+                text: String,
+                fragment: String,
+            ) -> String;
             /// 按 Parley 视觉顺序移动 caret，可选择扩展当前选区。
             fn move_visual_caret_json(
                 runtime: &mut DocumentRuntime,

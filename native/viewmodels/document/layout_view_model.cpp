@@ -101,6 +101,22 @@ QString LayoutViewModel::documentOperationMessage(const QString& error) const {
     if (code.startsWith(QStringLiteral("autosave."))) {
         return QCoreApplication::translate("App", "Automatic saving could not be completed.");
     }
+    if (code == QStringLiteral("clipboard.invalid_fragment")) {
+        return QCoreApplication::translate(
+            "App", "The clipboard contains an invalid or unsupported Caret fragment.");
+    }
+    if (code == QStringLiteral("clipboard.host_mismatch")) {
+        return QCoreApplication::translate(
+            "App", "The clipboard content cannot be inserted at the current position.");
+    }
+    if (code == QStringLiteral("clipboard.math_loss")) {
+        return QCoreApplication::translate(
+            "App", "The selected math cannot be copied without losing formatting.");
+    }
+    if (code.startsWith(QStringLiteral("clipboard."))) {
+        return QCoreApplication::translate("App",
+                                           "The clipboard operation could not be completed.");
+    }
     if (code.startsWith(QStringLiteral("preferences.")) ||
         code.startsWith(QStringLiteral("settings.")) ||
         code.startsWith(QStringLiteral("language."))) {

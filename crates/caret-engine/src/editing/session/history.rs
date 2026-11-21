@@ -156,6 +156,15 @@ pub(super) enum DocumentPatch {
         before: Vec<Block>,
         after: Vec<Block>,
     },
+    /// 整棵正文块序列替换；用于跨块环境的剪贴板块粘贴。
+    ///
+    /// 片段粘贴可能同时改写多个容器（含嵌套环境），无法用单父级 `BlockRange`
+    /// 表达。补丁以提交前/后的完整 body 快照做原子替换，撤销与重做都校验当前
+    /// body 与对应快照一致后才写入。
+    Body {
+        before: Vec<Block>,
+        after: Vec<Block>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -612,6 +621,14 @@ impl DocumentPatch {
                     + size_of::<Box<Paragraph>>()
                     + node_id_bytes(environment_id)
             }
+            Self::Body { before, after } => {
+                size_of::<Vec<Block>>() * 2
+                    + before
+                        .iter()
+                        .chain(after)
+                        .map(block_estimated_bytes)
+                        .sum::<usize>()
+            }
             Self::BlockRange {
                 parent_environment_ids,
                 before,
@@ -800,6 +817,7 @@ impl DocumentPatch {
                 after,
                 before,
             ),
+            Self::Body { before, after } => apply_body(document, after, before),
             Self::EnvironmentInsertion {
                 parent_environment_ids,
                 sibling_index,
@@ -907,6 +925,7 @@ impl DocumentPatch {
                 before,
                 after,
             ),
+            Self::Body { before, after } => apply_body(document, before, after),
             Self::EnvironmentInsertion {
                 parent_environment_ids,
                 sibling_index,
@@ -1302,6 +1321,15 @@ fn persisted_blocks_equal(left: &[Block], right: &[Block]) -> bool {
                     _ => false,
                 }
         })
+}
+
+/// 用完整 body 快照做原子替换；当前 body 与预期快照不一致时不写入。
+fn apply_body(document: &mut Document, current: &[Block], replacement: &[Block]) -> bool {
+    if !persisted_blocks_equal(&document.body, current) {
+        return false;
+    }
+    document.body = replacement.to_vec();
+    true
 }
 
 fn apply_environment_boundary_paragraphs(

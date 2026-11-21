@@ -9,14 +9,14 @@ mod layout_view;
 mod math_validation;
 mod page_glyphs;
 
-pub use caret_doc::DocumentFontTarget;
+pub use caret_doc::{ClipboardFragment, DocumentFontTarget};
 pub use caret_layout::{HitAffinity, VisualAffinity};
 pub use caret_structure::{
     IndexedStructure, StructureClass, StructureIndex, StructureKind, StructurePosition,
 };
 
 pub use editing::{
-    Affinity, Capabilities, ClipboardAction, Command, CommandCandidate, CommandLine,
+    Affinity, Capabilities, ClipboardAction, ClipboardCopy, Command, CommandCandidate, CommandLine,
     CommandLineMode, CommandLineWireField, CompositionRange, CompositionUpdateCandidate,
     CurrentEnvironmentView, Direction, DocumentCaretPosition, DocumentRangeEndpoint, EditError,
     EditorKey, Effect, EnvironmentEntry, EnvironmentKind, EnvironmentLevel, EnvironmentSource,

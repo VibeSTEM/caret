@@ -70,7 +70,7 @@ Caret 数学树保留 TeX 原子与符号顺序，不解析成代数关系或运
 - 检查式序列化先按当前 schema 校验树形、已知节点属性、深度/节点/负载限制和 ID 唯一性，再逐层检查 TeX 无法无损表达的元数据与技术预算。失败返回模型路径（content/operand/environmentChild/textRun/align row/cell）与原因，不静默删除内容；转换失败不修改输入模型，一次转换只报告首个损失。
 - 目前作为损失拒绝的已知情况：任意层级的 `extra` 扩展字段（含 SoftBreak 与 TextFlow Run）；`Opaque` 内容；TextFlow Run 的 `props`/`language`/`extra`；零 Run 的 TextFlow；行内环境的主题模板引用、未知实例属性、缺少 `fontFamily` 的 Font 环境，以及 `serif`/`sans-serif`/`monospace` 之外的 Font 字体族；空白/支柱尺寸超出规范 TeX 的精度预算或序列化算术溢出。透明 Row/Style 包装、空根 flow、空 Group、空 Align/空 cell 由规范序列化归一化（有行为测试）；空操作数槽位沿用既有规范序列化归一化，不在片段层单独断言。ID 与源位置不参与片段身份；片段校验不替代文档级 InlineMath/Equation/Align 宿主规则。
 - 本节的 `MathFragment` 指源码转换结果；[画布高亮](../interface/canvas-highlighting.md)中同名概念指排版/分页的公式几何片段，两者不是同一类型。
-- 047/049/公式源码输入与 091 的实际接入由各自任务验收；剪贴板的完整 Caret 结构往返仍由版本化 MIME 承载，不以 TeX 片段冒充无损结构复制。
+- 047/049/公式源码输入与 091 的实际接入由各自任务验收；剪贴板的完整 Caret 结构往返仍由版本化 MIME 承载，不以 TeX 片段冒充无损结构复制。剪贴板专用的外层定界符包装与外部纯文本扫描（`\(…\)`/`\[…\]`）作为共享辅助放在 `caret-math`，仍复用本节的 checked 转换边界；格式适配器保留自己的外层语法与诊断职责。
 
 ## 解析、排版与字体
 

@@ -90,6 +90,26 @@ message_125:
   tr: The settings could not be saved.
   st: finished
 
+message_126:
+  src: The clipboard contains an invalid or unsupported Caret fragment.
+  tr: The clipboard contains an invalid or unsupported Caret fragment.
+  st: finished
+
+message_127:
+  src: The clipboard content cannot be inserted at the current position.
+  tr: The clipboard content cannot be inserted at the current position.
+  st: finished
+
+message_128:
+  src: The selected math cannot be copied without losing formatting.
+  tr: The selected math cannot be copied without losing formatting.
+  st: finished
+
+message_129:
+  src: The clipboard operation could not be completed.
+  tr: The clipboard operation could not be completed.
+  st: finished
+
 [DialogAction]
 message_012:
   src: OK

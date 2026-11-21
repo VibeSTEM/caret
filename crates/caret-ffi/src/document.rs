@@ -372,6 +372,22 @@ pub(crate) fn selected_text_json(runtime: &mut DocumentRuntime) -> String {
     json_response(runtime, DocumentViewRuntime::selected_text_json)
 }
 
+/// 以 JSON 返回 Caret 片段信封与纯文本回退；空选区返回空回退且不覆盖剪贴板。
+pub(crate) fn clipboard_copy_json(runtime: &mut DocumentRuntime) -> String {
+    json_response(runtime, DocumentViewRuntime::copy_clipboard_json)
+}
+
+/// 优先按严格解码的 Caret 片段粘贴；空片段把纯文本交给外部公式识别。
+pub(crate) fn clipboard_paste_json(
+    runtime: &mut DocumentRuntime,
+    text: String,
+    fragment: String,
+) -> String {
+    json_response(runtime, |runtime| {
+        runtime.paste_clipboard_json(text, fragment)
+    })
+}
+
 pub(crate) fn move_visual_caret_json(
     runtime: &mut DocumentRuntime,
     forward: bool,
@@ -785,6 +801,8 @@ mod tests {
             set_selection_json(&mut runtime, "{}".to_owned()),
             clear_selection_json(&mut runtime),
             selected_text_json(&mut runtime),
+            clipboard_copy_json(&mut runtime),
+            clipboard_paste_json(&mut runtime, "text".to_owned(), String::new()),
             move_visual_caret_json(&mut runtime, true, false),
             move_vertical_caret_json(&mut runtime, 1, false),
             move_to_visual_line_edge_json(&mut runtime, true, false),

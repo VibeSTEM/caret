@@ -262,6 +262,29 @@ impl DocumentViewRuntime {
         self.run_edit_command(Command::PasteText(text), "clipboard.paste")
     }
 
+    /// 将系统剪贴板的双格式载荷作为一次原子粘贴事务提交。
+    ///
+    /// 非空 `fragment` 是 Caret 专用片段信封；严格解码失败时整次操作拒绝，不降级为
+    /// 纯文本。空 `fragment` 表示外部应用写入的纯文本，由 Rust 识别受支持的公式定界符。
+    pub fn paste_clipboard_json(
+        &mut self,
+        text: String,
+        fragment: String,
+    ) -> Result<String, String> {
+        if fragment.is_empty() {
+            return self.run_edit_command(
+                Command::PasteExternalClipboardText(text),
+                "clipboard.paste_external",
+            );
+        }
+        let fragment = caret_doc::decode_clipboard_fragment_json(&fragment)
+            .map_err(|error| format!("clipboard.invalid_fragment: {error}"))?;
+        self.run_edit_command(
+            Command::PasteClipboardFragment(Box::new(fragment)),
+            "clipboard.paste_fragment",
+        )
+    }
+
     /// 在 Rust Session 中拆分当前段落并返回新布局。
     pub fn split_paragraph_json(&mut self) -> Result<String, String> {
         self.run_edit_command(Command::InsertParagraphBreak, "text.split_paragraph")
@@ -302,10 +325,16 @@ impl DocumentViewRuntime {
         if can_reuse_layout {
             self.base_snapshot()?;
         }
-        let effect = self
-            .session
-            .run(command)
-            .map_err(|error| format!("{error_context}: {error}"))?;
+        // 剪贴板命令保留引擎的稳定 clipboard.* 错误码，供 native 映射用户文案。
+        let preserve_clipboard_error = error_context.starts_with("clipboard.");
+        let effect = self.session.run(command).map_err(|error| {
+            let message = error.to_string();
+            if preserve_clipboard_error && message.starts_with("clipboard.") {
+                message
+            } else {
+                format!("{error_context}: {message}")
+            }
+        })?;
         if effect.composition_changed {
             self.clear_composition_state();
         }

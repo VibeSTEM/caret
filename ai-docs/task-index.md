@@ -122,7 +122,7 @@
 | 088 | 数学排版 | [收敛空 InlineMath 插入槽与正文命中优先级](task/088-unify-empty-inline-math-hit-slot.md) | P2 | 087、069 | S | planned |
 | 089 | 行内格式 | [InlineEnvironment 普通 Backspace 清理语义](task/089-inline-environment-backspace-cleanup.md) | P1 | 031、044、075 | S | done |
 | 090 | 画布交互 | [拖选跨公式块/块环境的实时预览](task/090-drag-selection-live-preview.md) | P1 | 027、031、044、083 | M | implemented |
-| 091 | 剪贴板 | [富剪贴板与数学片段接入](task/091-rich-clipboard-integration.md) | P1 | 083、092 | M | ready |
+| 091 | 剪贴板 | [富剪贴板与数学片段接入](task/091-rich-clipboard-integration.md) | P1 | 083、092 | M | implemented |
 | 092 | 数学排版 | [共享数学片段转换接口](task/092-checked-math-fragment-converter.md) | P1 | 043 | M | done |
 | 093 | 质量清理 | [全仓 Brooks Sweep 质量清理记录](task/093-brooks-sweep-quality-cleanup.md) | P2 | — | L | done |
 | 094 | 测试 | [关闭已编辑文档事务的行为测试](task/094-close-with-unsaved-changes-tests.md) | P0 | 093 | M | done |
@@ -136,5 +136,6 @@
 | 102 | 质量清理 | [Brooks sweep 后续收敛项](task/102-sweep-followup-convergence.md) | P2 | 093、095 | M | done |
 | 103 | 工具链 | [Rust 1.100 工具链升级与 Nightly sanitizer 恢复](task/103-rust-1-100-upgrade.md) | P0 | 001、006、070 | M | done |
 | 104 | 工具链 | [Rust 1.100 与质量清理的后续项](task/104-rust-1-100-followups.md) | P2 | 103 | M | done |
+| 105 | 剪贴板 | [剪贴板 Math 形状、错误呈现与跨平台验证](task/105-clipboard-math-range-and-platform.md) | P2 | 091 | M | planned |
 
 分类描述任务主题；里程碑和实施边界写在对应任务中。任务拆分、状态变更及执行记录以各任务文档为准。

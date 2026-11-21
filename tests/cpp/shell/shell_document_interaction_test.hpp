@@ -31,6 +31,10 @@ class ShellDocumentInteractionTest final : public ShellTestBase {
     void dragSelectionCommitsSameRustSelectionProjection();
     void reverseDragMovesInputMethodCaretToFocus();
     void clipboardCopyPasteUsesRustSelectionProjection();
+    void richClipboardCopyPreservesMathStructure();
+    void richClipboardPasteRoundTripsMathStructureAndUndo();
+    void richClipboardRejectsInvalidFragmentPayload();
+    void externalMathTextPasteRecognizesDelimiters();
     void selectionDragFromExistingSelectionPublishesCanvasRects();
     void mouseClickClearsSelectionInsideAndOutsideText();
     void multilinePasteSplitsParagraphs();
