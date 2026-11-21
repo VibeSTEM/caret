@@ -487,8 +487,15 @@ impl DocumentLayoutSnapshot {
                         + f64::from(
                             selected_line.metrics().baseline - first_line.metrics().baseline,
                         );
-                    let caret =
-                        projection.caret_at_math_baseline(island_x + bounds.x0, selected_baseline);
+                    let island_metrics = sidecar.layout.metrics;
+                    let caret = super::items::math_text_island_caret(
+                        projection,
+                        sidecar.structural_depth,
+                        island_x + bounds.x0,
+                        selected_baseline,
+                        island_metrics.ascent_pt,
+                        island_metrics.descent_pt,
+                    );
                     let Some((clip_top, clip_bottom)) = projection.clip_range_for_row(
                         caret.y0_pt,
                         caret.y1_pt,

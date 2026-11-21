@@ -32,6 +32,8 @@ pub struct MathTextRequest {
     pub runs: Vec<MathTextRun>,
     /// 塑形后仍须保留结构身份的文本/格式节点。
     pub containers: Vec<MathTextContainer>,
+    /// 文本岛所在的视觉结构槽深度；透明/格式化包装不增加。
+    pub structural_depth: u32,
 }
 
 /// 数学格式容器及其在拼接文本岛中的 UTF-8 字节范围。

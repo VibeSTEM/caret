@@ -1,6 +1,6 @@
 # Task 索引
 
-更新日期：2026-11-21。非平凡改动先从[模板](task/_template.md)建 task，在本索引登记，然后再动代码。行为规格在[架构](architecture/README.md)和[规范](standards/README.md)。2026-10-25 删去未执行的旧队列，现行任务从 001 重新编号。
+更新日期：2026-11-22。非平凡改动先从[模板](task/_template.md)建 task，在本索引登记，然后再动代码。行为规格在[架构](architecture/README.md)和[规范](standards/README.md)。2026-10-25 删去未执行的旧队列，现行任务从 001 重新编号。
 
 ## 使用方式
 
@@ -68,7 +68,7 @@
 | 034 | 性能 | [Qt / Rust 性能测量与热点优化](task/034-performance-profiling.md) | P2 | 024、026、027、030 | L | done |
 | 035 | 文档模式 | [Editing、Review、View 模式语义与行为](task/035-document-work-modes.md) | P2 | 018 | L | planned |
 | 036 | 图标与致谢 | [Icons8 图标替换与 Settings 关于页面署名](task/036-icons8-icons-and-attribution.md) | P1 | 018 | M | planned |
-| 037 | AutoSave | [AutoSave 实现](task/037-autosave-implementation.md) | P2 | 018、019、029 | L | in-progress |
+| 037 | AutoSave | [AutoSave 实现](task/037-autosave-implementation.md) | P2 | 018、019、029 | L | done |
 | 038 | 窗口架构 | [多窗口文档会话与全局操作协调](task/038-multiwindow-document-sessions.md) | P2 | 037 | L | planned |
 | 039 | Settings UI | [Settings 中的主题与界面语言](task/039-settings-theme-language-ui.md) | P2 | 003、004、029 | M | done |
 | 040 | 架构治理 | [架构与结构审计整改](task/040-architecture-structure-cleanup.md) | P2 | — | M | done |
@@ -76,7 +76,7 @@
 | 042 | 数学排版 | [M3：数学后端选型与验证](task/042-math-backend.md) | P2 | — | M | done |
 | 043 | 数学排版 | [M3：公式模型与编辑](task/043-math-model-and-editing.md) | P2 | 010、042 | L | done |
 | 044 | 数学排版 | [M3：公式布局与画布渲染](task/044-math-layout-and-rendering.md) | P2 | 027、043 | L | done |
-| 045 | 表格 | [M3：表格模型与交互](task/045-table-model-and-editing.md) | P2 | 010、021、043、071 | M | planned |
+| 045 | 表格 | [M3：表格模型与交互](task/045-table-model-and-editing.md) | P2 | 010、021、043、071 | M | ready |
 | 046 | 表格 | [M3：表格布局与画布](task/046-table-layout-and-canvas.md) | P2 | 027、043、044、045 | M | planned |
 | 047 | 文档交换 | [Markdown 导入导出与转换框架](task/047-markdown-interchange.md) | P2 | 008、010–012、018、021、023–027、029、050–053、092 | L | planned |
 | 048 | 文档交换 | [DOCX 导入导出适配器](task/048-docx-interchange.md) | P2 | 047 | L | planned |
@@ -108,7 +108,7 @@
 | 074 | 数学交互 | [数学光标候选与统一仲裁](task/074-math-caret-routing-and-geometry.md) | P1 | 071、072 | M | done |
 | 075 | 数学交互 | [Equation / Align 活动块背景高亮](task/075-equation-align-active-highlight.md) | P2 | 044、072 | M | done |
 | 076 | 键盘架构 | [逐键状态仲裁与键盘路由一致性](task/076-per-key-state-arbitration.md) | P1 | 071 | L | done |
-| 077 | 数学交互 | [数学宿主行框与光标高度统一](task/077-stable-math-caret-height.md) | P1 | 044、074 | M | implemented |
+| 077 | 数学交互 | [数学宿主行框与光标高度统一](task/077-stable-math-caret-height.md) | P1 | 044、074 | M | done |
 | 078 | 数学输入 | [数学输入源的拉丁字符等效输出](task/078-math-latin-input-source-parity.md) | P1 | 076 | M | ready |
 | 079 | 数学交互 | [数学多行换行与删除事务](task/079-math-multiline-break-deletion.md) | P1 | 071、074、076 | M | done |
 | 080 | 架构 | [Block/Inline 共享交互底座（Paragraph 为基线）](task/080-shared-host-boundary-interaction.md) | P1 | 071、074、077、081–083、091 | L | done |

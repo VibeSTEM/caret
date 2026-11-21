@@ -9,5 +9,9 @@ class ShellDocumentAutoSaveTest final : public ShellTestBase {
   private slots:
 #ifdef CARET_ENABLE_APP
     void autoSaveWritesTheCurrentRevisionAfterTheDeadline();
+    void enablingAutoSaveForANamedDocumentArmsWithoutAskingForAPath();
+    void savingAnUnnamedDocumentOnEnableBindsThePathAndReportsEditedThenSaved();
+    void cancellingTheUnnamedSaveRequestLeavesAutoSaveOff();
+    void startupWithAutoSaveEnabledRequestsAPathAndCancelPersistsOff();
 #endif
 };

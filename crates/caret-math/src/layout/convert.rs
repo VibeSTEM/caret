@@ -49,6 +49,8 @@ pub(crate) struct Converter<'a> {
     pub requested_text_family_missing: bool,
     pub(crate) text_tokens: std::collections::HashSet<u64>,
     pub math_text_style: MathTextRunStyle,
+    /// 当前正在排版的视觉结构槽深度；分式操作数、脚标、上下限、根指数、重音上下标等增加。
+    pub slot_depth: u32,
 }
 
 /// 一次文本岛的累积状态与上下文。
@@ -96,6 +98,7 @@ impl TextSequenceCollector {
             color: style.color,
             runs: Vec::new(),
             containers: Vec::new(),
+            structural_depth: converter.slot_depth,
         }
     }
 
@@ -170,7 +173,16 @@ impl Converter<'_> {
     ) -> Option<NodePosition> {
         let mut position = position.clone()?;
         position.font_size_pt = Some(self.ctx.font_size(style));
+        position.structural_depth = self.slot_depth;
         Some(position)
+    }
+
+    /// 在视觉结构槽内排版子树：深度加一，子树结束后恢复。
+    fn with_slot_depth<T>(&mut self, layout: impl FnOnce(&mut Self) -> T) -> T {
+        self.slot_depth += 1;
+        let result = layout(self);
+        self.slot_depth -= 1;
+        result
     }
 
     /// 排版一个节点，并记录其范围供命中测试。
@@ -191,12 +203,20 @@ impl Converter<'_> {
                 continue;
             }
             let baseline = fragment.frame.baseline;
+            // 可选占位符操作数本身就是结构槽（根指数、上下限等），
+            // 即使没有内容也应按槽位深度记录，供空槽光标复用。
+            let placeholder_position =
+                self.styled_position(&child.position, style)
+                    .map(|mut position| {
+                        position.structural_depth = self.slot_depth.saturating_add(1);
+                        position
+                    });
             fragment.frame.insert(
                 0,
                 Point::new(0.0, baseline),
                 Item::Node {
                     id: child.id.clone(),
-                    position: self.styled_position(&child.position, style),
+                    position: placeholder_position,
                     width: 0.0,
                     height: 0.0,
                     baseline: 0.0,
@@ -590,6 +610,7 @@ impl Converter<'_> {
                             is_flow: container.is_flow,
                             is_container: container.is_container,
                             font_size_pt: Some(request.font_size_pt),
+                            structural_depth: self.slot_depth,
                         }),
                         width: container.width,
                         height: container.height,
@@ -610,6 +631,7 @@ impl Converter<'_> {
                             is_flow: run.is_flow,
                             is_container: false,
                             font_size_pt: Some(request.font_size_pt),
+                            structural_depth: self.slot_depth,
                         }),
                         width: run.width,
                         height: run.height,
@@ -755,7 +777,9 @@ impl Converter<'_> {
             K::Operator => self.operator(node, style),
             K::Fraction => self.fraction(node, style),
             K::Radical => {
-                let index = self.optional(node, 0, style.with_size(MathSize::ScriptScript));
+                let index = self.with_slot_depth(|converter| {
+                    converter.optional(node, 0, style.with_size(MathSize::ScriptScript))
+                });
                 let body = self.child(node, 1, style.cramped());
                 layout_radical(&self.ctx, style, body, index)
             }
@@ -789,8 +813,10 @@ impl Converter<'_> {
             }
             K::OverUnder => {
                 let mut base = self.child(node, 0, style);
-                let top = self.optional(node, 1, style.superscript());
-                let bottom = self.optional(node, 2, style.subscript());
+                let top = self
+                    .with_slot_depth(|converter| converter.optional(node, 1, style.superscript()));
+                let bottom = self
+                    .with_slot_depth(|converter| converter.optional(node, 2, style.subscript()));
                 let class = base.class;
                 base.limits = true;
                 let mut fragment = layout_attachments(
@@ -808,7 +834,8 @@ impl Converter<'_> {
                 fragment
             }
             K::CancelTo => {
-                let target = self.child(node, 0, style.superscript());
+                let target =
+                    self.with_slot_depth(|converter| converter.child(node, 0, style.superscript()));
                 let body = self.child(node, 1, style);
                 layout_cancel_to(style, body, target)
             }
@@ -996,8 +1023,8 @@ impl Converter<'_> {
             "tfrac" => style.with_size(MathSize::Text),
             _ => style,
         };
-        let num = self.child(node, 0, inner.numerator());
-        let denom = self.child(node, 1, inner.denominator());
+        let num = self.with_slot_depth(|converter| converter.child(node, 0, inner.numerator()));
+        let denom = self.with_slot_depth(|converter| converter.child(node, 1, inner.denominator()));
         let padding = 0.1 * self.ctx.font_size(inner);
         let mut fragment = layout_fraction(&self.ctx, inner, num, denom, true, padding);
         fragment.class = AtomClass::Inner;
@@ -1011,8 +1038,12 @@ impl Converter<'_> {
             K::Subscript => (node.children.get(1), None),
             _ => (node.children.get(1), node.children.get(2)),
         };
-        let sup = sup.map(|child| self.node(child, style.superscript()));
-        let sub = sub.map(|child| self.node(child, style.subscript()));
+        let sup = sup.map(|child| {
+            self.with_slot_depth(|converter| converter.node(child, style.superscript()))
+        });
+        let sub = sub.map(|child| {
+            self.with_slot_depth(|converter| converter.node(child, style.subscript()))
+        });
         self.attach(style, base, sup, sub)
     }
 
@@ -1094,11 +1125,11 @@ impl Converter<'_> {
         };
         let mut base = base;
         base.limits = limits;
-        let sub = self.optional(node, 0, style.subscript());
+        let sub = self.with_slot_depth(|converter| converter.optional(node, 0, style.subscript()));
         let sup = if node.kind == K::Limit {
             None
         } else {
-            self.optional(node, 1, style.superscript())
+            self.with_slot_depth(|converter| converter.optional(node, 1, style.superscript()))
         };
         if sub.is_none() && sup.is_none() {
             return base;

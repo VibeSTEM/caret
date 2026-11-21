@@ -4642,3 +4642,856 @@ fn paragraph_plain_text(paragraph: &Paragraph) -> String {
     collect(&paragraph.inlines, &mut text);
     text
 }
+
+fn equation_layout(source: &str) -> (super::DocumentLayoutSnapshot, NodeId) {
+    let caret_math::ParsedMath::Tree(math_tree) =
+        caret_math::parse(source, caret_math::MathInputKind::Equation)
+            .unwrap_or_else(|error| panic!("valid equation should parse: {error}"))
+    else {
+        panic!("equation source should produce a math tree");
+    };
+    let equation_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body.push(Block::Equation(Equation {
+        id: equation_id.clone(),
+        math_tree,
+        extra: BTreeMap::new(),
+    }));
+    (layout_document(&document), equation_id)
+}
+
+fn math_box<'a>(
+    layout: &'a caret_math::layout::MathLayout,
+    path: &[caret_doc::MathPathStep],
+) -> &'a caret_math::layout::MathNodeBox {
+    layout
+        .nodes
+        .iter()
+        .find(|node| node.path == path)
+        .unwrap_or_else(|| panic!("math layout node {path:?} should exist"))
+}
+
+fn math_text_box<'a>(
+    layout: &'a caret_math::layout::MathLayout,
+    path: &[caret_doc::MathPathStep],
+) -> &'a caret_math::layout::MathNodeBox {
+    layout
+        .nodes
+        .iter()
+        .find(|node| node.path == path && node.is_text_flow)
+        .unwrap_or_else(|| panic!("math text layout node {path:?} should exist"))
+}
+
+fn slot_caret(
+    snapshot: &super::DocumentLayoutSnapshot,
+    target: &MathEditTarget,
+    host: &MathPositionHost,
+    steps: Vec<MathSequenceStep>,
+) -> super::PageCaretGeometry {
+    snapshot
+        .math_tree_caret(
+            target,
+            &MathTreePosition {
+                host: host.clone(),
+                path: MathSequencePath::new(steps),
+                offset: 0,
+                affinity: MathPositionAffinity::Downstream,
+            },
+        )
+        .unwrap_or_else(|| panic!("slot insertion point should have caret geometry"))
+        .0
+}
+
+fn caret_height(caret: super::PageCaretGeometry) -> f64 {
+    caret.y1_pt - caret.y0_pt
+}
+
+fn caret_center(caret: super::PageCaretGeometry) -> f64 {
+    (caret.y0_pt + caret.y1_pt) / 2.0
+}
+
+/// 与实现独立的结构槽 caret 期望：正文行高按深度减半、收进槽位盒并保留 1pt。
+fn expected_structural_caret_height(base_height: f64, depth: u32, slot_height: f64) -> f64 {
+    let scale = 0.5_f64.powi(depth.min(5) as i32);
+    (base_height * scale).min(slot_height).max(1.0)
+}
+
+fn equation_projection<'a>(
+    snapshot: &'a super::DocumentLayoutSnapshot,
+    math_id: &NodeId,
+) -> &'a super::MathPageProjection {
+    snapshot
+        .math_page_projections()
+        .iter()
+        .find(|projection| &projection.math_id == math_id)
+        .unwrap_or_else(|| panic!("math host should have a page projection"))
+}
+
+/// 结构槽光标每深入一层结构高度减半，并收进槽位布局盒。
+#[test]
+fn math_slot_caret_height_halves_per_structural_depth() {
+    let (snapshot, equation_id) = equation_layout("x^{2^{3^{4}}}");
+    let target = MathEditTarget::Block {
+        block_id: equation_id.clone(),
+        align: false,
+    };
+    let host = MathPositionHost::Equation {
+        owner_id: equation_id.clone(),
+    };
+    let projection = equation_projection(&snapshot, &equation_id);
+    let base_height = projection.caret_height_pt;
+    let layout = &snapshot.math_blocks[&equation_id];
+
+    let root = slot_caret(&snapshot, &target, &host, Vec::new());
+    assert!(
+        (caret_height(root) - base_height).abs() < 1e-9,
+        "root caret keeps the body line height"
+    );
+
+    let nested_steps = |depth: usize| {
+        vec![
+            MathSequenceStep::Operand {
+                content_index: 0,
+                operand_index: 1,
+            };
+            depth
+        ]
+    };
+    let script_path = [
+        caret_doc::MathPathStep::Content(0),
+        caret_doc::MathPathStep::Operand(1),
+    ];
+    let script = slot_caret(&snapshot, &target, &host, nested_steps(1));
+    let script_box = math_box(layout, &script_path);
+    assert_eq!(script_box.structural_depth, 1);
+    assert!(
+        (caret_height(script)
+            - expected_structural_caret_height(base_height, 1, script_box.height,))
+        .abs()
+            < 1e-9,
+        "first-level structure caret follows the clamped half-height rule"
+    );
+    assert!(
+        caret_height(script) < base_height * 0.99,
+        "first-level structure caret is shorter than the body caret"
+    );
+
+    let inner_path = [
+        caret_doc::MathPathStep::Content(0),
+        caret_doc::MathPathStep::Operand(1),
+        caret_doc::MathPathStep::Content(0),
+        caret_doc::MathPathStep::Operand(1),
+    ];
+    let inner = slot_caret(&snapshot, &target, &host, nested_steps(2));
+    let inner_box = math_box(layout, &inner_path);
+    assert_eq!(inner_box.structural_depth, 2);
+    assert!(
+        (caret_height(inner) - expected_structural_caret_height(base_height, 2, inner_box.height))
+            .abs()
+            < 1e-9
+    );
+    assert!(caret_height(inner) < caret_height(script));
+}
+
+/// 透明/格式化包装不增加结构深度：重音、定界、分组内的根层光标保持正文行高。
+#[test]
+fn transparent_math_wrappers_do_not_shrink_the_caret() {
+    for (source, content_path) in [
+        (r"\hat{x}", vec![caret_doc::MathPathStep::Content(0)]),
+        (r"\overline{x}", vec![caret_doc::MathPathStep::Content(0)]),
+        (r"\left(x\right)", vec![caret_doc::MathPathStep::Content(0)]),
+        ("{x}", vec![caret_doc::MathPathStep::Content(0)]),
+    ] {
+        let (snapshot, equation_id) = equation_layout(source);
+        let target = MathEditTarget::Block {
+            block_id: equation_id.clone(),
+            align: false,
+        };
+        let host = MathPositionHost::Equation {
+            owner_id: equation_id.clone(),
+        };
+        let projection = equation_projection(&snapshot, &equation_id);
+        let operand_path = {
+            let mut path = content_path;
+            path.push(caret_doc::MathPathStep::Operand(0));
+            path
+        };
+        let operand_box = math_box(&snapshot.math_blocks[&equation_id], &operand_path);
+        assert_eq!(
+            operand_box.structural_depth, 0,
+            "transparent wrapper content should not add structural depth: {source}"
+        );
+        let caret = slot_caret(
+            &snapshot,
+            &target,
+            &host,
+            vec![MathSequenceStep::Operand {
+                content_index: 0,
+                operand_index: 0,
+            }],
+        );
+        assert!(
+            (caret_height(caret) - projection.caret_height_pt).abs() < 1e-9,
+            "transparent wrapper caret should keep the body height: {source}"
+        );
+    }
+
+    // 透明包装内的真结构仍按结构深度计一次，而不是两次。
+    let (snapshot, equation_id) = equation_layout(r"\left(x^{2}\right)");
+    let target = MathEditTarget::Block {
+        block_id: equation_id.clone(),
+        align: false,
+    };
+    let host = MathPositionHost::Equation {
+        owner_id: equation_id.clone(),
+    };
+    let projection = equation_projection(&snapshot, &equation_id);
+    let superscript_path = [
+        caret_doc::MathPathStep::Content(0),
+        caret_doc::MathPathStep::Operand(0),
+        caret_doc::MathPathStep::Content(0),
+        caret_doc::MathPathStep::Operand(1),
+    ];
+    let superscript_box = math_box(&snapshot.math_blocks[&equation_id], &superscript_path);
+    assert_eq!(superscript_box.structural_depth, 1);
+    let caret = slot_caret(
+        &snapshot,
+        &target,
+        &host,
+        vec![
+            MathSequenceStep::Operand {
+                content_index: 0,
+                operand_index: 0,
+            },
+            MathSequenceStep::Operand {
+                content_index: 0,
+                operand_index: 1,
+            },
+        ],
+    );
+    assert!(
+        (caret_height(caret)
+            - expected_structural_caret_height(
+                projection.caret_height_pt,
+                1,
+                superscript_box.height,
+            ))
+        .abs()
+            < 1e-9,
+        "structure inside a transparent wrapper should be one depth level"
+    );
+}
+
+/// 结构槽 caret 以槽位布局盒中心定位：上标在基线上方、下标在下方，
+/// 空分式槽不再伸出宿主行框。
+#[test]
+fn math_slot_caret_is_centered_in_the_slot_box() {
+    let (snapshot, equation_id) = equation_layout(r"\frac{}{1}");
+    let target = MathEditTarget::Block {
+        block_id: equation_id.clone(),
+        align: false,
+    };
+    let host = MathPositionHost::Equation {
+        owner_id: equation_id.clone(),
+    };
+    let projection = equation_projection(&snapshot, &equation_id);
+    let layout = &snapshot.math_blocks[&equation_id];
+    let numerator = slot_caret(
+        &snapshot,
+        &target,
+        &host,
+        vec![MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 0,
+        }],
+    );
+    let numerator_box = math_box(
+        layout,
+        &[
+            caret_doc::MathPathStep::Content(0),
+            caret_doc::MathPathStep::Operand(0),
+        ],
+    );
+    assert!(
+        (caret_height(numerator)
+            - expected_structural_caret_height(
+                projection.caret_height_pt,
+                1,
+                numerator_box.height,
+            ))
+        .abs()
+            < 1e-9
+    );
+    let expected_center = projection.baseline_y_pt + numerator_box.y + numerator_box.height / 2.0;
+    assert!(
+        (caret_center(numerator) - expected_center).abs() < 1e-9,
+        "slot caret should be centered in the slot layout box"
+    );
+    let box_top = projection.baseline_y_pt + numerator_box.y;
+    let box_bottom = box_top + numerator_box.height;
+    assert!(
+        numerator.y0_pt >= box_top - 1e-9 && numerator.y1_pt <= box_bottom + 1e-9,
+        "empty fraction caret should stay inside its slot box"
+    );
+    // 宿主行顶/基线来自正文回退字体度量，跨平台会有差异；这里只断言与槽位盒
+    // 的包含关系，跨平台稳定的是结构槽几何本身。
+
+    let (superscript_snapshot, superscript_id) = equation_layout("x^{2}");
+    let superscript_target = MathEditTarget::Block {
+        block_id: superscript_id.clone(),
+        align: false,
+    };
+    let superscript_host = MathPositionHost::Equation {
+        owner_id: superscript_id,
+    };
+    let superscript = slot_caret(
+        &superscript_snapshot,
+        &superscript_target,
+        &superscript_host,
+        vec![MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 1,
+        }],
+    );
+    let root = slot_caret(
+        &superscript_snapshot,
+        &superscript_target,
+        &superscript_host,
+        Vec::new(),
+    );
+    assert!(
+        caret_center(superscript) < caret_center(root),
+        "superscript caret sits above the formula baseline"
+    );
+
+    let (subscript_snapshot, subscript_id) = equation_layout("x_{2}");
+    let subscript_target = MathEditTarget::Block {
+        block_id: subscript_id.clone(),
+        align: false,
+    };
+    let subscript_host = MathPositionHost::Equation {
+        owner_id: subscript_id,
+    };
+    let subscript = slot_caret(
+        &subscript_snapshot,
+        &subscript_target,
+        &subscript_host,
+        vec![MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 1,
+        }],
+    );
+    let subscript_root = slot_caret(
+        &subscript_snapshot,
+        &subscript_target,
+        &subscript_host,
+        Vec::new(),
+    );
+    assert!(
+        caret_center(subscript) > caret_center(subscript_root),
+        "subscript caret sits below the formula baseline"
+    );
+}
+
+/// 显示公式与行内公式的分式槽使用同一结构深度规则，并收进各自操作数盒。
+#[test]
+fn fraction_slot_caret_uses_half_height_in_display_and_inline_math() {
+    let (display_snapshot, display_id) = equation_layout(r"\frac{x}{y}");
+    let display_target = MathEditTarget::Block {
+        block_id: display_id.clone(),
+        align: false,
+    };
+    let display_host = MathPositionHost::Equation {
+        owner_id: display_id.clone(),
+    };
+    let display_projection = equation_projection(&display_snapshot, &display_id);
+    let display_layout = &display_snapshot.math_blocks[&display_id];
+    for operand_index in 0..2 {
+        let caret = slot_caret(
+            &display_snapshot,
+            &display_target,
+            &display_host,
+            vec![MathSequenceStep::Operand {
+                content_index: 0,
+                operand_index,
+            }],
+        );
+        let operand_box = math_box(
+            display_layout,
+            &[
+                caret_doc::MathPathStep::Content(0),
+                caret_doc::MathPathStep::Operand(operand_index),
+            ],
+        );
+        assert!(
+            (caret_height(caret)
+                - expected_structural_caret_height(
+                    display_projection.caret_height_pt,
+                    1,
+                    operand_box.height,
+                ))
+            .abs()
+                < 1e-9,
+            "display fraction operand caret follows the slot rule"
+        );
+    }
+
+    let paragraph_id = NodeId::generate();
+    let mut paragraph = Paragraph::empty(paragraph_id.clone());
+    paragraph.inlines = vec![inline_math(r"\frac{x}{y}")];
+    let math_id = paragraph
+        .inlines
+        .iter()
+        .find_map(|content| match content {
+            ParagraphContent::Math(math) => Some(math.id.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("inline math should be present"));
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(paragraph)];
+    let snapshot = layout_document(&document);
+    let target = MathEditTarget::Inline {
+        paragraph_id,
+        math_id: math_id.clone(),
+    };
+    let host = MathPositionHost::InlineMath {
+        owner_id: math_id.clone(),
+    };
+    let projection = equation_projection(&snapshot, &math_id);
+    let layout = &snapshot.paragraphs[0].inline_math_layouts[0];
+    let numerator = slot_caret(
+        &snapshot,
+        &target,
+        &host,
+        vec![MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 0,
+        }],
+    );
+    let numerator_box = math_box(
+        layout,
+        &[
+            caret_doc::MathPathStep::Content(0),
+            caret_doc::MathPathStep::Operand(0),
+        ],
+    );
+    assert!(
+        (caret_height(numerator)
+            - expected_structural_caret_height(
+                projection.caret_height_pt,
+                1,
+                numerator_box.height,
+            ))
+        .abs()
+            < 1e-9,
+        "inline fraction operand caret follows the slot rule"
+    );
+}
+
+/// 根式指数槽等窄槽按槽位盒高度截断，caret 不越出槽位。
+#[test]
+fn radical_index_slot_caret_fits_its_slot_box() {
+    let (snapshot, equation_id) = equation_layout(r"\sqrt[3]{x}");
+    let target = MathEditTarget::Block {
+        block_id: equation_id.clone(),
+        align: false,
+    };
+    let host = MathPositionHost::Equation {
+        owner_id: equation_id.clone(),
+    };
+    let projection = equation_projection(&snapshot, &equation_id);
+    let index_path = [
+        caret_doc::MathPathStep::Content(0),
+        caret_doc::MathPathStep::Operand(0),
+    ];
+    let index_box = math_box(&snapshot.math_blocks[&equation_id], &index_path);
+    assert_eq!(index_box.structural_depth, 1);
+    let caret = slot_caret(
+        &snapshot,
+        &target,
+        &host,
+        vec![MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 0,
+        }],
+    );
+    assert!(
+        (caret_height(caret)
+            - expected_structural_caret_height(projection.caret_height_pt, 1, index_box.height,))
+        .abs()
+            < 1e-9
+    );
+    let box_top = projection.baseline_y_pt + index_box.y;
+    assert!(caret.y0_pt >= box_top - 1e-9 && caret.y1_pt <= box_top + index_box.height + 1e-9);
+}
+
+/// 结构深度减半保留 1pt 最小可见高度，更深的结构不再无限缩小。
+#[test]
+fn structure_caret_depth_keeps_a_minimum_visible_height() {
+    let (snapshot, equation_id) = equation_layout("x^{2^{3^{4^{5^{6}}}}}");
+    let target = MathEditTarget::Block {
+        block_id: equation_id.clone(),
+        align: false,
+    };
+    let host = MathPositionHost::Equation {
+        owner_id: equation_id.clone(),
+    };
+    let steps = vec![
+        MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 1,
+        };
+        5
+    ];
+    let caret = slot_caret(&snapshot, &target, &host, steps);
+    assert!(
+        (caret_height(caret) - 1.0).abs() < 1e-9,
+        "caret height should stop at the 1pt minimum"
+    );
+}
+
+/// 根层 `\text` 与透明包装内的文本岛保持正文行高；脚本槽文本岛按结构深度减半。
+#[test]
+fn math_text_caret_depth_follows_the_enclosing_math_structure() {
+    let (snapshot, equation_id) = equation_layout(r"\left(\text{ab}\right)");
+    let target = MathEditTarget::Block {
+        block_id: equation_id.clone(),
+        align: false,
+    };
+    let projection = equation_projection(&snapshot, &equation_id);
+    let text_path = crate::MathTextFlowPath::from_layout_path(
+        vec![
+            caret_doc::MathPathStep::Content(0),
+            caret_doc::MathPathStep::Operand(0),
+            caret_doc::MathPathStep::Content(0),
+        ],
+        None,
+    );
+    let (caret, _) = snapshot
+        .math_text_caret(
+            &target,
+            &MathTextPosition::new(text_path, 0, MathPositionAffinity::Downstream),
+            VisualAffinity::Downstream,
+        )
+        .unwrap_or_else(|| panic!("root text island should have caret geometry"));
+    assert!(
+        (caret_height(caret) - projection.caret_height_pt).abs() < 1e-9,
+        "text island in a transparent wrapper keeps the body caret height"
+    );
+
+    let (snapshot, equation_id) = equation_layout(r"x^{\text{ab}}");
+    let target = MathEditTarget::Block {
+        block_id: equation_id.clone(),
+        align: false,
+    };
+    let projection = equation_projection(&snapshot, &equation_id);
+    let text_path = crate::MathTextFlowPath::from_layout_path(
+        vec![
+            caret_doc::MathPathStep::Content(0),
+            caret_doc::MathPathStep::Operand(1),
+            caret_doc::MathPathStep::Content(0),
+        ],
+        None,
+    );
+    let (caret, _) = snapshot
+        .math_text_caret(
+            &target,
+            &MathTextPosition::new(text_path, 0, MathPositionAffinity::Downstream),
+            VisualAffinity::Downstream,
+        )
+        .unwrap_or_else(|| panic!("script text island should have caret geometry"));
+    let text_box_path = [
+        caret_doc::MathPathStep::Content(0),
+        caret_doc::MathPathStep::Operand(1),
+        caret_doc::MathPathStep::Content(0),
+    ];
+    let text_box = math_text_box(&snapshot.math_blocks[&equation_id], &text_box_path);
+    assert_eq!(text_box.structural_depth, 1);
+    assert!(
+        (caret_height(caret)
+            - expected_structural_caret_height(projection.caret_height_pt, 1, text_box.height,))
+        .abs()
+            < 1e-6,
+        "script text island caret follows the slot rule"
+    );
+}
+
+/// 格式化环境（粗体/斜体/字体）不增加结构深度，根层环境内光标保持正文行高。
+#[test]
+fn formatting_environment_caret_keeps_the_host_height() {
+    let equation_id = NodeId::generate();
+    let environment_id = NodeId::generate();
+    let root_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body.push(Block::Equation(Equation {
+        id: equation_id.clone(),
+        math_tree: caret_doc::MathTree {
+            schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+            root: caret_doc::MathFlow {
+                id: root_id,
+                content: vec![caret_doc::MathContent::Environment(
+                    caret_doc::InlineEnvironment {
+                        id: environment_id,
+                        kind: caret_doc::InlineEnvironmentKind::Bold,
+                        definition_id: None,
+                        props: BTreeMap::new(),
+                        children: vec![caret_doc::MathContent::Math(caret_doc::MathNode {
+                            id: NodeId::generate(),
+                            kind: caret_doc::MathNodeKind::Symbol,
+                            text: Some("x".to_owned()),
+                            attributes: BTreeMap::new(),
+                            children: Vec::new(),
+                            extra: BTreeMap::new(),
+                        })],
+                        extra: BTreeMap::new(),
+                    },
+                )],
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    }));
+    let snapshot = layout_document(&document);
+    let target = MathEditTarget::Block {
+        block_id: equation_id.clone(),
+        align: false,
+    };
+    let host = MathPositionHost::Equation {
+        owner_id: equation_id.clone(),
+    };
+    let projection = equation_projection(&snapshot, &equation_id);
+    let environment_caret = slot_caret(
+        &snapshot,
+        &target,
+        &host,
+        vec![MathSequenceStep::EnvironmentChildren { content_index: 0 }],
+    );
+    assert!(
+        (caret_height(environment_caret) - projection.caret_height_pt).abs() < 1e-9,
+        "formatting environment should not shrink the caret"
+    );
+}
+
+/// 结构槽内的选区矩形与同槽 caret 使用相同的高度规则与槽位盒。
+#[test]
+fn math_slot_selection_band_uses_the_slot_caret_height() {
+    let (snapshot, equation_id) = equation_layout("x^{23}");
+    let target = MathEditTarget::Block {
+        block_id: equation_id.clone(),
+        align: false,
+    };
+    let host = MathPositionHost::Equation {
+        owner_id: equation_id.clone(),
+    };
+    let projection = equation_projection(&snapshot, &equation_id);
+    let layout = &snapshot.math_blocks[&equation_id];
+    let steps = vec![MathSequenceStep::Operand {
+        content_index: 0,
+        operand_index: 1,
+    }];
+    let anchor = MathTreePosition {
+        host,
+        path: MathSequencePath::new(steps),
+        offset: 0,
+        affinity: MathPositionAffinity::Downstream,
+    };
+    let focus = MathTreePosition {
+        offset: 1,
+        ..anchor.clone()
+    };
+    let rectangles = snapshot
+        .math_tree_selection_geometry(&target, &anchor, &focus)
+        .unwrap_or_else(|| panic!("superscript selection should have geometry"));
+    assert_eq!(rectangles.len(), 1);
+    let digit_box = math_box(
+        layout,
+        &[
+            caret_doc::MathPathStep::Content(0),
+            caret_doc::MathPathStep::Operand(1),
+            caret_doc::MathPathStep::Content(0),
+        ],
+    );
+    assert!(
+        (rectangles[0].y1_pt
+            - rectangles[0].y0_pt
+            - expected_structural_caret_height(projection.caret_height_pt, 1, digit_box.height,))
+        .abs()
+            < 1e-6,
+        "superscript selection band follows the slot rule"
+    );
+    assert!(
+        caret_height(slot_caret(
+            &snapshot,
+            &target,
+            &anchor.host,
+            anchor.path.steps().to_vec(),
+        )) < projection.caret_height_pt * 0.99,
+        "superscript caret is shorter than the body caret"
+    );
+}
+
+/// Align 单元格内的结构槽沿用同一深度规则。
+#[test]
+fn align_cell_slot_caret_halves_per_structural_depth() {
+    let caret_math::ParsedMath::Align(align) = caret_math::parse(
+        r"\begin{aligned}x^{2}\\y\end{aligned}",
+        caret_math::MathInputKind::Align,
+    )
+    .unwrap_or_else(|error| panic!("valid Align source should parse: {error}")) else {
+        panic!("Align source should produce an Align model")
+    };
+    let align_id = align.id.clone();
+    let row = align
+        .rows
+        .first()
+        .unwrap_or_else(|| panic!("Align should have a first row"));
+    let row_id = row.id.clone();
+    let cell = row
+        .cells
+        .first()
+        .unwrap_or_else(|| panic!("Align row should have a first cell"));
+    let cell_id = cell.root.id.clone();
+    let mut document = Document::blank();
+    document.body.push(Block::Align(align));
+    let snapshot = layout_document(&document);
+    let target = MathEditTarget::Block {
+        block_id: align_id.clone(),
+        align: true,
+    };
+    let host = MathPositionHost::AlignCell { row_id, cell_id };
+    let projection = equation_projection(&snapshot, &align_id);
+    let script_path = [
+        caret_doc::MathPathStep::Content(0),
+        caret_doc::MathPathStep::Operand(1),
+    ];
+    let script_box = math_box(&snapshot.math_blocks[&align_id], &script_path);
+    let superscript = slot_caret(
+        &snapshot,
+        &target,
+        &host,
+        vec![MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 1,
+        }],
+    );
+    assert!(
+        (caret_height(superscript)
+            - expected_structural_caret_height(projection.caret_height_pt, 1, script_box.height,))
+        .abs()
+            < 1e-9,
+        "Align cell script caret follows the slot rule"
+    );
+}
+
+/// 大运算符上下限是视觉结构槽：光标按结构深度减半并收进各自槽位盒。
+#[test]
+fn big_operator_limits_use_structural_slot_caret() {
+    let (snapshot, equation_id) = equation_layout(r"\sum_{i}^{n}");
+    let target = MathEditTarget::Block {
+        block_id: equation_id.clone(),
+        align: false,
+    };
+    let host = MathPositionHost::Equation {
+        owner_id: equation_id.clone(),
+    };
+    let projection = equation_projection(&snapshot, &equation_id);
+    let layout = &snapshot.math_blocks[&equation_id];
+    for operand_index in 0..2 {
+        let path = [
+            caret_doc::MathPathStep::Content(0),
+            caret_doc::MathPathStep::Operand(operand_index),
+        ];
+        let slot_box = math_box(layout, &path);
+        assert_eq!(
+            slot_box.structural_depth, 1,
+            "sum limit slot should carry structural depth"
+        );
+        let caret = slot_caret(
+            &snapshot,
+            &target,
+            &host,
+            vec![MathSequenceStep::Operand {
+                content_index: 0,
+                operand_index,
+            }],
+        );
+        assert!(
+            (caret_height(caret)
+                - expected_structural_caret_height(projection.caret_height_pt, 1, slot_box.height,))
+            .abs()
+                < 1e-9,
+            "sum limit caret should use the slot rule"
+        );
+        assert!(caret_height(caret) < projection.caret_height_pt * 0.99);
+    }
+}
+
+/// 空上下限与空根指数占位槽也按结构深度记录，空槽光标保留最小可见高度。
+#[test]
+fn empty_optional_slots_keep_structural_depth() {
+    let (snapshot, equation_id) = equation_layout(r"\sum_{}^{}");
+    let target = MathEditTarget::Block {
+        block_id: equation_id.clone(),
+        align: false,
+    };
+    let host = MathPositionHost::Equation {
+        owner_id: equation_id.clone(),
+    };
+    let layout = &snapshot.math_blocks[&equation_id];
+    for operand_index in 0..2 {
+        let path = [
+            caret_doc::MathPathStep::Content(0),
+            caret_doc::MathPathStep::Operand(operand_index),
+        ];
+        let slot_box = math_box(layout, &path);
+        assert_eq!(
+            slot_box.structural_depth, 1,
+            "empty sum limit slot should keep structural depth"
+        );
+        let caret = slot_caret(
+            &snapshot,
+            &target,
+            &host,
+            vec![MathSequenceStep::Operand {
+                content_index: 0,
+                operand_index,
+            }],
+        );
+        assert!(
+            caret_height(caret) >= 1.0,
+            "empty sum limit caret keeps a visible height"
+        );
+    }
+
+    let (snapshot, equation_id) = equation_layout(r"\sqrt{x}");
+    let target = MathEditTarget::Block {
+        block_id: equation_id.clone(),
+        align: false,
+    };
+    let host = MathPositionHost::Equation {
+        owner_id: equation_id.clone(),
+    };
+    let index_path = [
+        caret_doc::MathPathStep::Content(0),
+        caret_doc::MathPathStep::Operand(0),
+    ];
+    let index_box = math_box(&snapshot.math_blocks[&equation_id], &index_path);
+    assert_eq!(
+        index_box.structural_depth, 1,
+        "empty root index slot should keep structural depth"
+    );
+    let index_caret = slot_caret(
+        &snapshot,
+        &target,
+        &host,
+        vec![MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 0,
+        }],
+    );
+    assert!(
+        (caret_height(index_caret) - 1.0).abs() < 1e-9,
+        "empty root index caret keeps the minimum visible height"
+    );
+}

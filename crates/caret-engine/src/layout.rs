@@ -119,6 +119,8 @@ pub(crate) struct MathTextSidecar {
     source_spans: Vec<MathTextSourceSpan>,
     empty_caret_metrics: Option<(f32, f32)>,
     fallback_font_size_centipoints: u16,
+    /// 文本岛所在的视觉结构槽深度；由公式排版在塑形请求中提供。
+    structural_depth: u32,
 }
 
 #[derive(Debug, Clone)]

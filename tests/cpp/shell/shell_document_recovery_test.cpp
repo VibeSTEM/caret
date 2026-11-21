@@ -4,14 +4,24 @@
 #ifdef CARET_ENABLE_APP
 #include "caret_ffi.h"
 #include "layout_view_model.hpp"
+#include "shell_test_support.hpp"
 #include <QByteArray>
+#include <QDir>
 #include <QFile>
+#include <QMetaObject>
+#include <QQmlApplicationEngine>
+#include <QQuickWindow>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QUrl>
+#include <QVariantList>
+#include <QVariantMap>
 #include <QtCore/qglobal.h>
 #include <QtCore/qiodevice.h>
 #include <QtCore/qlist.h>
+#include <QtCore/qnamespace.h>
+#include <QtCore/qobject.h>
 #include <QtCore/qstring.h>
 #include <QtCore/qvariant.h>
 #include <QtTest/qtestcase.h>
@@ -249,5 +259,121 @@ void ShellDocumentRecoveryTest::missingRecoveryEntryFailsWithoutReplacingTheOpen
                 .value(QStringLiteral("text"))
                 .toString()
                 .isEmpty());
+}
+
+void ShellDocumentRecoveryTest::startupRecoveryEntryIsVisibleAndRestoreReportsEditedThenSaved() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString recovery_root = directory.filePath(QStringLiteral("app-local-data"));
+    QVERIFY(QDir().mkpath(recovery_root));
+    const QString document_path = directory.filePath(QStringLiteral("crash-recovered.cdoc"));
+
+    // 先制造一次手动保存冲突，让恢复区留下崩溃前会话的本地快照。
+    {
+        AppFixture source;
+        QString error;
+        if (!source.directory.isValid() || !source.initialize(recovery_root, &error)) {
+            QFAIL(qPrintable(error.isEmpty() ? QStringLiteral("temporary directory is unavailable")
+                                             : error));
+            return;
+        }
+        QVERIFY(waitForStartupScan(source));
+        QVERIFY(source.saveTo(document_path));
+        QVERIFY(source.insert(QStringLiteral("恢复的未保存编辑")));
+        QFile external(document_path);
+        QVERIFY(external.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        QCOMPARE(external.write("external version"), qint64(16));
+        external.close();
+        QSignalSpy operations(source.view_model,
+                              &caret::LayoutViewModel::documentFileOperationFinished);
+        QVERIFY(operations.isValid());
+        QVERIFY(source.view_model->saveDocument(QString{}).value(QStringLiteral("valid")).toBool());
+        const QList<QVariant> conflict = wait_for_operation(operations);
+        QVERIFY(!conflict.isEmpty());
+        QVERIFY(!conflict.at(0).toBool());
+        QVERIFY(conflict.at(2).toBool());
+        QCOMPARE(QDir(recovery_root + QStringLiteral("/recovery"))
+                     .entryList({QStringLiteral("*.json")}, QDir::Files)
+                     .size(),
+                 1);
+    }
+    // 模拟应用重启：替换文档运行时以释放旧会话对恢复项的租约。
+    QVERIFY(installBlankDocumentRuntime());
+
+    AppFixture fixture;
+    QString error;
+    if (!fixture.directory.isValid() || !fixture.initialize(recovery_root, &error)) {
+        QFAIL(qPrintable(error.isEmpty() ? QStringLiteral("temporary directory is unavailable")
+                                         : error));
+        return;
+    }
+    QVERIFY(waitForStartupScan(fixture));
+    auto* dialog =
+        qobject_cast<QQuickWindow*>(fixture.child(QStringLiteral("documentRecoveryDialog")));
+    QVERIFY(dialog != nullptr);
+    QTRY_VERIFY_WITH_TIMEOUT(dialog->isVisible(), 10000);
+    QCOMPARE(fixture.view_model->recoveryEntries().size(), 1);
+    const QVariantMap model_entry = fixture.view_model->recoveryEntries().first().toMap();
+    QCOMPARE(model_entry.value(QStringLiteral("kind")).toString(),
+             QStringLiteral("local_document"));
+    QCOMPARE(model_entry.value(QStringLiteral("originalPath")).toString(), document_path);
+    const QVariantList dialog_entries = dialog->property("entries").toList();
+    QCOMPARE(dialog_entries.size(), 1);
+    const QVariantMap dialog_entry = dialog_entries.first().toMap();
+    QCOMPARE(dialog_entry.value(QStringLiteral("id")).toString(),
+             model_entry.value(QStringLiteral("id")).toString());
+    QCOMPARE(dialog_entry.value(QStringLiteral("originalPath")).toString(), document_path);
+
+    QObject* restore_button = fixture.child(QStringLiteral("recoveryRestoreButton"));
+    QVERIFY(restore_button != nullptr);
+    QVERIFY(!restore_button->property("enabled").toBool());
+    QVERIFY(dialog->setProperty("selectedId", model_entry.value(QStringLiteral("id"))));
+    QTRY_VERIFY_WITH_TIMEOUT(restore_button->property("enabled").toBool(), 10000);
+    QCOMPARE(
+        dialog->property("selectedEntry").toMap().value(QStringLiteral("originalPath")).toString(),
+        document_path);
+
+    QSignalSpy restore_operations(fixture.view_model,
+                                  &caret::LayoutViewModel::documentFileOperationFinished);
+    QVERIFY(restore_operations.isValid());
+    QVERIFY(QMetaObject::invokeMethod(restore_button, "clicked", Qt::DirectConnection));
+    const QList<QVariant> restored = wait_for_operation(restore_operations);
+    QVERIFY(!restored.isEmpty());
+    QVERIFY2(restored.at(0).toBool(), qPrintable(restored.at(1).toString()));
+    QTRY_VERIFY_WITH_TIMEOUT(!dialog->isVisible(), 10000);
+    QCOMPARE(fixture.view_model->paragraphLayouts().size(), 1);
+    QCOMPARE(fixture.view_model->paragraphLayouts()
+                 .first()
+                 .toMap()
+                 .value(QStringLiteral("text"))
+                 .toString(),
+             QStringLiteral("恢复的未保存编辑"));
+    QCOMPARE(fixture.view_model->documentSaveStatus(), QStringLiteral("edited"));
+    QCOMPARE(fixture.window->property("documentStatusLabel").toString(), QStringLiteral("Edited"));
+    // 恢复到临时会话仍保留恢复 envelope；只有另存成功才删除。
+    QCOMPARE(QDir(recovery_root + QStringLiteral("/recovery"))
+                 .entryList({QStringLiteral("*.json")}, QDir::Files)
+                 .size(),
+             1);
+
+    const QString restored_path = directory.filePath(QStringLiteral("restored-copy.cdoc"));
+    QVERIFY(fixture.saveTo(restored_path));
+    QCOMPARE(fixture.view_model->documentSaveStatus(), QStringLiteral("saved"));
+    QCOMPARE(fixture.window->property("documentStatusLabel").toString(), QStringLiteral("Saved"));
+    QFile restored_file(restored_path);
+    QVERIFY(restored_file.open(QIODevice::ReadOnly));
+    QVERIFY(restored_file.readAll().contains("恢复的未保存编辑"));
+    QCOMPARE(QDir(recovery_root + QStringLiteral("/recovery"))
+                 .entryList({QStringLiteral("*.json")}, QDir::Files)
+                 .size(),
+             0);
+    QSignalSpy refresh_operations(fixture.view_model,
+                                  &caret::LayoutViewModel::documentFileOperationFinished);
+    QVERIFY(refresh_operations.isValid());
+    QVERIFY(fixture.view_model->refreshRecoveryEntries().value(QStringLiteral("pending")).toBool());
+    const QList<QVariant> refreshed = wait_for_operation(refresh_operations);
+    QVERIFY(!refreshed.isEmpty());
+    QVERIFY2(refreshed.at(0).toBool(), qPrintable(refreshed.at(1).toString()));
+    QVERIFY(fixture.view_model->recoveryEntries().isEmpty());
 }
 #endif

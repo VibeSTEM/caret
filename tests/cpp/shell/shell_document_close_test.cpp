@@ -27,6 +27,7 @@
 #include <QVariant>
 #include <QtCore/Qt>
 #include <QtCore/qdebug.h>
+#include <QtCore/qlist.h>
 #include <QtCore/qobject.h>
 #include <QtCore/qstringlist.h>
 #include <QtCore/qvariant.h>
@@ -574,4 +575,117 @@ void ShellDocumentCloseTest::unrelatedFileFailuresDoNotCorruptCloseSaveState() {
     }
 }
 
+// 关闭时的 AutoSave flush 在写入期间又有新编辑：旧结果不得直接关窗，必须重新确认。
+void ShellDocumentCloseTest::editingWhileAutoSaveFlushIsInFlightPreventsAutomaticClose() {
+    AppFixture fixture;
+    QString error;
+    if (!fixture.directory.isValid() || !fixture.initialize(fixture.directory.path(), &error)) {
+        QFAIL(qPrintable(error.isEmpty() ? QStringLiteral("temporary directory is unavailable")
+                                         : error));
+        return;
+    }
+    QVERIFY(waitForStartupScan(fixture));
+    const QString path = fixture.directory.filePath(QStringLiteral("flush-with-newer-edit.cdoc"));
+    QVERIFY(fixture.saveTo(path));
+    auto* preferences = fixture.engine->singletonInstance<caret::PreferencesViewModel*>(
+        "Caret.ViewModels", "PreferencesViewModel");
+    QVERIFY(preferences != nullptr);
+    QVERIFY(preferences->setAutoSaveEnabled(true));
+    fixture.view_model->setAutoSaveEnabled(true);
+    QVERIFY(fixture.insert(QStringLiteral("flush revision")));
+
+    bool inserted_newer_revision = false;
+    QObject edit_observer;
+    QObject::connect(fixture.view_model, &caret::LayoutViewModel::documentSaveFinished,
+                     &edit_observer, [&fixture, &inserted_newer_revision](bool succeeded) {
+                         if (!succeeded || inserted_newer_revision) {
+                             return;
+                         }
+                         inserted_newer_revision =
+                             fixture.insert(QStringLiteral(" newer revision"));
+                     });
+    QSignalSpy operations(fixture.view_model,
+                          &caret::LayoutViewModel::documentFileOperationFinished);
+    QVERIFY(operations.isValid());
+
+    fixture.window->close();
+    QObject* confirmation = fixture.child(QStringLiteral("closeDocumentConfirmation"));
+    QVERIFY(confirmation != nullptr);
+    QTRY_VERIFY_WITH_TIMEOUT(confirmation->property("visible").toBool(), 10000);
+    QVERIFY(inserted_newer_revision);
+    QVERIFY(fixture.window->isVisible());
+    QVERIFY(fixture.view_model->documentEdited());
+    QCOMPARE(fixture.view_model->documentSaveStatus(), QStringLiteral("edited"));
+    QCOMPARE(fixture.window->property("documentStatusLabel").toString(), QStringLiteral("Edited"));
+    const QByteArray flushed_bytes = documentBytes(path);
+    QVERIFY(flushed_bytes.contains("flush revision"));
+    QVERIFY(!flushed_bytes.contains("newer revision"));
+    QVERIFY(fixture.view_model->paragraphLayouts()
+                .first()
+                .toMap()
+                .value(QStringLiteral("text"))
+                .toString()
+                .contains(QStringLiteral("newer revision")));
+
+    QVERIFY(fixture.click(QStringLiteral("closeSaveButton")));
+    QTRY_VERIFY_WITH_TIMEOUT(!fixture.window->isVisible(), 10000);
+    QVERIFY(!fixture.view_model->documentEdited());
+    QVERIFY(documentBytes(path).contains("newer revision"));
+}
+
+// 冲突恢复副本需要跟随既有三选项语义：Cancel 保留，Don't Save 才清除。
+void ShellDocumentCloseTest::conflictRecoveryCopySurvivesCloseCancelAndIsClearedByDiscard() {
+    AppFixture fixture;
+    QString error;
+    if (!fixture.directory.isValid() || !fixture.initialize(fixture.directory.path(), &error)) {
+        QFAIL(qPrintable(error.isEmpty() ? QStringLiteral("temporary directory is unavailable")
+                                         : error));
+        return;
+    }
+    QVERIFY(waitForStartupScan(fixture));
+    const QString path = fixture.directory.filePath(QStringLiteral("conflict-recovery-close.cdoc"));
+    QVERIFY(fixture.saveTo(path));
+    QVERIFY(fixture.insert(QStringLiteral("local revision")));
+    const QByteArray external_bytes("external revision");
+    {
+        QFile external(path);
+        QVERIFY(external.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        QCOMPARE(external.write(external_bytes), qint64(external_bytes.size()));
+        external.close();
+    }
+    QSignalSpy operations(fixture.view_model,
+                          &caret::LayoutViewModel::documentFileOperationFinished);
+    QVERIFY(operations.isValid());
+    fixture.window->close();
+    QVERIFY(fixture.click(QStringLiteral("closeSaveButton")));
+    QObject* conflict = fixture.child(QStringLiteral("saveConflictDialog"));
+    QVERIFY(conflict != nullptr);
+    QTRY_VERIFY_WITH_TIMEOUT(conflict->property("visible").toBool(), 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(operations.size(), 1, 10000);
+    const QList<QVariant> conflict_result = operations.takeFirst();
+    QVERIFY(!conflict_result.at(0).toBool());
+    QVERIFY(conflict_result.at(2).toBool());
+    QVERIFY(!recoveryFiles(fixture.directory.path()).isEmpty());
+
+    QVERIFY(fixture.click(QStringLiteral("saveConflictCancelButton")));
+    QObject* confirmation = fixture.child(QStringLiteral("closeDocumentConfirmation"));
+    QVERIFY(confirmation != nullptr);
+    QTRY_VERIFY_WITH_TIMEOUT(confirmation->property("visible").toBool(), 10000);
+    QVERIFY(fixture.window->isVisible());
+    QVERIFY(fixture.view_model->documentEdited());
+    QVERIFY(!recoveryFiles(fixture.directory.path()).isEmpty());
+
+    QVERIFY(fixture.click(QStringLiteral("closeCancelButton")));
+    QTRY_VERIFY_WITH_TIMEOUT(!confirmation->property("visible").toBool(), 10000);
+    QVERIFY(fixture.window->isVisible());
+    QVERIFY(fixture.view_model->documentEdited());
+    QVERIFY(!recoveryFiles(fixture.directory.path()).isEmpty());
+
+    fixture.window->close();
+    QTRY_VERIFY_WITH_TIMEOUT(confirmation->property("visible").toBool(), 10000);
+    QVERIFY(fixture.click(QStringLiteral("closeDiscardButton")));
+    QTRY_VERIFY_WITH_TIMEOUT(!fixture.window->isVisible(), 10000);
+    QVERIFY(recoveryFiles(fixture.directory.path()).isEmpty());
+    QCOMPARE(documentBytes(path), external_bytes);
+}
 #endif

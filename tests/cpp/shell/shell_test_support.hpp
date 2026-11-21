@@ -50,4 +50,7 @@ class AppFixture final {
     QQuickWindow* window = nullptr;
     caret::LayoutViewModel* view_model = nullptr;
 };
+
+// 等待窗口启动时的恢复扫描及其文件活动全部结束，避免把扫描结果误当成后续操作。
+bool waitForStartupScan(const AppFixture& fixture);
 #endif

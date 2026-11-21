@@ -13,8 +13,11 @@ pub(super) struct ParagraphTextRange {
     pub(super) end_offset: usize,
 }
 
+/// 结构深度超过该层后 caret 已达 1pt 最小可见高度，继续减半没有视觉收益。
+const STRUCTURE_CARET_MAX_HALVINGS: u32 = 5;
+
 impl MathPageProjection {
-    /// 根据数学节点自身基线生成正文高度的 caret，保持脚本相对正文基线的偏移。
+    /// 生成正文基础行高的 caret，用于公式根层、块边界与命中容差。
     pub(super) fn caret_at_math_baseline(
         &self,
         x_pt: f64,
@@ -26,6 +29,41 @@ impl MathPageProjection {
             x_pt,
             y0_pt: self.caret_line_top_pt + baseline_shift,
             y1_pt: self.caret_line_top_pt + baseline_shift + self.caret_height_pt,
+        }
+    }
+
+    /// 结构槽插入点 caret 高度：每进入一层结构槽减半，并收进槽位布局盒。
+    ///
+    /// 结构槽（上下标、分式分子分母、根式等）只占宿主行高的一部分；用正文行高
+    /// 会在空槽或高公式中伸出槽位与行框。高度按结构深度 `1/2^depth` 缩放，
+    /// 不超过槽位盒可用高度，并保留 1pt 最小可见高度；垂直居中由调用方给出。
+    pub(super) fn structure_caret_height_pt(&self, depth: u32, slot_height_pt: f64) -> f64 {
+        let scale = 0.5_f64.powi(STRUCTURE_CARET_MAX_HALVINGS.min(depth) as i32);
+        let scaling_height = self.caret_height_pt * scale;
+        // 零高度槽（尤其是空可选占位槽）仍按深度缩放，再由 1pt 下限保证可见；
+        // 只有非有限/负高度才退回正文行高作为无效几何的兜底。
+        let slot_height_pt = if slot_height_pt.is_finite() && slot_height_pt >= 0.0 {
+            slot_height_pt
+        } else {
+            self.caret_height_pt
+        };
+        scaling_height.min(slot_height_pt).max(1.0)
+    }
+
+    /// 在给定垂直中心生成结构槽 caret。
+    pub(super) fn structure_caret_geometry(
+        &self,
+        x_pt: f64,
+        center_y_pt: f64,
+        depth: u32,
+        slot_height_pt: f64,
+    ) -> PageCaretGeometry {
+        let height_pt = self.structure_caret_height_pt(depth, slot_height_pt);
+        PageCaretGeometry {
+            page_index: self.page_index,
+            x_pt,
+            y0_pt: center_y_pt - height_pt / 2.0,
+            y1_pt: center_y_pt + height_pt / 2.0,
         }
     }
 
@@ -329,10 +367,9 @@ impl DocumentLayoutSnapshot {
                 if position.offset > sequence_len {
                     continue;
                 }
-                let caret_font_size = node
-                    .font_size_pt
-                    .filter(|size| size.is_finite() && *size > 0.0)
-                    .unwrap_or(f64::from(self.default_font_size_centipoints) / 100.0);
+                // 结构槽 caret 按排版给出的结构深度缩放并放在槽位布局盒中心；
+                // 根层序列仍用正文基础行高。边界相邻项的字号只用于报告插入点字号。
+                let structural_depth = node.structural_depth;
                 let edge_child_indices = math_sequence_edge_child_indices(
                     position.offset,
                     sequence_len,
@@ -449,7 +486,7 @@ impl DocumentLayoutSnapshot {
                         break;
                     }
                 }
-                let (local_x, caret_baseline, caret_font_size) =
+                let (local_x, caret_baseline, edge_font_size) =
                     edge_geometry.unwrap_or_else(|| {
                         let local_x = if position.offset == 0 {
                             node.x
@@ -470,18 +507,27 @@ impl DocumentLayoutSnapshot {
                                 })
                                 .map_or(node.x + node.width, |child| child.x)
                         };
-                        (local_x, node.baseline, Some(caret_font_size))
+                        (local_x, node.baseline, node.font_size_pt)
                     });
-                let raw_caret = projection.caret_at_math_baseline(
-                    projection.object_x_pt + local_x,
-                    projection.baseline_y_pt + caret_baseline,
-                );
+                let raw_caret = if structural_depth == 0 {
+                    projection.caret_at_math_baseline(
+                        projection.object_x_pt + local_x,
+                        projection.baseline_y_pt + caret_baseline,
+                    )
+                } else {
+                    projection.structure_caret_geometry(
+                        projection.object_x_pt + local_x,
+                        projection.baseline_y_pt + node.y + node.height / 2.0,
+                        structural_depth,
+                        node.height,
+                    )
+                };
                 let Some(caret) =
                     projection.clip_caret_for_row(raw_caret, math_row_id_for_host(&position.host))
                 else {
                     continue;
                 };
-                let font_size_centipoints = caret_font_size
+                let font_size_centipoints = edge_font_size
                     .and_then(|size| visible_font_size_centipoints(size as f32))
                     .unwrap_or(self.default_font_size_centipoints);
                 return Some((caret, font_size_centipoints));
@@ -538,6 +584,8 @@ impl DocumentLayoutSnapshot {
                 if end > sequence_len {
                     continue;
                 }
+                // 选区矩形与同槽 caret 共用结构深度与槽位盒高度。
+                let structural_depth = node.structural_depth;
                 let row_id = math_row_id_for_host(&anchor.host);
                 let mut rectangles = Vec::with_capacity(end - start);
                 for index in start..end {
@@ -555,7 +603,9 @@ impl DocumentLayoutSnapshot {
                         continue;
                     };
                     if !child.x.is_finite()
+                        || !child.y.is_finite()
                         || !child.width.is_finite()
+                        || !child.height.is_finite()
                         || !child.baseline.is_finite()
                         || child.width <= 0.0
                     {
@@ -563,8 +613,19 @@ impl DocumentLayoutSnapshot {
                     }
                     let x0_pt = projection.object_x_pt + child.x;
                     let x1_pt = x0_pt + child.width;
-                    let caret_band = projection
-                        .caret_at_math_baseline(x0_pt, projection.baseline_y_pt + child.baseline);
+                    let caret_band = if structural_depth == 0 {
+                        projection.caret_at_math_baseline(
+                            x0_pt,
+                            projection.baseline_y_pt + child.baseline,
+                        )
+                    } else {
+                        projection.structure_caret_geometry(
+                            x0_pt,
+                            projection.baseline_y_pt + child.y + child.height / 2.0,
+                            structural_depth,
+                            child.height,
+                        )
+                    };
                     let Some((y0_pt, y1_pt)) =
                         projection.clip_range_for_row(caret_band.y0_pt, caret_band.y1_pt, row_id)
                     else {

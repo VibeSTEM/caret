@@ -1214,6 +1214,7 @@ impl caret_math::layout::MathTextShaper for EngineMathTextShaper<'_> {
                     source_spans,
                     empty_caret_metrics,
                     fallback_font_size_centipoints,
+                    structural_depth: request.structural_depth,
                 },
             )
             .is_some()

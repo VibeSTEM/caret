@@ -17,6 +17,24 @@ pub(crate) struct MathTextItemGeometry<'a> {
     pub(crate) sidecars: &'a HashMap<u64, MathTextSidecar>,
 }
 
+/// 数学文本岛 caret：根层文本岛使用宿主正文行框；结构槽内按嵌套深度缩放，
+/// 并围绕当前文本行的行框中心定位。
+pub(super) fn math_text_island_caret(
+    projection: &MathPageProjection,
+    depth: u32,
+    x_pt: f64,
+    baseline_y_pt: f64,
+    ascent_pt: f32,
+    descent_pt: f32,
+) -> PageCaretGeometry {
+    if depth == 0 {
+        return projection.caret_at_math_baseline(x_pt, baseline_y_pt);
+    }
+    let center_y_pt = baseline_y_pt + f64::from(descent_pt - ascent_pt) / 2.0;
+    let slot_height_pt = f64::from(ascent_pt + descent_pt);
+    projection.structure_caret_geometry(x_pt, center_y_pt, depth, slot_height_pt)
+}
+
 pub(crate) fn math_text_caret_in_items(
     geometry: &MathTextItemGeometry<'_>,
     target: &MathEditTarget,
@@ -43,29 +61,36 @@ pub(crate) fn math_text_caret_in_items(
             continue;
         };
         let island_baseline_y_pt = geometry.object_baseline_y_pt + baseline_y;
-        let (caret_x_pt, text_baseline_y_pt) = if sidecar.layout.text.is_empty() {
-            sidecar.empty_caret_metrics?;
-            (0.0, island_baseline_y_pt)
-        } else {
-            let (bounds, line_index) = sidecar.layout.cursor_geometry_with_line(
-                sidecar.layout.cursor_at(offset, visual_affinity)?,
-                0.0,
-            )?;
-            let first_baseline = sidecar.layout.layout.lines().next()?.metrics().baseline;
-            let line_baseline = sidecar.layout.layout.get(line_index)?.metrics().baseline;
-            (
-                bounds.x0,
-                island_baseline_y_pt + f64::from(line_baseline - first_baseline),
-            )
-        };
+        let (caret_x_pt, text_baseline_y_pt, ascent_pt, descent_pt) =
+            if sidecar.layout.text.is_empty() {
+                let (ascent_pt, descent_pt) = sidecar.empty_caret_metrics?;
+                (0.0, island_baseline_y_pt, ascent_pt, descent_pt)
+            } else {
+                let (bounds, line_index) = sidecar.layout.cursor_geometry_with_line(
+                    sidecar.layout.cursor_at(offset, visual_affinity)?,
+                    0.0,
+                )?;
+                let line = sidecar.layout.layout.get(line_index)?;
+                let first_baseline = sidecar.layout.layout.lines().next()?.metrics().baseline;
+                let island_metrics = sidecar.layout.metrics;
+                (
+                    bounds.x0,
+                    island_baseline_y_pt + f64::from(line.metrics().baseline - first_baseline),
+                    island_metrics.ascent_pt,
+                    island_metrics.descent_pt,
+                )
+            };
         let island_x_pt = geometry.object_x_pt + *x + caret_x_pt;
-        let caret = geometry
-            .projection
-            .caret_at_math_baseline(island_x_pt, text_baseline_y_pt);
-        return Some((
-            caret,
-            sidecar.font_size_centipoints_at(offset, visual_affinity),
-        ));
+        let caret = math_text_island_caret(
+            geometry.projection,
+            sidecar.structural_depth,
+            island_x_pt,
+            text_baseline_y_pt,
+            ascent_pt,
+            descent_pt,
+        );
+        let font_size_centipoints = sidecar.font_size_centipoints_at(offset, visual_affinity);
+        return Some((caret, font_size_centipoints));
     }
     None
 }

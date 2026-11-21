@@ -5,19 +5,122 @@
 #include "caret_ffi.h"
 #include "document_runtime_bridge.hpp"
 #include "layout_view_model.hpp"
+#include "shell_test_support.hpp"
+#include <QDir>
 #include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
+#include <QMetaObject>
+#include <QQmlApplicationEngine>
+#include <QQuickWindow>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QUrl>
 #include <QtCore/qcontainerfwd.h>
 #include <QtCore/qglobal.h>
 #include <QtCore/qiodevice.h>
 #include <QtCore/qlist.h>
+#include <QtCore/qnamespace.h>
 #include <QtCore/qstring.h>
 #include <QtCore/qstringlist.h>
+#include <QtCore/qtestsupport_core.h>
 #include <QtCore/qvariant.h>
+#include <QtTest/qtest.h>
 #include <QtTest/qtestcase.h>
 #include <cstdint>
+
+#ifdef CARET_ENABLE_APP
+namespace {
+
+QList<QVariant> waitForOperation(QSignalSpy& spy) {
+    if (spy.isEmpty() && !spy.wait(10000)) {
+        return {};
+    }
+    return spy.takeFirst();
+}
+
+bool writeFile(const QString& path, const QByteArray& bytes) {
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        return false;
+    }
+    return file.write(bytes) == qint64(bytes.size()) && file.flush();
+}
+
+QByteArray readFile(const QString& path) {
+    QFile file(path);
+    return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray{};
+}
+
+QVariant objectProperty(const QObject* object, const char* name) {
+    return object == nullptr ? QVariant{} : object->property(name);
+}
+
+bool setObjectProperty(QObject* object, const char* name, const QVariant& value) {
+    return object != nullptr && object->setProperty(name, value);
+}
+
+bool invokeObjectMethod(QObject* object, const char* method) {
+    return object != nullptr && QMetaObject::invokeMethod(object, method, Qt::DirectConnection);
+}
+
+bool initializeWindow(AppFixture& fixture, QString* error) {
+    if (!fixture.directory.isValid()) {
+        *error = QStringLiteral("temporary directory is unavailable");
+        return false;
+    }
+    return fixture.initialize(fixture.directory.path(), error);
+}
+
+// 让窗口进入一次由标题栏 Save 触发、且外部版本已被改写的保存冲突。
+bool beginManualSaveConflict(AppFixture& fixture, const QString& path, const QString& edit,
+                             const QByteArray& external_bytes, QSignalSpy& operations) {
+    if (!fixture.saveTo(path) || !fixture.insert(edit) || !writeFile(path, external_bytes)) {
+        return false;
+    }
+    // saveTo 自身的完成结果不属于本次冲突，先丢弃再触发用户保存。
+    operations.clear();
+    if (!fixture.click(QStringLiteral("saveButton"))) {
+        return false;
+    }
+    QObject* conflict = fixture.child(QStringLiteral("saveConflictDialog"));
+    if (conflict == nullptr) {
+        return false;
+    }
+    for (int elapsed = 0; elapsed < 10000; elapsed += 10) {
+        if (conflict->property("visible").toBool()) {
+            return true;
+        }
+        QTest::qWait(10);
+    }
+    return false;
+}
+
+QJsonObject recoveryEntryWithKind(const QString& recovery_root, const char* kind) {
+    const QStringList files = QDir(recovery_root + QStringLiteral("/recovery"))
+                                  .entryList({QStringLiteral("*.json")}, QDir::Files, QDir::Name);
+    for (const QString& file_name : files) {
+        QFile file(recovery_root + QStringLiteral("/recovery/") + file_name);
+        if (!file.open(QIODevice::ReadOnly)) {
+            continue;
+        }
+        QJsonParseError parse_error;
+        const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &parse_error);
+        if (parse_error.error != QJsonParseError::NoError || !document.isObject()) {
+            continue;
+        }
+        const QJsonObject entry = document.object();
+        if (entry.value(QStringLiteral("kind")).toString() == QString::fromLatin1(kind)) {
+            return entry;
+        }
+    }
+    return {};
+}
+
+} // namespace
+#endif
 
 void ShellDocumentFileTest::documentFileFlowPreservesSaveStateAndReopens() {
     QTemporaryDir directory;
@@ -384,5 +487,207 @@ void ShellDocumentFileTest::documentHistoryUndoRedoTracksRustSession() {
              QStringLiteral("history"));
     QVERIFY(view_model.canUndo());
     QVERIFY(!view_model.canRedo());
+}
+
+void ShellDocumentFileTest::manualSaveConflictCanSaveACopyWithoutReplacingTheExternalFile() {
+    AppFixture fixture;
+    QString error;
+    if (!initializeWindow(fixture, &error)) {
+        QFAIL(qPrintable(error));
+        return;
+    }
+    QVERIFY(waitForStartupScan(fixture));
+    const QString path = fixture.directory.filePath(QStringLiteral("conflict-source.cdoc"));
+    const QString copy_path = fixture.directory.filePath(QStringLiteral("conflict-copy.cdoc"));
+    const QByteArray external_bytes("external version");
+    QSignalSpy operations(fixture.view_model,
+                          &caret::LayoutViewModel::documentFileOperationFinished);
+    QVERIFY(operations.isValid());
+    if (!beginManualSaveConflict(fixture, path, QStringLiteral("local revision"), external_bytes,
+                                 operations)) {
+        QFAIL("manual save conflict did not reach the conflict dialog");
+        return;
+    }
+    const QList<QVariant> conflict = waitForOperation(operations);
+    QVERIFY(!conflict.isEmpty());
+    QVERIFY(!conflict.at(0).toBool());
+    QVERIFY(conflict.at(2).toBool());
+    QObject* conflict_dialog = fixture.child(QStringLiteral("saveConflictDialog"));
+    QVERIFY(conflict_dialog != nullptr);
+    QVERIFY(objectProperty(conflict_dialog, "visible").toBool());
+    QVERIFY(objectProperty(conflict_dialog, "replaceAllowed").toBool());
+    QObject* conflict_message = fixture.child(QStringLiteral("saveConflictMessage"));
+    QVERIFY(conflict_message != nullptr);
+    QVERIFY(objectProperty(conflict_message, "text").toString().contains("conflict-source.cdoc"));
+
+    QVERIFY(fixture.click(QStringLiteral("saveConflictCopyButton")));
+    QTRY_VERIFY_WITH_TIMEOUT(!objectProperty(conflict_dialog, "visible").toBool(), 10000);
+    QObject* save_dialog = fixture.child(QStringLiteral("saveDocumentDialog"));
+    QVERIFY(save_dialog != nullptr);
+    QTRY_VERIFY_WITH_TIMEOUT(objectProperty(save_dialog, "visible").toBool(), 10000);
+    QVERIFY(setObjectProperty(save_dialog, "selectedFile", QUrl::fromLocalFile(copy_path)));
+    QVERIFY(invokeObjectMethod(save_dialog, "accepted"));
+    const QList<QVariant> copied = waitForOperation(operations);
+    QVERIFY(!copied.isEmpty());
+    QVERIFY2(copied.at(0).toBool(), qPrintable(copied.at(1).toString()));
+    QCOMPARE(fixture.view_model->documentPath(), copy_path);
+    QCOMPARE(fixture.view_model->documentSaveStatus(), QStringLiteral("saved"));
+    QTRY_COMPARE_WITH_TIMEOUT(fixture.window->property("documentStatusLabel").toString(),
+                              QStringLiteral("Saved"), 10000);
+    QCOMPARE(readFile(path), external_bytes);
+    QVERIFY(readFile(copy_path).contains("local revision"));
+    QVERIFY(fixture.window->isVisible());
+}
+
+void ShellDocumentFileTest::manualSaveConflictReplaceBacksUpExternalBytesBeforeWriting() {
+    AppFixture fixture;
+    QString error;
+    if (!initializeWindow(fixture, &error)) {
+        QFAIL(qPrintable(error));
+        return;
+    }
+    QVERIFY(waitForStartupScan(fixture));
+    const QString path = fixture.directory.filePath(QStringLiteral("conflict-replace.cdoc"));
+    const QByteArray external_bytes("external bytes before replace");
+    QSignalSpy operations(fixture.view_model,
+                          &caret::LayoutViewModel::documentFileOperationFinished);
+    QVERIFY(operations.isValid());
+    if (!beginManualSaveConflict(fixture, path, QStringLiteral("local revision"), external_bytes,
+                                 operations)) {
+        QFAIL("manual save conflict did not reach the conflict dialog");
+        return;
+    }
+    const QList<QVariant> conflict = waitForOperation(operations);
+    QVERIFY(!conflict.isEmpty());
+    QVERIFY(conflict.at(2).toBool());
+    QObject* conflict_dialog = fixture.child(QStringLiteral("saveConflictDialog"));
+    QVERIFY(conflict_dialog != nullptr);
+    QVERIFY(objectProperty(conflict_dialog, "replaceAllowed").toBool());
+    QVERIFY(fixture.click(QStringLiteral("saveConflictReplaceButton")));
+    QTRY_VERIFY_WITH_TIMEOUT(!objectProperty(conflict_dialog, "visible").toBool(), 10000);
+    const QList<QVariant> replaced = waitForOperation(operations);
+    QVERIFY(!replaced.isEmpty());
+    QVERIFY2(replaced.at(0).toBool(), qPrintable(replaced.at(1).toString()));
+    QCOMPARE(fixture.view_model->documentPath(), path);
+    QCOMPARE(fixture.view_model->documentSaveStatus(), QStringLiteral("saved"));
+    QCOMPARE(fixture.window->property("documentStatusLabel").toString(), QStringLiteral("Saved"));
+
+    auto* active_runtime = caret::document_runtime();
+    QVERIFY(active_runtime != nullptr);
+    const auto expected_snapshot = caret::ffi::document_save_snapshot(*active_runtime);
+    QVERIFY(expected_snapshot.error.empty());
+    QByteArray expected_contents;
+    expected_contents.reserve(static_cast<qsizetype>(expected_snapshot.bytes.size()));
+    for (const std::uint8_t byte : expected_snapshot.bytes) {
+        expected_contents.append(static_cast<char>(byte));
+    }
+    QCOMPARE(readFile(path), expected_contents);
+
+    // 替换前必须先把磁盘上的外部原始字节原子写入恢复区。
+    const QJsonObject external_entry =
+        recoveryEntryWithKind(fixture.directory.path(), "external_version");
+    QVERIFY(!external_entry.isEmpty());
+    QCOMPARE(QByteArray::fromBase64(
+                 external_entry.value(QStringLiteral("payload_base64")).toString().toLatin1()),
+             external_bytes);
+    QVERIFY(recoveryEntryWithKind(fixture.directory.path(), "local_document").isEmpty());
+    QVERIFY(fixture.window->isVisible());
+}
+
+void ShellDocumentFileTest::manualSaveConflictCancelKeepsExternalFileAndLocalEdits() {
+    AppFixture fixture;
+    QString error;
+    if (!initializeWindow(fixture, &error)) {
+        QFAIL(qPrintable(error));
+        return;
+    }
+    QVERIFY(waitForStartupScan(fixture));
+    const QString path = fixture.directory.filePath(QStringLiteral("conflict-cancel.cdoc"));
+    const QByteArray external_bytes("external version to keep");
+    QSignalSpy operations(fixture.view_model,
+                          &caret::LayoutViewModel::documentFileOperationFinished);
+    QVERIFY(operations.isValid());
+    if (!beginManualSaveConflict(fixture, path, QStringLiteral("local revision"), external_bytes,
+                                 operations)) {
+        QFAIL("manual save conflict did not reach the conflict dialog");
+        return;
+    }
+    const QList<QVariant> conflict = waitForOperation(operations);
+    QVERIFY(!conflict.isEmpty());
+    QVERIFY(conflict.at(2).toBool());
+    QObject* conflict_dialog = fixture.child(QStringLiteral("saveConflictDialog"));
+    QVERIFY(conflict_dialog != nullptr);
+    QVERIFY(fixture.click(QStringLiteral("saveConflictCancelButton")));
+    QTRY_VERIFY_WITH_TIMEOUT(!objectProperty(conflict_dialog, "visible").toBool(), 10000);
+    QVERIFY(fixture.window->isVisible());
+    QVERIFY(fixture.view_model->documentEdited());
+    QCOMPARE(fixture.view_model->documentSaveStatus(), QStringLiteral("edited"));
+    QCOMPARE(fixture.window->property("documentStatusLabel").toString(), QStringLiteral("Edited"));
+    QCOMPARE(fixture.view_model->documentPath(), path);
+    QCOMPARE(readFile(path), external_bytes);
+    QCOMPARE(fixture.view_model->paragraphLayouts()
+                 .first()
+                 .toMap()
+                 .value(QStringLiteral("text"))
+                 .toString(),
+             QStringLiteral("local revision"));
+}
+
+void ShellDocumentFileTest::manualSaveConflictWithoutRecoveryBackupForbidsReplace() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString blocked_root = directory.filePath(QStringLiteral("recovery-blocker"));
+    QVERIFY(writeFile(blocked_root, QByteArrayLiteral("file")));
+    AppFixture fixture;
+    QString error;
+    if (!fixture.directory.isValid() || !fixture.initialize(blocked_root, &error)) {
+        QFAIL(qPrintable(error.isEmpty() ? QStringLiteral("temporary directory is unavailable")
+                                         : error));
+        return;
+    }
+    QVERIFY(waitForStartupScan(fixture));
+    const QString path = directory.filePath(QStringLiteral("unbacked-conflict.cdoc"));
+    const QByteArray external_bytes("external version that cannot be backed up");
+    QSignalSpy operations(fixture.view_model,
+                          &caret::LayoutViewModel::documentFileOperationFinished);
+    QVERIFY(operations.isValid());
+    if (!beginManualSaveConflict(fixture, path, QStringLiteral("local revision"), external_bytes,
+                                 operations)) {
+        QFAIL("manual save conflict did not reach the conflict dialog");
+        return;
+    }
+    const QList<QVariant> conflict = waitForOperation(operations);
+    QVERIFY(!conflict.isEmpty());
+    QVERIFY(!conflict.at(0).toBool());
+    QVERIFY(conflict.at(2).toBool());
+    QVERIFY(conflict.at(3).toBool());
+    QObject* conflict_dialog = fixture.child(QStringLiteral("saveConflictDialog"));
+    QVERIFY(conflict_dialog != nullptr);
+    QVERIFY(objectProperty(conflict_dialog, "visible").toBool());
+    QVERIFY(!objectProperty(conflict_dialog, "replaceAllowed").toBool());
+    QVERIFY(objectProperty(conflict_dialog, "recoveryWriteFailed").toBool());
+    QObject* replace_button = fixture.child(QStringLiteral("saveConflictReplaceButton"));
+    QVERIFY(replace_button != nullptr);
+    QVERIFY(!objectProperty(replace_button, "visible").toBool());
+    QObject* conflict_message = fixture.child(QStringLiteral("saveConflictMessage"));
+    QVERIFY(conflict_message != nullptr);
+    const QString message = objectProperty(conflict_message, "text").toString();
+    QVERIFY(message.contains(QStringLiteral("The recovery copy could not be written:")));
+    QVERIFY(!message.contains(QStringLiteral("recovery.")));
+    QCOMPARE(readFile(path), external_bytes);
+    QVERIFY(fixture.window->isVisible());
+    QVERIFY(fixture.view_model->documentEdited());
+    QCOMPARE(fixture.view_model->documentSaveStatus(), QStringLiteral("edited"));
+
+    QVERIFY(fixture.click(QStringLiteral("saveConflictCancelButton")));
+    QTRY_VERIFY_WITH_TIMEOUT(!objectProperty(conflict_dialog, "visible").toBool(), 10000);
+    QVERIFY(fixture.window->isVisible());
+    QCOMPARE(readFile(path), external_bytes);
+    QCOMPARE(fixture.view_model->paragraphLayouts()
+                 .first()
+                 .toMap()
+                 .value(QStringLiteral("text"))
+                 .toString(),
+             QStringLiteral("local revision"));
 }
 #endif
