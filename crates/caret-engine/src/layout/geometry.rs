@@ -881,7 +881,8 @@ impl DocumentLayoutSnapshot {
             let paragraph = self.paragraphs.get(paragraph_index)?;
             if story.is_some_and(|story| &paragraph.story != story)
                 || paragraph
-                    .environment_ids
+                    .container
+                    .environment_ids()
                     .iter()
                     .any(|id| excluded_environment_ids.contains(id))
             {

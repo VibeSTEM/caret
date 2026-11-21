@@ -2886,7 +2886,10 @@ fn cloning_laid_out_paragraph_shares_immutable_shaping_data() {
         .layout(&document, 0, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("document layout failed: {error}"));
     let paragraph = &snapshot.paragraphs[0];
-    let reused = paragraph.reused_for_layout(StoryId::Body, &[]);
+    let reused = paragraph.reused_for_layout(
+        StoryId::Body,
+        &caret_structure::BlockContainerPath::default(),
+    );
 
     assert!(std::sync::Arc::ptr_eq(&paragraph.text, &reused.text));
     assert!(std::sync::Arc::ptr_eq(&paragraph.layout, &reused.layout));
@@ -3273,8 +3276,8 @@ fn block_environment_titles_and_children_share_document_layout_and_hit_testing()
     assert_eq!(
         snapshot
             .paragraph_by_id(&child_id)
-            .map(|p| p.environment_ids.as_ref()),
-        Some([environment_id.clone()].as_slice())
+            .map(|p| p.container.environment_ids()),
+        Some(vec![environment_id.clone()])
     );
     assert_eq!(snapshot.environment_ranges.len(), 1);
     assert_eq!(
@@ -5512,6 +5515,14 @@ fn basic_table_layout_places_cells_and_shared_caret_geometry() {
     let page = &snapshot.pages[0];
     assert_eq!(page.layout.table_fragments.len(), 1);
     assert_eq!(page.layout.fragments.len(), 4);
+    let laid_out = snapshot
+        .paragraph_by_id(&first_paragraph)
+        .unwrap_or_else(|| panic!("cell paragraph must be laid out"));
+    let cell = laid_out
+        .container
+        .innermost_cell()
+        .unwrap_or_else(|| panic!("cell paragraph container must record the table cell"));
+    assert_eq!(cell.table_id, table_id);
     assert!(page.layout.table_fragments[0].row_range == (0..2));
 
     let first_pos = Pos {

@@ -13,6 +13,7 @@ use super::{
     Block, CaretLineLocation, Document, DocumentLayoutError, DocumentLayoutSnapshot, FontCatalog,
     LaidOutParagraph, NodeId, PageLayoutSnapshot, ResolvedParagraphStyle, StoryId,
 };
+use caret_structure::{BlockContainerPath, ContainerStep, TableCellPath};
 
 /// 一次表格布局中已测量的单元格段落索引与网格几何。
 pub(super) struct ShapedTable {
@@ -43,7 +44,7 @@ pub(super) struct ShapedTableCell {
 pub(super) struct TableShapingRequest<'a> {
     pub(super) document: &'a Document,
     pub(super) table: &'a caret_doc::Table,
-    pub(super) environment_ids: &'a [NodeId],
+    pub(super) container: &'a BlockContainerPath,
     pub(super) space_before_pt: f32,
     pub(super) space_after_pt: f32,
     pub(super) reuse: Option<(&'a DocumentLayoutSnapshot, Option<&'a NodeId>)>,
@@ -73,7 +74,7 @@ impl DocumentLayoutService {
         let TableShapingRequest {
             document,
             table,
-            environment_ids,
+            container,
             space_before_pt,
             space_after_pt,
             reuse,
@@ -105,12 +106,20 @@ impl DocumentLayoutService {
         for row in &table.rows {
             let mut measured_cells = Vec::with_capacity(row.cells.len());
             let mut shaped_cells = Vec::with_capacity(row.cells.len());
-            for cell in &row.cells {
+            for (cell_index, cell) in row.cells.iter().enumerate() {
                 let story = StoryId::TableCell {
                     table_id: table_id.clone(),
                     row_id: row.id.clone(),
                     cell_id: cell.id.clone(),
                 };
+                let mut cell_container = container.clone();
+                cell_container.push(ContainerStep::TableCell(TableCellPath::new(
+                    table_id.clone(),
+                    row.id.clone(),
+                    cell.id.clone(),
+                    shaped_rows.len(),
+                    cell_index,
+                )));
                 let mut cell_paragraphs = Vec::new();
                 let mut paragraph_offsets = Vec::new();
                 let mut content_height_pt = 0.0_f64;
@@ -132,7 +141,7 @@ impl DocumentLayoutService {
                             document,
                             paragraph,
                             story: story.clone(),
-                            environment_ids,
+                            container: &cell_container,
                             width_pt: column_width_pt as f32,
                             reuse,
                             settings,

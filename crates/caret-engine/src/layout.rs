@@ -20,6 +20,7 @@ use caret_layout::{
     VisualAffinity, calculate_content_line_metrics_with_grid, calculate_line_metrics_with_grid,
     paginate_paragraphs, paragraph_has_empty_line, resolve_paragraph_style,
 };
+use caret_structure::BlockContainerPath;
 use std::{collections::HashMap, ops::Range, sync::Arc};
 
 mod block_navigation;
@@ -86,7 +87,7 @@ impl From<FontCatalogError> for DocumentLayoutError {
 pub struct LaidOutParagraph {
     pub id: NodeId,
     pub story: StoryId,
-    pub environment_ids: Arc<[NodeId]>,
+    pub container: BlockContainerPath,
     source_paragraph: Arc<Paragraph>,
     resolved_style: ResolvedParagraphStyle,
     layout_width_pt: f32,
@@ -140,7 +141,7 @@ struct MathTextSourceSpan {
 struct LaidOutParagraphInput {
     source_paragraph: Paragraph,
     story: StoryId,
-    environment_ids: Vec<NodeId>,
+    container: BlockContainerPath,
     resolved_style: ResolvedParagraphStyle,
     layout_width_pt: f32,
     math_caret_height_pt: f32,

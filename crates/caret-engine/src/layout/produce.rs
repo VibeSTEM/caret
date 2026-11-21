@@ -5,6 +5,7 @@
 
 use super::table_layout::{ShapedParagraphs, ShapedTable, expand_table_fragments};
 use super::*;
+use caret_structure::{BlockContainerPath, ContainerStep};
 
 impl LaidOutParagraph {
     fn new(input: LaidOutParagraphInput) -> Self {
@@ -22,7 +23,7 @@ impl LaidOutParagraph {
         Self {
             id: input.source_paragraph.id.clone(),
             story: input.story,
-            environment_ids: Arc::from(input.environment_ids),
+            container: input.container,
             source_paragraph: Arc::new(input.source_paragraph),
             resolved_style: input.resolved_style,
             layout_width_pt: input.layout_width_pt,
@@ -42,23 +43,23 @@ impl LaidOutParagraph {
     fn can_reuse(
         &self,
         story: &StoryId,
-        environment_ids: &[NodeId],
+        container: &BlockContainerPath,
         paragraph: &Paragraph,
         resolved_style: ResolvedParagraphStyle,
         layout_width_pt: f32,
     ) -> bool {
         self.story == *story
-            && self.environment_ids.as_ref() == environment_ids
+            && &self.container == container
             && self.source_paragraph.as_ref() == paragraph
             && self.resolved_style == resolved_style
             && self.layout_width_pt == layout_width_pt
     }
 
-    pub(super) fn reused_for_layout(&self, story: StoryId, environment_ids: &[NodeId]) -> Self {
+    pub(super) fn reused_for_layout(&self, story: StoryId, container: &BlockContainerPath) -> Self {
         Self {
             id: self.id.clone(),
             story,
-            environment_ids: Arc::from(environment_ids),
+            container: container.clone(),
             source_paragraph: Arc::clone(&self.source_paragraph),
             resolved_style: self.resolved_style,
             layout_width_pt: self.layout_width_pt,
@@ -123,7 +124,7 @@ pub(super) struct ParagraphShapingRequest<'a> {
     pub(super) document: &'a Document,
     pub(super) paragraph: &'a Paragraph,
     pub(super) story: StoryId,
-    pub(super) environment_ids: &'a [NodeId],
+    pub(super) container: &'a BlockContainerPath,
     pub(super) width_pt: f32,
     pub(super) reuse: Option<(&'a DocumentLayoutSnapshot, Option<&'a NodeId>)>,
     pub(super) settings: &'a ParagraphShapingSettings<'a>,
@@ -293,7 +294,7 @@ impl DocumentLayoutService {
                 LayoutInput::Paragraph {
                     paragraph,
                     story,
-                    environment_ids,
+                    container,
                     width_pt,
                 } => {
                     let (laid_out, style) = self.shape_paragraph(
@@ -302,7 +303,7 @@ impl DocumentLayoutService {
                             document,
                             paragraph,
                             story: story.clone(),
-                            environment_ids,
+                            container,
                             width_pt: *width_pt,
                             reuse,
                             settings: &settings,
@@ -313,7 +314,7 @@ impl DocumentLayoutService {
                 }
                 LayoutInput::Table {
                     table,
-                    environment_ids,
+                    container,
                     space_before_pt,
                     space_after_pt,
                 } => {
@@ -322,7 +323,7 @@ impl DocumentLayoutService {
                         super::table_layout::TableShapingRequest {
                             document,
                             table,
-                            environment_ids,
+                            container,
                             space_before_pt: *space_before_pt,
                             space_after_pt: *space_after_pt,
                             reuse,
@@ -351,7 +352,7 @@ impl DocumentLayoutService {
             document,
             paragraph,
             story,
-            environment_ids,
+            container,
             width_pt,
             reuse,
             settings,
@@ -366,10 +367,10 @@ impl DocumentLayoutService {
         if let Some((previous, changed_paragraph_id)) = reuse
             && changed_paragraph_id.is_none_or(|changed_id| &paragraph.id != changed_id)
             && let Some(previous_paragraph) = previous.paragraph_by_id(&paragraph.id)
-            && previous_paragraph.can_reuse(&story, environment_ids, paragraph, style, width_pt)
+            && previous_paragraph.can_reuse(&story, container, paragraph, style, width_pt)
         {
             return Ok((
-                previous_paragraph.reused_for_layout(story, environment_ids),
+                previous_paragraph.reused_for_layout(story, container),
                 style,
             ));
         }
@@ -439,7 +440,7 @@ impl DocumentLayoutService {
             LaidOutParagraph::new(LaidOutParagraphInput {
                 source_paragraph: paragraph.clone(),
                 story,
-                environment_ids: environment_ids.to_vec(),
+                container: container.clone(),
                 resolved_style: style,
                 layout_width_pt: width_pt,
                 math_caret_height_pt: paragraph_caret_metrics.height_pt,
@@ -543,7 +544,7 @@ impl DocumentLayoutService {
             collect_blocks(
                 &document.body,
                 &mut ordered_inputs,
-                &mut Vec::new(),
+                &mut BlockContainerPath::default(),
                 &mut math_context,
                 reuse.map(|(previous, _)| previous),
             )?;
@@ -1039,7 +1040,7 @@ fn collect_environment_ranges(
             };
             let y0_pt = first_line.y0_pt;
             let y1_pt = last_line.y0_pt + f64::from(line.metrics.height_pt);
-            for environment_id in paragraph.environment_ids.iter() {
+            for environment_id in paragraph.container.environment_ids().iter() {
                 ranges
                     .entry((environment_id.clone(), page_index))
                     .and_modify(|range| {
@@ -2022,13 +2023,13 @@ enum LayoutInput<'a> {
     Paragraph {
         paragraph: &'a Paragraph,
         story: StoryId,
-        environment_ids: Vec<NodeId>,
+        container: BlockContainerPath,
         /// 该段落可用的版心宽度；正文为全局版心，单元格为列内容宽度。
         width_pt: f32,
     },
     Table {
         table: &'a caret_doc::Table,
-        environment_ids: Vec<NodeId>,
+        container: BlockContainerPath,
         space_before_pt: f32,
         space_after_pt: f32,
     },
@@ -2072,7 +2073,7 @@ fn reuse_math_block(
 fn collect_blocks<'a>(
     blocks: &'a [Block],
     ordered: &mut Vec<LayoutInput<'a>>,
-    environment_ids: &mut Vec<NodeId>,
+    container: &mut BlockContainerPath,
     context: &mut MathLayoutContext<'_>,
     previous: Option<&DocumentLayoutSnapshot>,
 ) -> Result<(), DocumentLayoutError> {
@@ -2081,27 +2082,21 @@ fn collect_blocks<'a>(
             Block::Paragraph(paragraph) => ordered.push(LayoutInput::Paragraph {
                 paragraph,
                 story: StoryId::Body,
-                environment_ids: environment_ids.clone(),
+                container: container.clone(),
                 width_pt: context.content_width_pt,
             }),
             Block::Environment(environment) => {
-                environment_ids.push(environment.id.clone());
+                container.push(ContainerStep::Environment(environment.id.clone()));
                 if let Some(title) = &environment.title {
                     ordered.push(LayoutInput::Paragraph {
                         paragraph: title,
                         story: StoryId::EnvironmentTitle(environment.id.clone()),
-                        environment_ids: environment_ids.clone(),
+                        container: container.clone(),
                         width_pt: context.content_width_pt,
                     });
                 }
-                collect_blocks(
-                    &environment.children,
-                    ordered,
-                    environment_ids,
-                    context,
-                    previous,
-                )?;
-                environment_ids.pop();
+                collect_blocks(&environment.children, ordered, container, context, previous)?;
+                container.pop();
             }
             Block::ExplicitBreak(page_break) => {
                 if !page_break.kind.is_empty() && page_break.kind != "page" {
@@ -2179,7 +2174,7 @@ fn collect_blocks<'a>(
                     source,
                     layout,
                     text_layouts,
-                    environment_ids.clone(),
+                    container.environment_ids(),
                     context,
                 )?;
             }
@@ -2250,13 +2245,13 @@ fn collect_blocks<'a>(
                     source,
                     layout,
                     text_layouts,
-                    environment_ids.clone(),
+                    container.environment_ids(),
                     context,
                 )?;
             }
             Block::Table(table) => ordered.push(LayoutInput::Table {
                 table,
-                environment_ids: environment_ids.clone(),
+                container: container.clone(),
                 space_before_pt: context.space_before_pt,
                 space_after_pt: context.space_after_pt,
             }),
