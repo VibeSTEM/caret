@@ -218,6 +218,9 @@ jobs:
     timeout-minutes: 90
     env:
       CMAKE_GENERATOR: Ninja
+      # 报告目录必须放在 target 之外：Cargo 只在自己创建 target 根时写入
+      # CACHEDIR.TAG，预创建 target 会让 caret-tests 构建脚本找不到它。
+      CARET_PERF_REPORT_DIR: ${{ github.workspace }}/performance-ci
     steps:
       - uses: actions/checkout@v7
 
@@ -231,7 +234,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p target/performance-ci
+          report_dir="$CARET_PERF_REPORT_DIR"
+          mkdir -p "$report_dir"
           {
             printf 'commit=%s\n' "$GITHUB_SHA"
             printf 'runner_os=%s\n' "$RUNNER_OS"
@@ -240,30 +244,31 @@ jobs:
             printf 'rustc=%s\n' "$(rustc --version)"
             printf 'profile=bench\n'
             fc-list --version
-            fc-list --format='%{family}\t%{style}\t%{file}\n' | LC_ALL=C sort > target/performance-ci/font-manifest.txt
-            sha256sum target/performance-ci/font-manifest.txt
+            fc-list --format='%{family}\t%{style}\t%{file}\n' | LC_ALL=C sort > "$report_dir/font-manifest.txt"
+            sha256sum "$report_dir/font-manifest.txt"
             printf 'started_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             cargo performance rust cpu --samples 31
             cargo build --locked -p caret-dslc
             cargo build --locked --release -p caret-dslc
             cargo hyperfine --runs 30 --warmup 5 \
-              --export-json target/performance-ci/dslc-hyperfine.json \
+              --export-json "$report_dir/dslc-hyperfine.json" \
               'target/debug/caret-dslc check tests/fixtures/dsl/artifacts.pa' \
               'target/release/caret-dslc check tests/fixtures/dsl/artifacts.pa'
-          } 2>&1 | tee target/performance-ci/cpu.log
+          } 2>&1 | tee "$report_dir/cpu.log"
 
       - name: Collect Criterion statistics
         if: always()
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p target/performance-ci/criterion
+          report_dir="$CARET_PERF_REPORT_DIR"
+          mkdir -p "$report_dir/criterion"
           if [ -d target/criterion ]; then
             find target/criterion -type f -path '*/new/*.json' -print0 |
               while IFS= read -r -d '' report; do
                 relative_path="${report#target/criterion/}"
-                mkdir -p "target/performance-ci/criterion/$(dirname "$relative_path")"
-                cp "$report" "target/performance-ci/criterion/$relative_path"
+                mkdir -p "$report_dir/criterion/$(dirname "$relative_path")"
+                cp "$report" "$report_dir/criterion/$relative_path"
               done
           fi
 
@@ -272,7 +277,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rust-cpu-performance-${{ github.run_id }}-${{ github.run_attempt }}
-          path: target/performance-ci/
+          path: ${{ env.CARET_PERF_REPORT_DIR }}/
           if-no-files-found: warn
           retention-days: 30
 
@@ -283,6 +288,8 @@ jobs:
     env:
       CMAKE_GENERATOR: Ninja
       QT_QPA_PLATFORM: offscreen
+      # 同 Rust CPU：报告写入 runner 临时目录，避免预创建 target 破坏 CACHEDIR.TAG。
+      CARET_PERF_REPORT_DIR: ${{ github.workspace }}/performance-ci
     steps:
       - uses: actions/checkout@v7
 
@@ -296,7 +303,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p target/performance-ci
+          report_dir="$CARET_PERF_REPORT_DIR"
+          mkdir -p "$report_dir"
           {
             printf 'commit=%s\n' "$GITHUB_SHA"
             printf 'runner_os=%s\n' "$RUNNER_OS"
@@ -306,14 +314,14 @@ jobs:
             printf 'font_source=synthetic_rgba8_glyph_images\n'
             printf 'started_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             cargo performance qt cpu --samples 31
-          } 2>&1 | tee target/performance-ci/qt-cpu.log
+          } 2>&1 | tee "$report_dir/qt-cpu.log"
 
       - name: Upload Qt CPU performance report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: qt-cpu-performance-${{ github.run_id }}-${{ github.run_attempt }}
-          path: target/performance-ci/
+          path: ${{ env.CARET_PERF_REPORT_DIR }}/
           if-no-files-found: warn
           retention-days: 30
 
@@ -325,6 +333,8 @@ jobs:
       CMAKE_GENERATOR: Ninja
       QT_QPA_PLATFORM: xcb
       QSG_RHI_BACKEND: opengl
+      # 同 Rust CPU：报告写入 runner 临时目录，避免预创建 target 破坏 CACHEDIR.TAG。
+      CARET_PERF_REPORT_DIR: ${{ github.workspace }}/performance-ci
     steps:
       - uses: actions/checkout@v7
 
@@ -343,7 +353,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p target/performance-ci
+          report_dir="$CARET_PERF_REPORT_DIR"
+          mkdir -p "$report_dir"
           {
             printf 'commit=%s\n' "$GITHUB_SHA"
             printf 'runner_os=%s\n' "$RUNNER_OS"
@@ -353,13 +364,13 @@ jobs:
             printf 'font_source=synthetic_rgba8_glyph_images\n'
             printf 'started_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             xvfb-run -a cargo performance qt gpu --samples 31
-          } 2>&1 | tee target/performance-ci/qt-gpu.log
+          } 2>&1 | tee "$report_dir/qt-gpu.log"
 
       - name: Upload Qt GPU performance report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: qt-gpu-performance-${{ github.run_id }}-${{ github.run_attempt }}
-          path: target/performance-ci/
+          path: ${{ env.CARET_PERF_REPORT_DIR }}/
           if-no-files-found: warn
           retention-days: 30
