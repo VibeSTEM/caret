@@ -122,3 +122,6 @@ native/canvas、caret-ffi snapshot DTO、caret-layout 输出与窗口集成。
 ## 完成摘要
 
 027 已完成 Rust 页面布局与 glyph 生成、Swash 栅格化、Qt Canvas 图集绘制、页面命中/插入点/选区几何、焦点与闪烁、基础键盘编辑和事件驱动的画布更新。真实窗口测试确认 Rust 文档插入英文字符和全角 `！` 后，新 glyph 可见于 Qt 窗口像素。定向 Rust 测试、Clippy、格式检查、CTest 与独立评审通过。IME/导航/完整选区交互由 030 承接；环境高亮和未知节点安全预览由 031/032 承接；共享行距网格由 033 完成，OpenType BASE 脚本基线与字形溢出诊断由 055 承接，不属于 027。
+
+
+表格单元格的落点/选区/光标几何由 [046](046-table-layout-and-canvas.md) 接入同一页面快照；本任务只维护画布输入与命中管线，不复制单元格几何。

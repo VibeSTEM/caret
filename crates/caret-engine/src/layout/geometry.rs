@@ -869,6 +869,13 @@ impl DocumentLayoutSnapshot {
                 });
             }
         }
+        // 表格单元格内被版心裁剪掉（不可见/不可导航）的公式：降级为空高亮，
+        // 让编辑继续发布快照，而不是把所有 table math 误判为过期投影。
+        for (index, block_id) in block_ids.iter().enumerate() {
+            if !found[index] && self.table_math_ids.contains(block_id) {
+                found[index] = true;
+            }
+        }
         found.iter().all(|found| *found).then_some(rectangles)
     }
 

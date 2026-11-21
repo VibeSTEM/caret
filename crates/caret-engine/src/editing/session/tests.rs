@@ -2548,6 +2548,133 @@ fn table_cell_enter_splits_inside_the_cell_transaction() {
 }
 
 #[test]
+fn cell_display_math_backspace_deletes_only_the_cell_object() {
+    let (document, table_id, row_id, cell_id, paragraph_id) = table_document_for_session();
+    let mut session =
+        Session::new(document).unwrap_or_else(|error| panic!("table document must open: {error}"));
+    let story = StoryId::TableCell {
+        table_id: table_id.clone(),
+        row_id: row_id.clone(),
+        cell_id: cell_id.clone(),
+    };
+    let position = Pos {
+        story,
+        paragraph_id,
+        offset: 3,
+        affinity: Affinity::Downstream,
+    };
+    session
+        .set_selection(Some(Selection {
+            anchor: position.clone(),
+            focus: position,
+        }))
+        .unwrap_or_else(|error| panic!("cell selection must work: {error}"));
+    session
+        .insert_display_math(false)
+        .unwrap_or_else(|error| panic!("cell display math must insert: {error}"));
+    let body_len_before = session.document().body.len();
+    session
+        .run(Command::EditorKey(EditorKey::Backspace))
+        .unwrap_or_else(|error| panic!("cell equation backspace must succeed: {error}"));
+    assert_eq!(
+        session.document().body.len(),
+        body_len_before,
+        "deleting a cell equation must not remove body blocks"
+    );
+    let cell_blocks = caret_structure::block_list_by_table_cell(
+        &session.document.body,
+        &[],
+        &table_id,
+        &row_id,
+        &cell_id,
+    )
+    .unwrap_or_else(|| panic!("cell blocks must resolve"));
+    assert!(
+        !cell_blocks
+            .iter()
+            .any(|block| matches!(block, Block::Equation(_))),
+        "cell equation must be removed"
+    );
+    assert!(
+        cell_blocks
+            .iter()
+            .any(|block| matches!(block, Block::Paragraph(_))),
+        "empty cell must keep a fallback paragraph"
+    );
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("cell equation deletion undo must succeed: {error}"));
+    let cell_blocks = caret_structure::block_list_by_table_cell(
+        &session.document.body,
+        &[],
+        &table_id,
+        &row_id,
+        &cell_id,
+    )
+    .unwrap_or_else(|| panic!("cell blocks must resolve after undo"));
+    assert!(
+        cell_blocks
+            .iter()
+            .any(|block| matches!(block, Block::Equation(_)))
+    );
+    session
+        .run(Command::Redo)
+        .unwrap_or_else(|error| panic!("cell equation deletion redo must succeed: {error}"));
+    assert_eq!(session.document().body.len(), body_len_before);
+}
+
+#[test]
+fn cell_align_enter_inserts_a_row_inside_the_cell() {
+    let (document, table_id, row_id, cell_id, paragraph_id) = table_document_for_session();
+    let mut session =
+        Session::new(document).unwrap_or_else(|error| panic!("table document must open: {error}"));
+    let story = StoryId::TableCell {
+        table_id: table_id.clone(),
+        row_id: row_id.clone(),
+        cell_id: cell_id.clone(),
+    };
+    let position = Pos {
+        story,
+        paragraph_id,
+        offset: 3,
+        affinity: Affinity::Downstream,
+    };
+    session
+        .set_selection(Some(Selection {
+            anchor: position.clone(),
+            focus: position,
+        }))
+        .unwrap_or_else(|error| panic!("cell selection must work: {error}"));
+    let body_len_before = session.document().body.len();
+    session
+        .insert_display_math(true)
+        .unwrap_or_else(|error| panic!("cell align must insert: {error}"));
+    session
+        .run(Command::InsertText("x".to_owned()))
+        .unwrap_or_else(|error| panic!("typing in cell align must succeed: {error}"));
+    session
+        .run(Command::EditorKey(EditorKey::Enter))
+        .unwrap_or_else(|error| panic!("cell align enter must insert a row: {error}"));
+    assert_eq!(session.document().body.len(), body_len_before);
+    let cell_blocks = caret_structure::block_list_by_table_cell(
+        &session.document.body,
+        &[],
+        &table_id,
+        &row_id,
+        &cell_id,
+    )
+    .unwrap_or_else(|| panic!("cell blocks must resolve"));
+    let align = cell_blocks
+        .iter()
+        .find_map(|block| match block {
+            Block::Align(align) => Some(align),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("cell align must remain"));
+    assert_eq!(align.rows.len(), 2, "cell align Enter must add one row");
+}
+
+#[test]
 fn table_structure_keys_are_ignored_while_context_owns_input() {
     let mut session = Session::new(Document::blank())
         .unwrap_or_else(|error| panic!("session creation failed: {error}"));

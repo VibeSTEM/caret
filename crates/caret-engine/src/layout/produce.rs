@@ -630,6 +630,13 @@ impl DocumentLayoutService {
             .iter()
             .map(|table| (table.table_id.clone(), std::sync::Arc::clone(&table.grid)))
             .collect();
+        let table_math_ids = shaped_tables
+            .iter()
+            .flat_map(|table| &table.rows)
+            .flat_map(|row| &row.cells)
+            .flat_map(|cell| &cell.math_blocks)
+            .map(|math| math.math_id.clone())
+            .collect();
         Ok(DocumentLayoutSnapshot {
             session_id: None,
             document_generation,
@@ -646,6 +653,7 @@ impl DocumentLayoutService {
             environment_ranges: page_geometries.environment_ranges,
             math_blocks,
             table_layouts,
+            table_math_ids,
             math_block_text_layouts,
             math_block_sources,
             math_hosts,

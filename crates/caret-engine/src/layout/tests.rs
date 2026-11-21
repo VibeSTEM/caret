@@ -5791,6 +5791,38 @@ fn table_cell_environment_title_and_body_are_laid_out() {
 }
 
 #[test]
+fn hidden_tall_cell_math_degrades_to_empty_highlight_instead_of_stale_error() {
+    let equation = Equation {
+        id: NodeId::generate(),
+        math_tree: empty_math_tree(),
+        extra: BTreeMap::new(),
+    };
+    let equation_id = equation.id.clone();
+    let mut blocks: Vec<Block> = (0..40)
+        .map(|index| Block::Paragraph(paragraph(&format!("line {index}"))))
+        .collect();
+    blocks.push(Block::Equation(equation));
+    let table = Table {
+        id: NodeId::generate(),
+        rows: vec![TableRow {
+            id: NodeId::generate(),
+            cells: vec![TableCell {
+                id: NodeId::generate(),
+                blocks,
+            }],
+        }],
+    };
+    let mut document = Document::blank();
+    document.body = vec![Block::Table(table)];
+    let snapshot = layout_document(&document);
+    assert_eq!(
+        snapshot.math_block_geometry(std::slice::from_ref(&equation_id)),
+        Some(Vec::new()),
+        "hidden table math must degrade to empty highlight, not stale error"
+    );
+}
+
+#[test]
 fn tall_cell_only_publishes_fragments_inside_the_page_content_box() {
     let table = Table {
         id: NodeId::generate(),

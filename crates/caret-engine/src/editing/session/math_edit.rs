@@ -1454,22 +1454,6 @@ pub(crate) fn find_block_path(blocks: &[Block], id: &NodeId) -> Option<(Vec<Node
         .map(|(container, index)| (container.environment_ids(), index))
 }
 
-fn block_list<'a>(
-    blocks: &'a mut Vec<Block>,
-    parent_ids: &[NodeId],
-) -> Result<&'a mut Vec<Block>, EditError> {
-    caret_structure::block_list_by_environment_ids_mut(blocks, parent_ids)
-        .ok_or(EditError::InvalidPosition)
-}
-
-fn block_list_ref<'a>(
-    blocks: &'a [Block],
-    parent_ids: &[NodeId],
-) -> Result<&'a [Block], EditError> {
-    caret_structure::block_list_by_environment_ids(blocks, parent_ids)
-        .ok_or(EditError::InvalidPosition)
-}
-
 #[cfg(test)]
 fn display_math_block(align: bool, source: &str) -> Result<Block, EditError> {
     display_math_block_with_projection(align, source, NodeId::generate()).map(|(block, _)| block)

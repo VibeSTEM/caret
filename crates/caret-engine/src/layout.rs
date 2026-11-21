@@ -21,7 +21,11 @@ use caret_layout::{
     paginate_paragraphs, paragraph_has_empty_line, resolve_paragraph_style,
 };
 use caret_structure::BlockContainerPath;
-use std::{collections::HashMap, ops::Range, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Range,
+    sync::Arc,
+};
 
 mod block_navigation;
 mod geometry;
@@ -270,6 +274,8 @@ pub struct DocumentLayoutSnapshot {
     pub math_blocks: HashMap<NodeId, Arc<caret_math::layout::MathLayout>>,
     /// 已测量的表格网格几何；页面片段只保存放置引用，几何由快照单点持有。
     pub(crate) table_layouts: HashMap<NodeId, Arc<caret_layout::TableGridLayout>>,
+    /// 表格单元格内的公式 ID；用于把被裁剪/隐藏的 cell 公式降级为空高亮而非过期错误。
+    pub(crate) table_math_ids: HashSet<NodeId>,
     /// 块级公式 token 与正文 Parley sidecar 成对保存，避免布局缓存脱离字体数据。
     math_block_text_layouts: HashMap<NodeId, HashMap<u64, MathTextSidecar>>,
     math_block_sources: HashMap<NodeId, MathBlockSource>,

@@ -5,7 +5,6 @@
 
 use super::super::block_rows::{self, BackspaceAction};
 use super::*;
-use crate::editing::paragraph_ops::BlockContainerPath;
 
 /// Align 逻辑行删除采用的事务。
 #[derive(Clone, Copy)]
@@ -271,13 +270,15 @@ pub(super) fn commit_align_tree_edit(
     };
     let before = Block::Align(before_align);
     let after = Block::Align(after_align);
-    let (parents, sibling_index) =
-        find_block_path(&session.document.body, block_id).ok_or(EditError::InvalidPosition)?;
+    let (container, sibling_index) = find_block_container_path(&session.document.body, block_id)
+        .ok_or(EditError::InvalidPosition)?;
     let before_math = history_position(&edit);
     let before_selection = (session.selection.clone(), session.selection_visual_affinity);
     let before_pending_style = session.pending_inline_style.clone();
     let document_before = session.document.clone();
-    let blocks = block_list(&mut session.document.body, &parents)?;
+    let blocks =
+        caret_structure::block_list_by_container_mut(&mut session.document.body, &container)
+            .ok_or(EditError::InvalidPosition)?;
     let slot = blocks
         .get_mut(sibling_index)
         .ok_or(EditError::InvalidPosition)?;
@@ -295,7 +296,7 @@ pub(super) fn commit_align_tree_edit(
     after_edit.branch = branch;
     session.record_math_history_with_pending_style(
         DocumentPatch::BlockRange {
-            container: BlockContainerPath::from_environment_ids(&parents),
+            container,
             sibling_index,
             before: vec![before],
             after: vec![after],
