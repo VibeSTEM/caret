@@ -72,6 +72,7 @@ fn math_fragment_projection_keeps_content_origin_and_serializes_page_margins()
     page.layout
         .math_fragments
         .push(caret_layout::MathBlockFragment {
+            clip: None,
             math_id: NodeId::generate(),
             x_offset_pt: 8.5,
             y_offset_pt: 12.25,
@@ -220,10 +221,13 @@ fn page_with_paragraphs(paragraph_ids: &[NodeId]) -> PageLayoutSnapshot {
                 .map(|paragraph_id| caret_layout::ParagraphFragment {
                     paragraph_id: paragraph_id.clone(),
                     line_range: 0..1,
+                    x_offset_pt: 0.0,
                     y_offset_pt: 0.0,
+                    clip: None,
                 })
                 .collect(),
             math_fragments: vec![],
+            table_fragments: vec![],
             used_height_pt: 12.0,
         },
     }

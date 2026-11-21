@@ -7,7 +7,7 @@ use std::ops::Range;
 
 use caret_doc::NodeId;
 
-use crate::{ParagraphLayout, ResolvedParagraphStyle};
+use crate::{ParagraphLayout, ResolvedParagraphStyle, TableGridLayout};
 
 /// 参与分页的段落及其段间距策略。
 #[derive(Debug, Clone, Copy)]
@@ -42,12 +42,45 @@ impl<'a> ParagraphPaginationInput<'a> {
     }
 }
 
-/// 按文档顺序送入分页器的段落或显式分页符。
-#[derive(Debug, Clone, Copy)]
+/// 按文档顺序送入分页器的段落、表格或显式分页符。
 pub enum PaginationItem<'a> {
     Paragraph(ParagraphPaginationInput<'a>),
     MathBlock(MathBlockPaginationInput<'a>),
+    /// 表格按行原子放置；行高与单元格几何来自已测量的表格网格。
+    Table(TablePaginationInput<'a>),
     ExplicitPageBreak,
+}
+
+/// 一个按行分页的表格输入。
+pub struct TablePaginationInput<'a> {
+    /// 文档中表格的稳定节点 ID。
+    pub table_id: &'a NodeId,
+    /// 已测量的表格网格几何；坐标相对表格原点，单位为 pt。
+    pub layout: &'a TableGridLayout,
+    /// 表格前的段落间距；与正文段落使用相同的相邻间距合并策略。
+    pub space_before_pt: f32,
+    /// 表格后的段落间距。
+    pub space_after_pt: f32,
+}
+
+impl std::fmt::Debug for PaginationItem<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Paragraph(paragraph) => formatter
+                .debug_tuple("Paragraph")
+                .field(paragraph.paragraph_id)
+                .finish(),
+            Self::MathBlock(math) => formatter
+                .debug_tuple("MathBlock")
+                .field(math.math_id)
+                .finish(),
+            Self::Table(table) => formatter
+                .debug_tuple("Table")
+                .field(table.table_id)
+                .finish(),
+            Self::ExplicitPageBreak => formatter.write_str("ExplicitPageBreak"),
+        }
+    }
 }
 
 /// 一个不拆分的显示公式分页输入。
@@ -80,7 +113,33 @@ pub struct MathBlockPaginationInput<'a> {
 pub struct ParagraphFragment {
     pub paragraph_id: NodeId,
     pub line_range: Range<usize>,
+    /// 相对页面内容区左边的水平偏移，单位为 pt；正文段落为零。
+    pub x_offset_pt: f32,
+    /// 相对页面内容区顶部的垂直偏移，单位为 pt。
     pub y_offset_pt: f32,
+    /// 单元格内容等需要按矩形裁剪时的页面内容区局部裁剪框。
+    pub clip: Option<FragmentClip>,
+}
+
+/// 页面内容区局部的矩形裁剪框，单位为 pt。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FragmentClip {
+    pub x0_pt: f32,
+    pub y0_pt: f32,
+    pub x1_pt: f32,
+    pub y1_pt: f32,
+}
+
+impl FragmentClip {
+    /// 校验矩形有限且非空。
+    pub fn is_valid(&self) -> bool {
+        self.x0_pt.is_finite()
+            && self.y0_pt.is_finite()
+            && self.x1_pt.is_finite()
+            && self.y1_pt.is_finite()
+            && self.x0_pt < self.x1_pt
+            && self.y0_pt < self.y1_pt
+    }
 }
 
 /// 一个页面中的显示公式片段；公式以自身 MathBox 坐标绘制。
@@ -102,6 +161,20 @@ pub struct MathBlockFragment {
     pub caret_baseline_pt: f32,
     pub caret_height_pt: f32,
     pub clip_ink_to_line_height: bool,
+    /// 单元格内容等需要按矩形裁剪时的页面内容区局部裁剪框。
+    pub clip: Option<FragmentClip>,
+}
+
+/// 表格在页面上的一个片段；行原子分页后同页连续行合并为一个片段。
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableFragment {
+    pub table_id: NodeId,
+    /// 本片段在表格内的行范围，`end` 为开区间。
+    pub row_range: Range<usize>,
+    /// 表格原点相对页面内容区顶部的偏移，单位为 pt；续页时可为负。
+    pub y_offset_pt: f32,
+    /// 完整表格网格几何；渲染/命中用 `row_range` 过滤。
+    pub layout: std::sync::Arc<TableGridLayout>,
 }
 
 /// 一个页面上的段落行片段及其推进高度。
@@ -110,6 +183,8 @@ pub struct PageLayout {
     pub fragments: Vec<ParagraphFragment>,
     /// 本页显示公式片段；位置相对版心，公式不跨页拆分。
     pub math_fragments: Vec<MathBlockFragment>,
+    /// 本页表格片段；位置相对版心，按行原子分页。
+    pub table_fragments: Vec<TableFragment>,
     pub used_height_pt: f32,
 }
 
@@ -120,6 +195,7 @@ pub enum PaginationError {
     InvalidParagraphSpacing,
     InvalidLineHeight,
     InvalidMathBlock,
+    InvalidTable,
 }
 
 impl std::fmt::Display for PaginationError {
@@ -129,6 +205,7 @@ impl std::fmt::Display for PaginationError {
             Self::InvalidParagraphSpacing => "layout.invalid_paragraph_spacing",
             Self::InvalidLineHeight => "layout.invalid_line_height",
             Self::InvalidMathBlock => "layout.invalid_math_block",
+            Self::InvalidTable => "layout.invalid_table",
         };
         formatter.write_str(message)
     }
@@ -208,9 +285,69 @@ pub fn paginate_paragraphs(
                     caret_baseline_pt: math.caret_baseline_pt,
                     caret_height_pt: math.caret_height_pt,
                     clip_ink_to_line_height: math.clip_ink_to_line_height,
+                    clip: None,
                 });
                 page.used_height_pt = y_offset_pt + math.height_pt;
                 previous_space_after_pt = math.space_after_pt;
+                continue;
+            }
+            PaginationItem::Table(table) => {
+                if !table.space_before_pt.is_finite()
+                    || !table.space_after_pt.is_finite()
+                    || table.space_before_pt < 0.0
+                    || table.space_after_pt < 0.0
+                    || !table.layout.width_pt.is_finite()
+                    || !table.layout.height_pt.is_finite()
+                {
+                    return Err(PaginationError::InvalidTable);
+                }
+                if !(current.used_height_pt + table.layout.height_pt as f32).is_finite() {
+                    return Err(PaginationError::InvalidTable);
+                }
+                let layout = std::sync::Arc::new(table.layout.clone());
+                let mut first_row = true;
+                for (row_index, row) in table.layout.rows.iter().enumerate() {
+                    let row_height = row.height_pt as f32;
+                    if !row_height.is_finite() || row_height < 0.0 {
+                        return Err(PaginationError::InvalidTable);
+                    }
+                    let pending_space_pt = if first_row && page_has_content(&current) {
+                        previous_space_after_pt.max(table.space_before_pt)
+                    } else {
+                        0.0
+                    };
+                    if page_has_content(&current)
+                        && current.used_height_pt + pending_space_pt + row_height > page_height_pt
+                    {
+                        pages.push(std::mem::take(&mut current));
+                    }
+                    let page = &mut current;
+                    let pending_space_pt = if page_has_content(page) {
+                        pending_space_pt
+                    } else {
+                        0.0
+                    };
+                    let y_offset_pt = page.used_height_pt + pending_space_pt - row.top_pt as f32;
+                    match page.table_fragments.last_mut() {
+                        Some(fragment)
+                            if fragment.table_id == *table.table_id
+                                && fragment.row_range.end == row_index =>
+                        {
+                            fragment.row_range.end = row_index + 1;
+                        }
+                        _ => page.table_fragments.push(TableFragment {
+                            table_id: table.table_id.clone(),
+                            row_range: row_index..row_index + 1,
+                            y_offset_pt,
+                            layout: std::sync::Arc::clone(&layout),
+                        }),
+                    }
+                    page.used_height_pt = page.used_height_pt + pending_space_pt + row_height;
+                    first_row = false;
+                }
+                if !table.layout.rows.is_empty() {
+                    previous_space_after_pt = table.space_after_pt;
+                }
                 continue;
             }
             PaginationItem::Paragraph(paragraph) => paragraph,
@@ -345,7 +482,9 @@ pub fn paginate_paragraphs(
                     page.fragments.push(ParagraphFragment {
                         paragraph_id: paragraph.paragraph_id.clone(),
                         line_range: line_index..line_index + 1,
+                        x_offset_pt: 0.0,
                         y_offset_pt,
+                        clip: None,
                     });
                 }
                 page.used_height_pt = y_offset_pt + line_height_pt;
@@ -434,7 +573,9 @@ fn build_keep_group_heights(items: &[PaginationItem<'_>]) -> Vec<Option<f32>> {
 }
 
 fn page_has_content(page: &PageLayout) -> bool {
-    !page.fragments.is_empty() || !page.math_fragments.is_empty()
+    !page.fragments.is_empty()
+        || !page.math_fragments.is_empty()
+        || !page.table_fragments.is_empty()
 }
 
 #[cfg(test)]
