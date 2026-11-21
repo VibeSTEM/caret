@@ -1,6 +1,6 @@
 # 080 — Block/Inline 共享交互底座（Paragraph 为基线）
 
-- 状态：in-progress
+- 状态：done
 - 依赖：071、074、077、081、082、083、091
 - 优先级：P1
 - 创建 / 更新：2026-11-09 / 2026-11-21
@@ -55,12 +55,12 @@ Caret 的 Block/Inline 编辑目前分散管理焦点位置、边界移动、选
 
 - [x] 081、082、083 均完成且各自验收通过。
 - [x] Paragraph、Section/Custom、Equation/Align 与 InlineEnvironment/InlineMath 使用单一共享交互协议，适配器只提供领域局部位置、事务与几何（子任务 071/081/082/083 的实现与评审记录）。
-- [x] 连续 Block 删除落点、Section 邻接 Backspace、Inline/Block 双侧扩选、替换与空 Inline 槽位符合权威行为文档；复制/粘贴部分待整链复核，见下方未完成项。
+- [x] 连续 Block 删除落点、Section 邻接 Backspace、Inline/Block 双侧扩选、替换与空 Inline 槽位符合权威行为文档；复制/粘贴整链复核见第 9 项与验证表。
 - [x] 位置、选区、事务与历史使用同一宿主身份/顺序；完整快照、增量刷新与 Qt 绘制使用同代投影（082/083 验收及本次定向回归）。
 - [x] 无重复权威状态、任意 Paragraph 隐藏锚点、逐类型补丁、U+FFFC 泄漏、静默对象丢失或失败后非法焦点（083 分域评审发现项已修复）。
 - [x] Paragraph、MathEdit、Section、Align 行/cell 的真实局部坐标和行为未被统一底座抹平；新 Block 只需 adapter 接入（子任务测试与 #151 跨宿主范围收敛）。
 - [x] Section、Equation、Align 的块外侧垂直导航和 Shift 选区共享视觉行候选/块边界仲裁；InlineMath 外部逐项扩选通过共享端点、范围消费与同代几何协议（#151 与 2026-11-21 定向回归）。
-- [ ] 相关行为测试、覆盖率门槛、分域检查在整链（含剪贴板）上通过；独立最终评审为唯一未完成项（完成后勾选）。未执行的桌面平台验收已在验证表与已知限制中明确记录。
+- [x] 相关行为测试、覆盖率门槛、分域检查及独立最终评审在整链（含剪贴板）上通过；未执行的桌面平台验收已在验证表与「已知限制与未执行项」明确记录。
 - [x] Caret 内复制粘贴保留 MathTree/Align 和 InlineMath 对象；外部应用读取可读 TeX 回退；显式 TeX 数学片段粘贴由 091 接入 092 的共享转换器。新增 C++ 真实 `QClipboard` Blocks 用例逐项断言片段内 InlineMath `x`、Equation `y`、Align `a` 的 MathTree，粘贴后 InlineMath 占位 1→2、显示公式 2→4、新显示公式 ID 2 个且与源 ID 不冲突，一次 Undo/Redo 恢复整份快照；纯文本回退断言 `\(x\)`、`\[y\]`、`aligned` 且无 U+FFFC。
 
 ## 验证计划与结果
@@ -74,11 +74,21 @@ Caret 的 Block/Inline 编辑目前分散管理焦点位置、边界移动、选
 | 2026-11-21 | `cargo test --locked -p caret-engine empty_inline_math`、`cargo test --locked -p caret-app empty_inline_math` | 087 收尾：空 Inline 槽位/命中/删除/Undo/Redo/IME 回归 | 通过：9 / 5 项 |
 | 2026-11-21 | 整链定向回归：`cargo test --locked -p caret-engine`（structure 73、navigation 40、document_position 24、math_edit::tests::selection_caret 86、clipboard_fragment 29、empty_inline_math 9）；`-p caret-app`（empty_inline_math 5、backspace 14、inline_math 36、块边界 1、跨宿主几何 1） | 跨宿主删除/导航/选区/文档位置/剪贴板协议与几何一致 | 通过；另 `cargo test --locked -p caret-doc -p caret-math` 105/182 通过 |
 | 2026-11-21 | C++ 真实 `QClipboard` 整链：`richClipboardBlocksPasteRoundTripsDisplayMathAndUndo`（新增）+ `cargo build --locked -p caret-launcher` + `ctest --test-dir target/native/debug -R '^Qml.ShellLoad$'` | 跨段 Blocks 复制含 InlineMath/Equation/Align；text/plain 可读 TeX 且无 U+FFFC；粘贴后三类数学对象保留、ID 重映射无冲突、一次 Undo/Redo | 通过：Qml.ShellLoad 1/1（13.17s）；同套件其余剪贴板/撤销/跨宿主用例均通过 |
-| 2026-11-21 | 全量门禁：`cargo fmt --all -- --check`、`cargo format --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo test --workspace --locked`、`cargo lint --check` | 无回归 | 通过：workspace 1995 passed + native CTest 20/20；fmt/format/clippy/lint 通过（PR CI 复验记录随合并补记） |
+| 2026-11-21 | 全量门禁：`cargo fmt --all -- --check`、`cargo format --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo test --workspace --locked`、`cargo lint --check` | 无回归 | 通过：workspace 1996 passed + native CTest 20/20（macOS arm64 本地）；fmt/format/clippy/lint 通过。Ubuntu Nightly 的 full tests 因平台条件用例为 1993 项，同样全绿 |
 | 2026-11-21 | Nightly diagnostics [#44865061216](https://github.com/VibeSTEM/caret/actions/runs/44865061216)（main@`2c851b15`，产品代码与当前分支一致；本分支仅新增 C++ 测试与记录） | Rust coverage gate、native C++ 85% coverage gate、三平台 full workspace tests、三平台 sanitizer、quality、Miri 全部通过 | 通过：14/14 job 成功；覆盖率门槛证据来自该 run，非本分支本地 coverage |
 | 2026-11-21 | 两轮分域评审（跨宿主整链、剪贴板跨宿主集成） | 无功能阻断；需补强 C++ 断言与 080 记录 | 完成：评审报告确认 081/082/083/090/091 链路行为正确；新 C++ 用例已按建议补 MathTree 内容、InlineMath 占位、ID 重映射与 Undo/Redo 整快照断言；记录同步 |
-| 2026-11-21 | 未参与实现的 Sol/medium 只读最终评审 | 对最终完整 diff 可交付 | 进行中（完成后补记） |
+| 2026-11-21 | 未参与实现的 Sol/medium 只读最终评审 | 对最终完整 diff 可交付 | 通过：确认新 C++ 用例非恒真、夹具改动合理、无产品代码改动；指出记录计数/矛盾/证据缺口，已修正并复核 |
+| 2026-11-21 | PR [#165](https://github.com/VibeSTEM/caret/pull/165) CI | 适用作业通过 | 通过：`cargo check and build`、`cargo format`、`cargo lint (clang-tidy/includes/cppcheck)`、`detect changed paths` 均 pass，其余按路径 skipping；`mergeStateStatus=CLEAN` |
 | — | 桌面平台验收：真实窗口交互/视觉、真实跨进程/跨平台系统剪贴板、外部应用互操作 | 可观察 | 未执行：077 桌面 caret 视觉确认待补；真实系统剪贴板/跨平台由任务 105 跟进；当前只有离屏 QML + 三平台 CI 无头矩阵 |
+
+## 已知限制与未执行项
+
+- 077 桌面 caret 视觉确认仍待补（077 保持 `implemented`）；不阻塞 080。
+- 真实桌面窗口/交互/视觉验收未手工执行；现有证据为 macOS 离屏 QML 测试、C++ 真实进程内 `QClipboard` 与 CI 三平台无头矩阵。
+- 真实跨进程/跨平台系统剪贴板（X11/Wayland 延迟渲染、Windows）与真实外部应用只读 text/plain 的互操作未验证；080 以进程内 MIME 与 `text/plain` 投影为代理，真实平台验证由任务 105 跟进。
+- Math 内部局部选区与独立 Math 形状、跨文档主题模板迁移、QML 用户可见剪贴板错误、混合文本中的显示公式识别、选区外 Opaque 剪枝、粘贴全量重排性能，均由任务 105 跟进；091 v1 对这些路径显式拒绝或安全回退。
+- 覆盖率门槛证据来自 Nightly [#44865061216](https://github.com/VibeSTEM/caret/actions/runs/44865061216)（main@`2c851b15`；本分支无产品代码差异，仅新增 C++ 测试与记录），不是本分支自身运行的 coverage。
+- 两轮分域评审为会话内只读 subagent 报告，未在 PR 评论中独立存档；最终评审为未参与实现的只读 diff 评审。
 
 ## 风险与回退
 
@@ -93,8 +103,15 @@ Caret 的 Block/Inline 编辑目前分散管理焦点位置、边界移动、选
 - 2026-11-16：审计发现原有纯文本剪贴板会将公式降格为 U+FFFC，与结构复制契约冲突。将富剪贴板实现拆为 091；080 保留跨宿主最终集成验收。
 - 2026-11-18：桌面测试发现 Equation 外侧 Up/Down 走入公式边界重入路径，Shift 垂直扩展在视觉候选计算前只覆盖整公式；InlineMath 外部选区也只表达 U+FFFC。按维护者要求在 080/083 中补齐 Section 主导的垂直候选复用与 MathTree 内部跨宿主选区。
 - 2026-11-21：整链验收：新增 C++ `richClipboardBlocksPasteRoundTripsDisplayMathAndUndo` 覆盖跨段 Blocks 复制粘贴（InlineMath/Equation/Align 内容、ID 重映射、Undo/Redo），并补强 MathTree/占位/ID 断言；两轮分域评审确认无功能阻断。
-- 2026-11-21：跟进审计：081/082/083 已完成，083 的 InlineMath 跨宿主范围由 #151 合入；071/074 `done`、077 `implemented`。定向回归（engine structure/navigation/math selection/document_position；app 块边界、跨宿主几何、Backspace、inline math 及 087 空 inline 槽位）全部通过。剩余验收依赖 091 富剪贴板（依赖 083、092 均已完成，091 v1 已实现）：080 可在 091 合入后执行复制/粘贴整链、覆盖率与最终评审；Math 内部局部选区不属 080 验收范围（任务 105 跟进）。 勾选项当前依据 081/082/083 各自验收与 2026-11-21 定向回归，080 整链复核待 091 后再执行；087 收尾新增的 Qt 端到端空槽渲染用例不改变 080 剩余范围。
+- 2026-11-21：跟进审计：081/082/083 已完成，083 的 InlineMath 跨宿主范围由 #151 合入；071/074 `done`、077 `implemented`。定向回归（engine structure/navigation/math selection/document_position；app 块边界、跨宿主几何、Backspace、inline math 及 087 空 inline 槽位）全部通过。（该条为历史计划，已被 2026-11-21 整链验收条目取代）当时剩余验收依赖 091 富剪贴板：080 可在 091 合入后执行复制/粘贴整链、覆盖率与最终评审；Math 内部局部选区不属 080 验收范围（任务 105 跟进）。087 收尾新增的 Qt 端到端空槽渲染用例不改变 080 剩余范围。
+
+## 独立评审
+
+- **跨宿主整链领域评审**（未参与实现，只读）：逐条核对 080 验收与 081/082/083/090/091 证据，确认 Paragraph、Section/Custom、Equation/Align、InlineEnvironment/InlineMath 使用共享位置/顺序/焦点/选区/事务/几何协议，无重复权威状态；整链功能可转 done，需补记录。
+- **剪贴板跨宿主集成领域评审**（未参与实现，只读）：确认 MIME 片段、TeX 回退、外部公式粘贴、单事务/失败原子性行为符合 091/092 契约；要求增强新增 C++ 用例断言（MathTree 内容、InlineMath 占位、ID 重映射、Undo/Redo 整快照），已补齐。
+- **独立最终评审**（未参与实现，只读完整 diff）：确认测试非恒真、夹具 `atomClass` 调整合理、无范围外产品代码；指出记录计数 1995→1996、验收项 58 的矛盾引用、"已知限制" 缺失与历史计划表述，均已修正并复核通过。
+- 限制：分域评审仅有会话内报告，未附独立 PR 评论；最终评审是只读 diff 评审，不等同于独立平台验收。
 
 ## 完成摘要
 
-整链验收已完成：081/082/083 共享三态焦点、文档位置/全序、跨宿主选区与事务、同代几何，以及 090 拖选预览、091 v1 富剪贴板全部合入；Paragraph、Section/Custom、Equation/Align、InlineEnvironment/InlineMath 的跨宿主删除、替换、导航、选区、Undo/Redo 与剪贴板往返均有定向回归。新增 C++ 真实 `QClipboard` Blocks 用例验证完整 MathTree/Align/InlineMath 保真、TeX 回退无 U+FFFC、ID 重映射与一次 Undo/Redo；覆盖率门槛由 Nightly #44865061216 的 Rust 与 native 85% gate 提供；两轮分域评审通过。独立最终评审进行中，完成后本任务转 `done`。未执行的桌面平台/真实跨进程剪贴板验收与 105 跟进项已在验证表如实记录。
+已完成并转 `done`：081/082/083 共享三态焦点、文档位置/全序、跨宿主选区与事务、同代几何，以及 090 拖选预览、091 v1 富剪贴板全部合入；Paragraph、Section/Custom、Equation/Align、InlineEnvironment/InlineMath 的跨宿主删除、替换、导航、选区、Undo/Redo 与剪贴板往返均有定向回归。新增 C++ 真实 `QClipboard` Blocks 用例验证完整 MathTree/Align/InlineMath 保真、TeX 回退无 U+FFFC、ID 重映射与一次 Undo/Redo；覆盖率门槛由 Nightly #44865061216 的 Rust 与 native 85% gate 提供；两轮分域评审与独立最终评审通过，PR #165 CI 适用作业全绿。未执行的桌面平台/真实跨进程剪贴板验收与任务 105 跟进项已在「已知限制与未执行项」如实记录。

@@ -111,7 +111,7 @@
 | 077 | 数学交互 | [数学宿主行框与光标高度统一](task/077-stable-math-caret-height.md) | P1 | 044、074 | M | implemented |
 | 078 | 数学输入 | [数学输入源的拉丁字符等效输出](task/078-math-latin-input-source-parity.md) | P1 | 076 | M | ready |
 | 079 | 数学交互 | [数学多行换行与删除事务](task/079-math-multiline-break-deletion.md) | P1 | 071、074、076 | M | done |
-| 080 | 架构 | [Block/Inline 共享交互底座（Paragraph 为基线）](task/080-shared-host-boundary-interaction.md) | P1 | 071、074、077、081–083、091 | L | in-progress |
+| 080 | 架构 | [Block/Inline 共享交互底座（Paragraph 为基线）](task/080-shared-host-boundary-interaction.md) | P1 | 071、074、077、081–083、091 | L | done |
 | 081 | 编辑交互 | [Block/Inline 共享三态焦点仲裁](task/081-host-three-state-caret-arbitration.md) | P0 | 071、074、077 | M | done |
 | 082 | 架构 | [共享文档位置、全序与宿主定位](task/082-shared-document-position-and-order.md) | P1 | 071、074、077、081 | M | done |
 | 083 | 编辑交互 | [跨宿主选区、编辑事务与几何投影](task/083-cross-host-selection-and-transactions.md) | P1 | 071、074、077、081、082 | L | done |
