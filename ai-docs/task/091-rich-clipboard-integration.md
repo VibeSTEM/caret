@@ -1,6 +1,6 @@
 # 091 — 富剪贴板与数学片段接入
 
-- 状态：implemented
+- 状态：done
 - 依赖：083、092
 - 优先级：P1
 - 创建 / 更新：2026-11-16 / 2026-11-21
@@ -83,6 +83,7 @@ Math 形状（公式内部连续 MathFlow/MathText 局部选区裁切与粘贴�
 | 2026-11-21 | `cargo build --locked -p caret-launcher` + `ctest --test-dir target/native/debug` + 定向 `Qml.ShellLoad` | native MIME 构建与真实 QClipboard 行为 | 通过：20/20；新增 4 个 MIME/外部文本/损坏载荷用例与既有剪贴板用例 PASS；copy text 无 U+FFFC、公式为 TeX 定界符，坏版本载荷拒绝且文档不变 |
 | 2026-11-21 | 两轮分域评审（engine 剪贴板域 + 跨层协议域） | 发现项闭环 | 完成：M1 块粘贴无段落落点、M2 start-clipped caret、P1 非 UTF-8 MIME 载荷、P2 混合文本换行等已修复并补回归；其余低风险项记录在任务 105 |
 | 2026-11-21 | 未参与实现的只读最终评审（两轮 delta 复核） | 可交付、发现项闭环 | 完成：M1/M2/P1/P2 闭环；最终评审发现并修复 end-clipped caret 回归与 `first_paragraph_hint` 文档顺序，补 seam/redo/单 Undo 回归；结论可交付 |
+| 2026-11-21 | GitHub PR [#159](https://github.com/VibeSTEM/caret/pull/159) CI | 全绿色 | 通过：detect paths/cargo audit/format/lint 全部（clippy、clang-tidy、includes、cppcheck、layering、machete、qmllint、math-backend）/check and build 均 pass（cmake 与 selector 按路径跳过）；已 squash 合入 main `5cf2d64e` |
 | — | 覆盖率门槛、真实跨进程/跨平台剪贴板（X11/Wayland/Windows） | 通过/如实记录 | 未执行：覆盖率由 Nightly 验证；跨进程/平台转任务 105 |
 
 ## 风险与回退
@@ -99,4 +100,4 @@ Math 形状（公式内部连续 MathFlow/MathText 局部选区裁切与粘贴�
 
 ## 完成摘要
 
-任务 091 v1 已实现并验证：Caret MIME 双格式（严格版本化片段 + text/plain 回退）、无 U+FFFC 的 TeX 回退、外部纯文本闭合公式识别、ID 重映射、失败原子性与一次粘贴=一条 Undo 的片段事务；Qt 仅读写 MIME、Rust 负责切片/校验。全量门禁与 C++/QML 集成测试通过；v1 非目标（Math 形状与公式内部选区、跨文档主题模板迁移、QML 错误对话框、真实跨进程/跨平台剪贴板）已记录并由任务 105 跟进，未把未执行检查写成通过。
+任务 091 v1 已实现、验证并合入 main（PR [#159](https://github.com/VibeSTEM/caret/pull/159)，squash `5cf2d64e`）：Caret MIME 双格式（严格版本化片段 + text/plain 回退）、无 U+FFFC 的 TeX 回退、外部纯文本闭合公式识别、ID 重映射、失败原子性与一次粘贴=一条 Undo 的片段事务；Qt 仅读写 MIME、Rust 负责切片/校验。全量门禁与 C++/QML 集成测试通过；v1 非目标（Math 形状与公式内部选区、跨文档主题模板迁移、QML 错误对话框、真实跨进程/跨平台剪贴板）已记录并由任务 105 跟进，未把未执行检查写成通过。

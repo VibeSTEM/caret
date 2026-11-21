@@ -111,7 +111,7 @@
 | 077 | 数学交互 | [数学宿主行框与光标高度统一](task/077-stable-math-caret-height.md) | P1 | 044、074 | M | implemented |
 | 078 | 数学输入 | [数学输入源的拉丁字符等效输出](task/078-math-latin-input-source-parity.md) | P1 | 076 | M | ready |
 | 079 | 数学交互 | [数学多行换行与删除事务](task/079-math-multiline-break-deletion.md) | P1 | 071、074、076 | M | done |
-| 080 | 架构 | [Block/Inline 共享交互底座（Paragraph 为基线）](task/080-shared-host-boundary-interaction.md) | P1 | 071、074、077、081–083、091 | L | blocked |
+| 080 | 架构 | [Block/Inline 共享交互底座（Paragraph 为基线）](task/080-shared-host-boundary-interaction.md) | P1 | 071、074、077、081–083、091 | L | ready |
 | 081 | 编辑交互 | [Block/Inline 共享三态焦点仲裁](task/081-host-three-state-caret-arbitration.md) | P0 | 071、074、077 | M | done |
 | 082 | 架构 | [共享文档位置、全序与宿主定位](task/082-shared-document-position-and-order.md) | P1 | 071、074、077、081 | M | done |
 | 083 | 编辑交互 | [跨宿主选区、编辑事务与几何投影](task/083-cross-host-selection-and-transactions.md) | P1 | 071、074、077、081、082 | L | done |
@@ -122,7 +122,7 @@
 | 088 | 数学排版 | [收敛空 InlineMath 插入槽与正文命中优先级](task/088-unify-empty-inline-math-hit-slot.md) | P2 | 087、069 | S | planned |
 | 089 | 行内格式 | [InlineEnvironment 普通 Backspace 清理语义](task/089-inline-environment-backspace-cleanup.md) | P1 | 031、044、075 | S | done |
 | 090 | 画布交互 | [拖选跨公式块/块环境的实时预览](task/090-drag-selection-live-preview.md) | P1 | 027、031、044、083 | M | implemented |
-| 091 | 剪贴板 | [富剪贴板与数学片段接入](task/091-rich-clipboard-integration.md) | P1 | 083、092 | M | implemented |
+| 091 | 剪贴板 | [富剪贴板与数学片段接入](task/091-rich-clipboard-integration.md) | P1 | 083、092 | M | done |
 | 092 | 数学排版 | [共享数学片段转换接口](task/092-checked-math-fragment-converter.md) | P1 | 043 | M | done |
 | 093 | 质量清理 | [全仓 Brooks Sweep 质量清理记录](task/093-brooks-sweep-quality-cleanup.md) | P2 | — | L | done |
 | 094 | 测试 | [关闭已编辑文档事务的行为测试](task/094-close-with-unsaved-changes-tests.md) | P0 | 093 | M | done |
