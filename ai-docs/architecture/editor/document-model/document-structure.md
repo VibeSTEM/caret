@@ -1,10 +1,10 @@
 # 文档树与结构
 
-更新日期：2026-11-09。本文是持久化 DTO、文档树、页面层级及 Block/Inline 内容层次的唯一权威定义。Paragraph 是 `Block` 的一个具体变体，也是结构最简单的块；其他 Block 可拥有更复杂的容器或内部位置。语义草图与具体 Rust/JSON schema 分别说明概念和字段，不照搬 OOXML，也不承诺 DOCX 兼容；内容节点的职责链路见[内容节点代码链路](content-code-path.md)；块环境标题、编号、模板和结构编辑见[块环境模型](document-environments.md)；共享 Block 交互协议及 Paragraph 基线见[块宿主交互](block-interaction.md)。位置与上限见[文档位置](document-position.md)，导航投影见[结构导航](../structure-navigation.md)，载体视图见[环境视图](environment-views.md)，文件格式与写入边界见[`.cdoc` 格式](document-storage.md)。
+更新日期：2026-11-22。本文是持久化 DTO、文档树、页面层级及 Block/Inline 内容层次的唯一权威定义。Paragraph 是 `Block` 的一个具体变体，也是结构最简单的块；其他 Block 可拥有更复杂的容器或内部位置。语义草图与具体 Rust/JSON schema 分别说明概念和字段，不照搬 OOXML，也不承诺 DOCX 兼容；内容节点的职责链路见[内容节点代码链路](content-code-path.md)；块环境标题、编号、模板和结构编辑见[块环境模型](document-environments.md)；共享 Block 交互协议及 Paragraph 基线见[块宿主交互](block-interaction.md)。位置与上限见[文档位置](document-position.md)，导航投影见[结构导航](../structure-navigation.md)，载体视图见[环境视图](environment-views.md)，文件格式与写入边界见[`.cdoc` 格式](document-storage.md)。
 
 ## 持久化树
 
-文档树形 DTO 是 `Document { body: Vec<Block>, page_sections, global_settings }`；`Block` 包含 Paragraph、BlockEnvironment、Equation、Align、ExplicitBreak 和 Opaque。`Paragraph.inlines` 是 `Vec<ParagraphContent>`，文本、行内公式、行内环境、软换行和不透明内容由不同分支承载。块环境与行内环境是不同的 Rust 类型，均没有统一的带 `scope` 字段的 `EnvironmentNode` DTO。Heading 由 Paragraph 的属性识别。Table、Figure 等领域节点由对应模型规范定义。
+文档树形 DTO 是 `Document { body: Vec<Block>, page_sections, global_settings }`；`Block` 包含 Paragraph、BlockEnvironment、Equation、Align、Table、ExplicitBreak 和 Opaque。`Paragraph.inlines` 是 `Vec<ParagraphContent>`，文本、行内公式、行内环境、软换行和不透明内容由不同分支承载。块环境与行内环境是不同的 Rust 类型，均没有统一的带 `scope` 字段的 `EnvironmentNode` DTO。Heading 由 Paragraph 的属性识别。Table、Figure 等领域节点由对应模型规范定义。
 
 `ParagraphContent` 是段落和行内环境使用的有序内容项，包含 `Text(TextFlow)`、`Math(InlineMath)`、`Environment(InlineEnvironment<ParagraphContent>)`、`SoftBreak` 与 `Opaque`。正文与公式文本岛共用 `TextFlow`、Run、字素位置、IME 和行内格式语义；MathFlow 宿主负责固定槽位位置与公式事务。Code 分支由代码模型规范定义。`Paragraph` block 继续持有段落级语言、布局和直接属性；公式文本项的结构和编辑语义见[数学公式](../math.md#公式中的普通文本)。受支持的内容 schema 不为早期临时 inline/TextContent 格式提供转换器。Section 标题仍是 Paragraph block wrapper，Section 正文仍是 `Vec<Block>`。
 
@@ -22,7 +22,8 @@
 
 | 节点层级 | 所属容器 | 内容 |
 | --- | --- | --- |
-| `Block` | 页面内容的有序块流 | `Paragraph`、块级 `EnvironmentNode`、`Equation`、`Align`、显式分页；块环境通过有序 `children` 持有可嵌套块内容 |
+| `Block` | 页面内容的有序块流或单元格块序列 | `Paragraph`、块级 `EnvironmentNode`、`Equation`、`Align`、`Table`、显式分页；块环境通过有序 `children` 持有可嵌套块内容 |
+| `Table` | 块流或块环境的 `children` | 有序 `rows`，每行有序 `cells`，每个单元格通过 `blocks` 持有与正文同构的通用块序列；首版不支持单元格合并 |
 | `ParagraphContent` | Paragraph block 或行内格式环境的有序子项 | `Text(TextFlow)`、`Math(InlineMath)`、`Environment(InlineEnvironment<ParagraphContent>)`、`SoftBreak`、未知行内项 |
 | `TextFlow` | `ParagraphContent::Text` 或 Math `Text(TextFlow)` | 有序 Run 片段及其属性、语言；不含 Math 节点或块级布局。已知 Run 上的未知字段按 `.cdoc` 当前 schema 报错 |
 
@@ -41,6 +42,7 @@ Rust 文件按数据职责和编辑职责对应：
 ```text
 crates/caret-doc/src/model.rs           文档根 DTO 与公开导出
 crates/caret-doc/src/model/block.rs     Block、块环境、显式分页
+crates/caret-doc/src/model/table.rs     Table、行、单元格与单元格块序列
 crates/caret-doc/src/model/paragraph.rs Paragraph 与段落直接布局覆盖
 crates/caret-doc/src/model/run.rs       Run 与 Run 直接属性
 crates/caret-doc/src/model/inline.rs    TextFlow、ParagraphContent / MathContent 与软换行

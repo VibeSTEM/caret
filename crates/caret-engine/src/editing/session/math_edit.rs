@@ -1582,7 +1582,12 @@ fn first_entry_in_blocks(blocks: &[Block]) -> Option<Pos> {
                     return Some(position);
                 }
             }
-            Block::Equation(_) | Block::Align(_) | Block::ExplicitBreak(_) | Block::Opaque(_) => {}
+            // 表格内部首个/末个位置由 045 的容器路径切片接入。
+            Block::Table(_)
+            | Block::Equation(_)
+            | Block::Align(_)
+            | Block::ExplicitBreak(_)
+            | Block::Opaque(_) => {}
         }
     }
     None
@@ -1605,7 +1610,11 @@ fn last_entry_in_blocks(blocks: &[Block]) -> Option<Pos> {
                     return Some(position);
                 }
             }
-            Block::Equation(_) | Block::Align(_) | Block::ExplicitBreak(_) | Block::Opaque(_) => {}
+            Block::Table(_)
+            | Block::Equation(_)
+            | Block::Align(_)
+            | Block::ExplicitBreak(_)
+            | Block::Opaque(_) => {}
         }
     }
     None

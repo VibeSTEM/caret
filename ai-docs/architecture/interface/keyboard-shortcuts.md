@@ -41,12 +41,13 @@ Esc 和 Shift+Esc 由当前焦点作用域处理；事件到达画布后交给 R
 | 逐级扩大选区 | Ctrl+Space | Control+Space |
 | 插入行或列 | Alt+方向键 | Control+Option+Shift+方向键 |
 | 删除列 | Alt+Backspace / Delete | Option+Backspace / Delete |
+| 删除行 | Alt+Shift+Backspace / Delete | Option+Shift+Backspace / Delete |
 
 逐级扩大选区使用物理 Control+Space；macOS 上不是 Command+Space。Qt 的平台修饰键语义映射由画布统一处理。
 
 表格里，上一块 / 下一块（Linux / Windows 的 Ctrl+↑ / ↓、macOS 的 Option+↑ / ↓）先按行移动，到首行或末行才离开表格。单元格之间的移动用结构内移动那一组。
 
-插入行列和删除列只在表格内可用。插入方向以当前单元格为基准：↑ / ↓ 在前 / 后插入行，← / → 在前 / 后插入列。macOS 的 Option+↑ / ↓ 始终用于导航，不插入行。
+插入行列和删除行列只在表格内可用。插入方向以当前单元格为基准：↑ / ↓ 在前 / 后插入行，← / → 在前 / 后插入列。删除列保持 Alt+Backspace / Delete（macOS Option+Backspace / Delete）；删除行使用 Alt+Shift+Backspace / Delete（macOS Option+Shift+Backspace / Delete）。macOS 的 Option+↑ / ↓ 始终用于导航，不插入行。
 
 ## 命令与公式
 

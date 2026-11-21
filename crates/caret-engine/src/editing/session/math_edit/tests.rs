@@ -649,6 +649,7 @@ fn math_tree_has_environment(document: &caret_doc::Document, kind: InlineEnviron
             .content
             .iter()
             .any(|content| content_has_environment(content, kind)),
+        Block::Table(_) => false,
         Block::Align(align) => align.rows.iter().any(|row| {
             row.cells.iter().any(|tree| {
                 tree.root

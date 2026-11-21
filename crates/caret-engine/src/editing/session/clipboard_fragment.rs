@@ -461,6 +461,7 @@ impl Session {
         for (index, block) in blocks.iter().enumerate() {
             path.push(index);
             match block {
+                Block::Table(_) => return Err(EditError::UnsupportedTableContent),
                 Block::Paragraph(paragraph) => {
                     if let Some(unit) = self.copy_paragraph_unit(paragraph, context)? {
                         units.push(unit);
@@ -732,6 +733,7 @@ fn validate_copy_block(block: &Block) -> Result<(), EditError> {
             }
             Ok(())
         }
+        Block::Table(_) => Err(EditError::UnsupportedTableContent),
         Block::ExplicitBreak(explicit_break) => ensure_empty_extra(&explicit_break.extra),
         Block::Opaque(_) => Err(EditError::UnsupportedOpaqueContent),
     }
@@ -784,6 +786,7 @@ fn block_clipboard_text(block: &Block) -> Result<String, EditError> {
             }
             Ok(parts.join("\n"))
         }
+        Block::Table(_) => Err(EditError::UnsupportedTableContent),
         Block::ExplicitBreak(_) => Ok(String::new()),
         Block::Opaque(_) => Err(EditError::UnsupportedOpaqueContent),
     }
@@ -1121,6 +1124,7 @@ fn body_has_paragraph(blocks: &[Block]) -> bool {
             body_has_paragraph(&environment.children)
                 || environment.title.as_ref().is_some_and(|_| true)
         }
+        Block::Table(_) => false,
         Block::Equation(_) | Block::Align(_) | Block::ExplicitBreak(_) | Block::Opaque(_) => false,
     })
 }
@@ -1918,7 +1922,11 @@ fn first_paragraph_hint(blocks: &[Block]) -> Result<Option<PasteCaretHint>, Edit
                     return Ok(Some(result));
                 }
             }
-            Block::Equation(_) | Block::Align(_) | Block::ExplicitBreak(_) | Block::Opaque(_) => {}
+            Block::Equation(_)
+            | Block::Align(_)
+            | Block::Table(_)
+            | Block::ExplicitBreak(_)
+            | Block::Opaque(_) => {}
         }
     }
     Ok(None)
@@ -1941,7 +1949,11 @@ fn last_paragraph_hint(blocks: &[Block]) -> Result<Option<PasteCaretHint>, EditE
                     }));
                 }
             }
-            Block::Equation(_) | Block::Align(_) | Block::ExplicitBreak(_) | Block::Opaque(_) => {}
+            Block::Equation(_)
+            | Block::Align(_)
+            | Block::Table(_)
+            | Block::ExplicitBreak(_)
+            | Block::Opaque(_) => {}
         }
     }
     Ok(None)
@@ -1971,6 +1983,7 @@ fn caret_hint_for_blocks(blocks: &[Block]) -> Result<Option<PasteCaretHint>, Edi
         Block::Align(align) => Some(PasteCaretHint::Block {
             block_id: align.id.clone(),
         }),
+        Block::Table(_) => return Err(EditError::UnsupportedTableContent),
         Block::ExplicitBreak(_) => None,
         Block::Opaque(_) => return Err(EditError::UnsupportedOpaqueContent),
     };
@@ -2007,7 +2020,11 @@ fn last_paragraph_in_environment(
                     return Ok(Some(result));
                 }
             }
-            Block::Equation(_) | Block::Align(_) | Block::ExplicitBreak(_) | Block::Opaque(_) => {}
+            Block::Equation(_)
+            | Block::Align(_)
+            | Block::Table(_)
+            | Block::ExplicitBreak(_)
+            | Block::Opaque(_) => {}
         }
     }
     if let Some(title) = &environment.title {

@@ -167,6 +167,9 @@ fn find_in_blocks(
     for (slot, block) in blocks.iter().enumerate() {
         prefix.push(slot * 2 + 1);
         match block {
+            // 表格结构与单元格定位由 045 的容器路径切片接入；当前切片先保证
+            // 无法识别的表内节点不会被误当成正文节点。
+            Block::Table(_) => {}
             Block::Paragraph(paragraph) if &paragraph.id == id => {
                 let location = location(
                     paragraph.id.clone(),

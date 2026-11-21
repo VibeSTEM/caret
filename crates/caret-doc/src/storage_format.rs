@@ -34,6 +34,7 @@ const KNOWN_FEATURES: &[&str] = &[
     Document::MATH_FEATURE_SYNTAX_V1,
     "caret.paragraph.content-flow.v1",
     "caret.paragraph.layout-settings",
+    Document::TABLE_FEATURE,
     "caret.text.default-font-size",
     "caret.text.language-tags",
     "caret.text.underline",
@@ -47,6 +48,7 @@ fn requires_explicit_feature_declaration(feature: &str) -> bool {
         "caret.paragraph.content-flow.v1"
             | "caret.env.inline-text-templates.v1"
             | "caret.text.underline"
+            | Document::TABLE_FEATURE
     ) || Document::requires_explicit_math_declaration(feature)
 }
 
@@ -443,6 +445,22 @@ fn inspect_block_math_encoding(block: &Value) -> Result<(), DocumentError> {
             Ok(())
         }
         Some("paragraph") => inspect_paragraph_items(object.get("inlines")),
+        Some("table") => {
+            if let Some(rows) = object.get("rows").and_then(Value::as_array) {
+                for cell in rows
+                    .iter()
+                    .filter_map(|row| row.get("cells").and_then(Value::as_array))
+                    .flatten()
+                {
+                    if let Some(blocks) = cell.get("blocks").and_then(Value::as_array) {
+                        for child in blocks {
+                            inspect_block_math_encoding(child)?;
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
         Some("environment")
             if object.get("scope").and_then(Value::as_str) == Some("block")
                 && matches!(
@@ -747,6 +765,11 @@ fn contains_opaque_block(blocks: &[Block]) -> bool {
             row.cells
                 .iter()
                 .any(|tree| contains_opaque_math_flow(&tree.root))
+        }),
+        Block::Table(table) => table.rows.iter().any(|row| {
+            row.cells
+                .iter()
+                .any(|cell| contains_opaque_block(&cell.blocks))
         }),
         Block::ExplicitBreak(_) => false,
     })

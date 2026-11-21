@@ -79,7 +79,7 @@ impl Document {
         }
         let mut count = 0usize;
         for block in &self.body {
-            validate_block(block, 0, &mut ids, &mut count)?;
+            validate_block(block, 0, 0, &mut ids, &mut count)?;
         }
         if validate_template_semantics {
             let templates =
@@ -111,6 +111,15 @@ fn validate_inline_environment_templates(
             }
             for child in &environment.children {
                 validate_inline_environment_templates(child, templates)?;
+            }
+        }
+        Block::Table(table) => {
+            for row in &table.rows {
+                for cell in &row.cells {
+                    for child in &cell.blocks {
+                        validate_inline_environment_templates(child, templates)?;
+                    }
+                }
             }
         }
         Block::Equation(equation) => {
@@ -300,6 +309,7 @@ fn insert_id<'a>(ids: &mut HashSet<&'a str>, id: &'a NodeId) -> Result<(), Model
 fn validate_block<'a>(
     block: &'a Block,
     depth: usize,
+    table_depth: usize,
     ids: &mut HashSet<&'a str>,
     node_count: &mut usize,
 ) -> Result<(), ModelError> {
@@ -325,15 +335,70 @@ fn validate_block<'a>(
                 ));
             }
             for child in &environment.children {
-                validate_block(child, depth + 1, ids, node_count)?;
+                validate_block(child, depth + 1, table_depth, ids, node_count)?;
             }
             if let Some(title) = &environment.title {
                 validate_paragraph(title, depth + 1, ids, node_count)?;
             }
             Ok(())
         }
+        Block::Table(table) => validate_table(table, depth, table_depth, ids, node_count),
         Block::ExplicitBreak(_) | Block::Opaque(_) => Ok(()),
     }
+}
+
+/// 表格行列上限与嵌套上限见文档位置规范。
+const MAX_TABLE_ROWS: usize = 32_767;
+const MAX_TABLE_COLUMNS: usize = 63;
+const MAX_TABLE_NESTING: usize = 24;
+
+/// 校验表格结构；表格树自身的行/单元格不计文档嵌套深度。
+fn validate_table<'a>(
+    table: &'a Table,
+    depth: usize,
+    table_depth: usize,
+    ids: &mut HashSet<&'a str>,
+    node_count: &mut usize,
+) -> Result<(), ModelError> {
+    insert_id(ids, &table.id)?;
+    if table_depth >= MAX_TABLE_NESTING {
+        return Err(ModelError::InvalidDocument(
+            "table nesting limit exceeded".to_owned(),
+        ));
+    }
+    if table.rows.is_empty() || table.rows.len() > MAX_TABLE_ROWS {
+        return Err(ModelError::InvalidDocument(
+            "table must have between 1 and 32767 rows".to_owned(),
+        ));
+    }
+    let column_count = table.rows[0].cells.len();
+    if column_count == 0 || column_count > MAX_TABLE_COLUMNS {
+        return Err(ModelError::InvalidDocument(
+            "table row must have between 1 and 63 cells".to_owned(),
+        ));
+    }
+    for row in &table.rows {
+        insert_id(ids, &row.id)?;
+        count_document_node(node_count)?;
+        if row.cells.len() != column_count {
+            return Err(ModelError::InvalidDocument(
+                "table rows must have the same number of cells".to_owned(),
+            ));
+        }
+        for cell in &row.cells {
+            insert_id(ids, &cell.id)?;
+            count_document_node(node_count)?;
+            if cell.blocks.is_empty() {
+                return Err(ModelError::InvalidDocument(
+                    "table cell must contain at least one block".to_owned(),
+                ));
+            }
+            for child in &cell.blocks {
+                validate_block(child, depth + 1, table_depth + 1, ids, node_count)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_align<'a>(

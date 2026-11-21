@@ -224,6 +224,14 @@ fn validate_known_block(block: &Block) -> Result<(), ModelError> {
             }
             validate_known_blocks(&environment.children)
         }
+        Block::Table(table) => {
+            for row in &table.rows {
+                for cell in &row.cells {
+                    validate_known_blocks(&cell.blocks)?;
+                }
+            }
+            Ok(())
+        }
         Block::ExplicitBreak(explicit_break) => {
             ensure_empty_extra("explicit break", &explicit_break.extra)
         }
@@ -375,6 +383,18 @@ fn regenerate_block_ids(block: &mut Block) {
                 regenerate_block_ids(child);
             }
         }
+        Block::Table(table) => {
+            table.id = NodeId::generate();
+            for row in &mut table.rows {
+                row.id = NodeId::generate();
+                for cell in &mut row.cells {
+                    cell.id = NodeId::generate();
+                    for child in &mut cell.blocks {
+                        regenerate_block_ids(child);
+                    }
+                }
+            }
+        }
         Block::ExplicitBreak(_) | Block::Opaque(_) => {}
     }
 }
@@ -455,6 +475,16 @@ fn block_contains_id(block: &Block, id: &NodeId) -> bool {
                     .children
                     .iter()
                     .any(|child| block_contains_id(child, id))
+        }
+        Block::Table(table) => {
+            table.id == *id
+                || table.rows.iter().any(|row| {
+                    row.id == *id
+                        || row.cells.iter().any(|cell| {
+                            cell.id == *id
+                                || cell.blocks.iter().any(|child| block_contains_id(child, id))
+                        })
+                })
         }
         Block::ExplicitBreak(_) | Block::Opaque(_) => false,
     }

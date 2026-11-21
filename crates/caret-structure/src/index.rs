@@ -268,6 +268,8 @@ impl StructureIndex {
 
     fn collect_block(&mut self, block: &Block, parent_indices: &mut Vec<usize>) {
         match block {
+            // 表格结构索引与单元格段落 ordinal 由 045 的容器路径切片接入。
+            Block::Table(_) => {}
             Block::Paragraph(paragraph) => {
                 self.push_paragraph(
                     &ParagraphAtom::new(paragraph),

@@ -2054,6 +2054,7 @@ fn block_id(block: &Block) -> NodeId {
         Block::Environment(environment) => environment.id.clone(),
         Block::Equation(equation) => equation.id.clone(),
         Block::Align(align) => align.id.clone(),
+        Block::Table(table) => table.id.clone(),
         Block::ExplicitBreak(_) | Block::Opaque(_) => {
             unreachable!("测试块均有稳定身份")
         }

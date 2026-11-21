@@ -178,6 +178,9 @@ impl Session {
                         first,
                     )?;
                 }
+                caret_doc::Block::Table(_) => {
+                    return Err(EditError::UnsupportedTableContent);
+                }
                 caret_doc::Block::Equation(equation)
                     if whole || copy.math_blocks.contains(&equation.id) =>
                 {

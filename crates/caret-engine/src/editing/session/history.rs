@@ -1509,7 +1509,27 @@ fn block_estimated_bytes(block: &Block) -> usize {
             Block::Opaque(value) => size_of_val(value) + value.raw.to_string().len(),
             Block::Equation(value) => equation_estimated_bytes(value),
             Block::Align(value) => align_estimated_bytes(value),
+            Block::Table(table) => table_estimated_bytes(table),
         }
+}
+
+fn table_estimated_bytes(table: &caret_doc::Table) -> usize {
+    size_of_val(table)
+        + table
+            .rows
+            .iter()
+            .map(|row| {
+                size_of_val(row)
+                    + row
+                        .cells
+                        .iter()
+                        .map(|cell| {
+                            size_of_val(cell)
+                                + cell.blocks.iter().map(block_estimated_bytes).sum::<usize>()
+                        })
+                        .sum::<usize>()
+            })
+            .sum::<usize>()
 }
 
 fn inline_estimated_bytes(node: &caret_doc::ParagraphContent) -> usize {

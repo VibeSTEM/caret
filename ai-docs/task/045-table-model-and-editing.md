@@ -1,9 +1,9 @@
 # 045 — M3：表格模型与交互
 
-- 状态：ready
+- 状态：in-progress
 - 依赖：010、021、043、071
 - 优先级：P2
-- 创建 / 更新：2026-10-29 / 2026-11-21
+- 创建 / 更新：2026-10-29 / 2026-11-22
 
 ## 目标与背景
 
@@ -49,6 +49,9 @@
 | 日期 | 环境 / 命令 | 预期 | 实际结果 |
 | --- | --- | --- | --- |
 | — | 表格模型与保存重开测试 | 表格内容和 ID 往返稳定 | 未执行 |
+| 2026-11-22 | `cargo test --locked --offline -p caret-doc --lib` | 表格 DTO 往返、严格字段、结构不变量、能力推导与缺失声明预览 | 通过：113 项；新增表格模型/存储用例 |
+| 2026-11-22 | `cargo test --locked --offline -p caret-engine layout_errors_reject` | 含表文档得到明确 `layout.unsupported_content`，不发布半成品快照 | 通过 |
+| 2026-11-22 | workspace `cargo check --all-targets`；`caret-engine` 931、`caret-structure` 13 项测试 | 新增 Block 变体的全部穷尽匹配点以显式保守语义补齐 | 通过 |
 | — | 表格编辑/导航命令测试 | 边界和失败原子性正确 | 未执行 |
 | — | macOS 表格快捷键检查 | 导航键和插入键按规范工作 | 未执行 |
 
@@ -64,6 +67,9 @@
 
 - 2026-10-29：由 012 拆出表格模型、持久化和编辑交互；公式节点模型复用 043，排版由 044/046 组合。
 - 2026-11-21：依赖 010、021、043、071、073 均已完成，开始条件满足，状态由 planned 改为 ready；M3 唯一缺失的内容类型功能（表格布局/画布与 011/012 验收仍分别由 046、012、011 承接）。
+- 2026-11-22：开始实现（分支 `yuki/task-045-table-model`）。先审计现有 Block 基座（Session 宿主/位置/边界/历史协议）与 `.cdoc` 存储影响面，再按“Table 作为 Block、单元格持 Block 序列、复用共享适配器”的方向落模型与编辑；布局/画布与单元格几何不在本任务。
+- 2026-11-22：确认两个实现决策：① 045 先合并，`\table` 与 Alt+T 在 046 布局完成前保持 UI 不可用；布局层对含表文档返回明确的 `layout.unsupported_content`，Session 级命令与编辑行为照常测试；② 删除行新增快捷键 Alt+Shift+Backspace/Delete（macOS Option+Shift+Backspace/Delete），已先更新[快捷键权威文档](../architecture/interface/keyboard-shortcuts.md)。
+- 2026-11-22：落地 S0（模型与存储）：`caret-doc` 新增 `Table`/`TableRow`/`TableCell` 与 `Block::Table`，手写 codec 严格拒绝未知字段，`Document::validate` 校验行/列上限、矩形行列、单元格非空与表格嵌套 24 层；新增能力 `caret.table.v1`（含单元格内语言/公式/环境能力递归推导、raw 扫描递归、显式声明缺失时只读安全预览）；剪贴板片段拒绝表格、结构范围暂不接受表格对象，避免静默丢内容。新增模型与存储测试；`caret-doc` 113 项、`caret-engine` 931 项、`caret-structure` 13 项通过，workspace `cargo check --all-targets` 通过；含表文档布局门禁由新增用例验证返回 `layout.unsupported_content`。
 
 ## 完成摘要
 

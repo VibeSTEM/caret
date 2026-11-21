@@ -14,6 +14,7 @@ impl Document {
     pub(crate) const MATH_FEATURE_EQUATION: &'static str = "caret.math.equation";
     pub(crate) const MATH_FEATURE_INLINE: &'static str = "caret.math.inline";
     pub(crate) const MATH_FEATURE_SYNTAX_V1: &'static str = "caret.math.syntax.v1";
+    pub(crate) const TABLE_FEATURE: &'static str = "caret.table.v1";
 
     /// 读取器要求在 `requiredFeatures` 中显式声明、否则按格式错误拒绝的数学能力。
     const REQUIRED_EXPLICIT_MATH_FEATURES: &'static [&'static str] = &[
@@ -144,6 +145,11 @@ trait FeatureVisitor {
     fn visit_align(&mut self, _align: &Align) -> bool {
         false
     }
+
+    /// 表格块自身；在遍历其单元格块序列之前访问。
+    fn visit_table(&mut self, _table: &Table) -> bool {
+        false
+    }
 }
 
 /// 块级遍历骨架：按块类型展开段落、公式块、对齐公式与块环境子树。
@@ -171,6 +177,14 @@ fn walk_block(block: &Block, visitor: &mut impl FeatureVisitor) -> bool {
                     .children
                     .iter()
                     .any(|child| walk_block(child, visitor))
+        }
+        Block::Table(table) => {
+            visitor.visit_table(table)
+                || table.rows.iter().any(|row| {
+                    row.cells
+                        .iter()
+                        .any(|cell| cell.blocks.iter().any(|child| walk_block(child, visitor)))
+                })
         }
         Block::ExplicitBreak(_) | Block::Opaque(_) => false,
     }
@@ -269,6 +283,11 @@ impl FeatureVisitor for FeatureCollector<'_> {
         if environment.definition_id.is_some() {
             self.features.insert("caret.env.templates".to_owned());
         }
+        false
+    }
+
+    fn visit_table(&mut self, _table: &Table) -> bool {
+        self.features.insert(Document::TABLE_FEATURE.to_owned());
         false
     }
 

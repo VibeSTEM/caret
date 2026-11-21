@@ -1206,3 +1206,164 @@ fn non_current_math_schema_versions_are_rejected_by_typed_paths() {
     }));
     assert!(document.validate().is_err());
 }
+
+fn table_block_json() -> serde_json::Value {
+    serde_json::json!({
+        "type": "table",
+        "id": "table-1",
+        "rows": [
+            {
+                "id": "row-1",
+                "cells": [
+                    {
+                        "id": "cell-1",
+                        "blocks": [
+                            {
+                                "type": "paragraph",
+                                "id": "paragraph-1",
+                                "inlines": [{
+                                    "type": "text",
+                                    "runs": [{"text": "cell", "props": {}}]
+                                }]
+                            }
+                        ]
+                    },
+                    {
+                        "id": "cell-2",
+                        "blocks": [{
+                            "type": "paragraph",
+                            "id": "paragraph-2",
+                            "inlines": []
+                        }]
+                    }
+                ]
+            },
+            {
+                "id": "row-2",
+                "cells": [
+                    {
+                        "id": "cell-3",
+                        "blocks": [{
+                            "type": "paragraph",
+                            "id": "paragraph-3",
+                            "inlines": []
+                        }]
+                    },
+                    {
+                        "id": "cell-4",
+                        "blocks": [{
+                            "type": "explicitBreak",
+                            "kind": "page"
+                        }]
+                    }
+                ]
+            }
+        ]
+    })
+}
+
+fn table_with(rows: serde_json::Value) -> Block {
+    serde_json::from_value(serde_json::json!({
+        "type": "table",
+        "id": "table-1",
+        "rows": rows
+    }))
+    .expect("table test fixture must parse")
+}
+
+#[test]
+fn table_block_round_trips_rows_cells_and_cell_blocks() {
+    let value = table_block_json();
+    let block: Block = serde_json::from_value(value.clone()).expect("table block must parse");
+    let Block::Table(table) = &block else {
+        panic!("expected a table block");
+    };
+    assert_eq!(table.rows.len(), 2);
+    assert_eq!(table.rows[0].cells.len(), 2);
+    assert_eq!(
+        table.rows[0].cells[0].blocks.len() + table.rows[0].cells[1].blocks.len(),
+        2
+    );
+    let encoded = serde_json::to_value(&block).expect("table block must serialize");
+    // 表格自身不引入默认字段；单元格内段落沿用段落序列化默认值。
+    assert_eq!(encoded["type"], "table");
+    assert!(encoded["rows"].is_array());
+    assert!(encoded["rows"][0]["cells"].is_array());
+    assert!(encoded["rows"][0]["cells"][0]["blocks"].is_array());
+    let reparsed: Block = serde_json::from_value(encoded).expect("encoded table must parse");
+    assert_eq!(reparsed, block);
+}
+
+#[test]
+fn table_known_structures_reject_unknown_fields() {
+    let mut table_extra = table_block_json();
+    table_extra["vendorField"] = serde_json::json!(true);
+    let mut row_extra = table_block_json();
+    row_extra["rows"][0]["vendorField"] = serde_json::json!(true);
+    let mut cell_extra = table_block_json();
+    cell_extra["rows"][0]["cells"][0]["vendorField"] = serde_json::json!(true);
+    for value in [table_extra, row_extra, cell_extra] {
+        let error = serde_json::from_value::<Block>(value)
+            .expect_err("unknown table fields must be rejected");
+        assert!(
+            error.to_string().contains("unknown fields"),
+            "unexpected error: {error}"
+        );
+    }
+}
+
+fn validate_table_body(block: Block) -> Result<(), super::ModelError> {
+    let mut document = Document::blank();
+    document.body = vec![block];
+    document.validate()
+}
+
+#[test]
+fn table_validation_rejects_empty_and_non_rectangular_rows() {
+    let empty = table_with(serde_json::json!([]));
+    assert!(validate_table_body(empty).is_err());
+
+    let rag = table_with(serde_json::json!([
+        {"id": "row-1", "cells": [
+            {"id": "cell-1", "blocks": [{"type": "paragraph", "id": "p-1", "inlines": []}]},
+            {"id": "cell-2", "blocks": [{"type": "paragraph", "id": "p-2", "inlines": []}]}
+        ]},
+        {"id": "row-2", "cells": [
+            {"id": "cell-3", "blocks": [{"type": "paragraph", "id": "p-3", "inlines": []}]}
+        ]}
+    ]));
+    assert!(validate_table_body(rag).is_err());
+}
+
+#[test]
+fn table_validation_rejects_empty_cells_and_duplicate_ids() {
+    let empty_cell = table_with(serde_json::json!([
+        {"id": "row-1", "cells": [
+            {"id": "cell-1", "blocks": []},
+            {"id": "cell-2", "blocks": [{"type": "paragraph", "id": "p-1", "inlines": []}]}
+        ]}
+    ]));
+    assert!(validate_table_body(empty_cell).is_err());
+
+    let duplicate = table_with(serde_json::json!([
+        {"id": "row-1", "cells": [
+            {"id": "cell-1", "blocks": [{"type": "paragraph", "id": "p-1", "inlines": []}]},
+            {"id": "cell-1", "blocks": [{"type": "paragraph", "id": "p-2", "inlines": []}]}
+        ]}
+    ]));
+    assert!(validate_table_body(duplicate).is_err());
+}
+
+#[test]
+fn valid_table_contributes_the_capability_and_validates() {
+    let block: Block = serde_json::from_value(table_block_json()).expect("table must parse");
+    let mut document = Document::blank();
+    document.body = vec![block];
+    document.validate().expect("valid table must validate");
+    assert!(
+        document
+            .required_features()
+            .iter()
+            .any(|feature| feature == "caret.table.v1")
+    );
+}

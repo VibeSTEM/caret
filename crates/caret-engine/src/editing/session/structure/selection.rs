@@ -1051,7 +1051,12 @@ fn find_inline_math_in_blocks_mut<'a>(
                     return Some(math);
                 }
             }
-            Block::Equation(_) | Block::Align(_) | Block::ExplicitBreak(_) | Block::Opaque(_) => {}
+            // 单元格内公式在 045 的 S2 容器路径切片接入。
+            Block::Table(_)
+            | Block::Equation(_)
+            | Block::Align(_)
+            | Block::ExplicitBreak(_)
+            | Block::Opaque(_) => {}
         }
     }
     None
@@ -1078,6 +1083,7 @@ fn find_inline_math_paragraph_id(blocks: &[Block], math_id: &NodeId) -> Option<N
                 }
             }
             Block::Paragraph(_)
+            | Block::Table(_)
             | Block::Equation(_)
             | Block::Align(_)
             | Block::ExplicitBreak(_)

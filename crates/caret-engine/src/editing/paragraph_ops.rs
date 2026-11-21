@@ -71,6 +71,9 @@ fn collect_locations(
     for (block_index, block) in blocks.iter().enumerate() {
         parent_path.push(block_index);
         match block {
+            // 单元格段落的容器路径由 045 的 S1 切片接入；本切片先不把表内
+            // 段落误投成正文段落。
+            Block::Table(_) => {}
             Block::Paragraph(paragraph) => {
                 index.insert(
                     paragraph.id.clone(),
@@ -224,6 +227,8 @@ fn collect_block_locations(
     index: &mut ParagraphIndex,
 ) {
     match block {
+        // 见 collect_locations：表内段落的索引在容器路径切片接入。
+        Block::Table(_) => {}
         Block::Paragraph(paragraph) => {
             index.insert(
                 paragraph.id.clone(),
@@ -452,6 +457,8 @@ pub(super) fn first_paragraph(blocks: &[Block]) -> Option<(&Paragraph, StoryId)>
                 }
             }
             Block::ExplicitBreak(_) | Block::Opaque(_) | Block::Equation(_) | Block::Align(_) => {}
+            // 表格内部首个段落由 045 的容器路径切片接入。
+            Block::Table(_) => {}
         }
     }
     None
