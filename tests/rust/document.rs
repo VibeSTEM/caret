@@ -531,3 +531,47 @@ fn must<T, E: std::fmt::Debug>(result: Result<T, E>) -> T {
         Err(error) => panic!("unexpected error: {error:?}"),
     }
 }
+
+#[test]
+fn table_document_round_trips_through_cdoc_storage() {
+    let table: caret_doc::Block = serde_json::from_value(json!({
+        "type": "table",
+        "id": "table-1",
+        "rows": [{
+            "id": "row-1",
+            "cells": [
+                {"id": "cell-1", "blocks": [
+                    {"type": "paragraph", "id": "cell-paragraph-1", "inlines": [
+                        {"type": "text", "runs": [{"text": "cell", "props": {}}]},
+                        {"type": "inlineMath", "id": "inline-1", "mathTree": {
+                            "schemaVersion": caret_doc::MATH_TREE_SCHEMA_VERSION,
+                            "root": {"id": "math-root", "content": []}
+                        }}
+                    ]},
+                    {"type": "equation", "id": "equation-1", "mathTree": {
+                        "schemaVersion": caret_doc::MATH_TREE_SCHEMA_VERSION,
+                        "root": {"id": "equation-root", "content": []}
+                    }}
+                ]},
+                {"id": "cell-2", "blocks": [
+                    {"type": "paragraph", "id": "cell-paragraph-2", "inlines": []}
+                ]}
+            ]
+        }]
+    }))
+    .unwrap_or_else(|error| panic!("table fixture must parse: {error}"));
+    let mut document = Document::blank();
+    document.body.push(table);
+    let file = must(CdocFile::new(document));
+    let bytes = must(file.to_bytes());
+    let reopened = must(open(&bytes));
+    let OpenedDocument::Editable(reopened) = reopened else {
+        panic!("table document with declared capability must reopen editable");
+    };
+    assert_eq!(reopened.document(), file.document());
+    let Some(caret_doc::Block::Table(table)) = reopened.document().body.last() else {
+        panic!("table block must survive the round trip");
+    };
+    assert_eq!(table.rows[0].cells.len(), 2);
+    assert_eq!(table.rows[0].cells[0].blocks.len(), 2);
+}

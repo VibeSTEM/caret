@@ -2831,3 +2831,70 @@ fn section_creation_then_enter_keeps_environment_view_resolvable() {
         .unwrap_or_else(|error| panic!("environment view must resolve: {error}"));
     let _ = InlineEnvironmentKind::Bold;
 }
+
+#[test]
+fn table_cell_accepts_inline_math_and_align_blocks() {
+    let (document, table_id, row_id, cell_id, paragraph_id) = table_document_for_session();
+    let mut session =
+        Session::new(document).unwrap_or_else(|error| panic!("table document must open: {error}"));
+    let story = StoryId::TableCell {
+        table_id: table_id.clone(),
+        row_id: row_id.clone(),
+        cell_id: cell_id.clone(),
+    };
+    let position = Pos {
+        story: story.clone(),
+        paragraph_id: paragraph_id.clone(),
+        offset: 3,
+        affinity: Affinity::Downstream,
+    };
+    session
+        .set_selection(Some(Selection {
+            anchor: position.clone(),
+            focus: position,
+        }))
+        .unwrap_or_else(|error| panic!("cell caret must be valid: {error}"));
+    session
+        .run(Command::InsertInlineMath("x".to_owned()))
+        .unwrap_or_else(|error| panic!("cell inline math must insert: {error}"));
+    let cell_blocks = caret_structure::block_list_by_table_cell(
+        &session.document.body,
+        &[],
+        &table_id,
+        &row_id,
+        &cell_id,
+    )
+    .unwrap_or_else(|| panic!("cell blocks must resolve"));
+    let inline_math = cell_blocks.iter().find_map(|block| match block {
+        Block::Paragraph(paragraph) => paragraph.inlines.iter().find_map(|content| match content {
+            ParagraphContent::Math(math) => Some(math),
+            _ => None,
+        }),
+        _ => None,
+    });
+    assert!(
+        inline_math.is_some(),
+        "cell paragraph must hold inline math"
+    );
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("cell inline math undo must succeed: {error}"));
+
+    session
+        .insert_display_math(true)
+        .unwrap_or_else(|error| panic!("cell align insertion must succeed: {error}"));
+    let cell_blocks = caret_structure::block_list_by_table_cell(
+        &session.document.body,
+        &[],
+        &table_id,
+        &row_id,
+        &cell_id,
+    )
+    .unwrap_or_else(|| panic!("cell blocks must resolve"));
+    assert!(
+        cell_blocks
+            .iter()
+            .any(|block| matches!(block, Block::Align(_))),
+        "align block must be inserted inside the cell"
+    );
+}
