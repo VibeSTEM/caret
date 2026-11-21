@@ -39,6 +39,11 @@ jobs:
       - if: runner.os == 'Linux'
         uses: ./.github/actions/linux-gl-prereqs
       - uses: ./.github/actions/caret-cache-restore
+      - name: Install virtual X server for Linux smoke
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/linux-apt-install
+        with:
+          packages: xvfb
       - name: Set macOS deployment target
         if: runner.os == 'macOS'
         run: echo "MACOSX_DEPLOYMENT_TARGET=14.4" >> "$GITHUB_ENV"
@@ -195,7 +200,8 @@ jobs:
           test -f "$licenses/JetBrains-Mono-OFL.txt"
           test -f "$licenses/STIX-Two-Math-OFL.txt"
           if [[ "$RUNNER_OS" == Linux ]]; then
-            QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software "$binary" --quit-after-load
+            # 便携包只部署 xcb 平台插件；offscreen 不在安装树时用 Xvfb 跑真实 xcb 冒烟。
+            xvfb-run -a env QT_QPA_PLATFORM=xcb QT_QUICK_BACKEND=software "$binary" --quit-after-load
           else
             QT_QUICK_BACKEND=software "$binary" --quit-after-load
           fi
