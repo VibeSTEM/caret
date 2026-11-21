@@ -1442,7 +1442,35 @@ fn table_cell_glyphs_and_borders_use_cell_geometry() {
     let glyphs = snapshot
         .page_glyphs(0)
         .unwrap_or_else(|error| panic!("table glyph extraction must succeed: {error}"));
-    assert!(glyphs.shapes.len() >= 4, "table borders must emit shapes");
+    // 1×2 表格：外框左右 + 中间列分隔 = 3 条竖线；外框上下 = 2 条横线。
+    assert_eq!(
+        glyphs.shapes.len(),
+        5,
+        "table borders must emit exact rule lines"
+    );
+    let page = &snapshot.pages[0];
+    let mut vertical_xs = glyphs
+        .shapes
+        .iter()
+        .filter(|shape| {
+            matches!(shape.kind, super::PageMathShapeKind::Line) && shape.dy_pt.abs() > f64::EPSILON
+        })
+        .map(|shape| shape.x_pt)
+        .collect::<Vec<_>>();
+    vertical_xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    assert!((vertical_xs.first().copied().unwrap_or_default() - page.margin_left_pt).abs() < 1e-6);
+    let grid = snapshot
+        .table_layouts
+        .values()
+        .next()
+        .unwrap_or_else(|| panic!("table grid must be registered"));
+    let last_vertical = vertical_xs.last().copied().unwrap_or_default();
+    assert!(
+        (last_vertical - (page.margin_left_pt + grid.width_pt)).abs() < 1e-6,
+        "last vertical {last_vertical} vs margin {} + grid {}; xs={vertical_xs:?}",
+        page.margin_left_pt,
+        grid.width_pt,
+    );
     let first_x = |paragraph_id: &NodeId| {
         glyphs
             .runs

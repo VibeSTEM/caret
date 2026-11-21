@@ -177,8 +177,6 @@ pub struct TableFragment {
     pub x_offset_pt: f32,
     /// 表格原点相对页面内容区顶部的偏移，单位为 pt；续页时可为负。
     pub y_offset_pt: f32,
-    /// 完整表格网格几何；渲染/命中用 `row_range` 过滤。
-    pub layout: std::sync::Arc<TableGridLayout>,
 }
 
 /// 一个页面上的段落行片段及其推进高度。
@@ -308,7 +306,6 @@ pub fn paginate_paragraphs(
                 if !(current.used_height_pt + table.layout.height_pt as f32).is_finite() {
                     return Err(PaginationError::InvalidTable);
                 }
-                let layout = std::sync::Arc::new(table.layout.clone());
                 let mut first_row = true;
                 for (row_index, row) in table.layout.rows.iter().enumerate() {
                     let row_height = row.height_pt as f32;
@@ -344,7 +341,6 @@ pub fn paginate_paragraphs(
                             row_range: row_index..row_index + 1,
                             x_offset_pt: table.x_offset_pt,
                             y_offset_pt,
-                            layout: std::sync::Arc::clone(&layout),
                         }),
                     }
                     page.used_height_pt = page.used_height_pt + pending_space_pt + row_height;

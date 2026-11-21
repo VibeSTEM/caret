@@ -33,6 +33,8 @@ pub enum EditError {
     UnsupportedTableContent,
     /// 单元格内公式编辑与导航依赖 046 的单元格画布/几何，当前明确拒绝而不是进入坏状态。
     UnsupportedTableCellMath,
+    /// 当前焦点不能插入表格（标题、单元格内或非正文宿主），拒绝而不是造出不可布局文档。
+    TableInsertionUnsupported,
     UnknownCommand,
 }
 
@@ -62,6 +64,7 @@ impl Display for EditError {
             Self::ClipboardMathLoss(reason) => write!(f, "clipboard.math_loss: {reason}"),
             Self::UnsupportedTableContent => f.write_str("edit.table_content_unsupported"),
             Self::UnsupportedTableCellMath => f.write_str("edit.table_cell_math_unsupported"),
+            Self::TableInsertionUnsupported => f.write_str("edit.table_insertion_unsupported"),
             Self::UnknownCommand => f.write_str("edit.unknown_command"),
         }
     }

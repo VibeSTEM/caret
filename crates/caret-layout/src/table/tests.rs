@@ -10,7 +10,7 @@ use super::{
 
 fn options() -> TableLayoutOptions {
     TableLayoutOptions {
-        content_width_pt: 200.0,
+        available_width_pt: 200.0,
         column_count: 2,
         cell_padding_pt: 4.0,
         border_width_pt: 1.0,
@@ -49,15 +49,16 @@ fn equal_columns_and_padded_cell_boxes_are_derived_from_content_width() {
     )
     .unwrap_or_else(|error| panic!("table grid must layout: {error}"));
 
-    close(layout.width_pt, 210.0);
+    close(layout.width_pt, 200.0);
+    assert!(layout.width_pt <= options().available_width_pt);
     close(layout.columns[0].0, 5.0);
-    close(layout.columns[1].0, 105.0);
-    close(layout.columns[0].1, 100.0);
+    close(layout.columns[1].0, 100.0);
+    close(layout.columns[0].1, 95.0);
 
     let first = &layout.rows[0].cells[0];
     close(first.content_x_pt, 5.0);
     close(first.content_y_pt, 5.0);
-    close(first.content_width_pt, 100.0);
+    close(first.content_width_pt, 95.0);
     close(first.content_height_pt, 20.0);
     close(first.first_baseline_y_pt, 19.0);
     close(layout.rows[0].top_pt, 1.0);
@@ -71,7 +72,7 @@ fn equal_columns_and_padded_cell_boxes_are_derived_from_content_width() {
 #[test]
 fn minimum_column_width_widens_the_table_and_reports_geometry() {
     let mut options = options();
-    options.content_width_pt = 30.0;
+    options.available_width_pt = 30.0;
     options.column_count = 3;
     options.minimum_column_width_pt = 20.0;
     options.column_gap_pt = 2.0;

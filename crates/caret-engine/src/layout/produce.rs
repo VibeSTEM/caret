@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
+use super::table_layout::{ShapedParagraphs, ShapedTable, expand_table_fragments};
 use super::*;
 
 impl LaidOutParagraph {
@@ -91,26 +92,6 @@ impl LaidOutParagraph {
     }
 }
 
-const TABLE_CELL_PADDING_PT: f64 = 4.0;
-const TABLE_BORDER_WIDTH_PT: f64 = 0.5;
-const TABLE_MIN_COLUMN_WIDTH_PT: f64 = 24.0;
-
-fn table_layout_options(
-    content_width_pt: f32,
-    column_count: usize,
-) -> caret_layout::TableLayoutOptions {
-    caret_layout::TableLayoutOptions {
-        content_width_pt: f64::from(content_width_pt),
-        column_count,
-        cell_padding_pt: TABLE_CELL_PADDING_PT,
-        border_width_pt: TABLE_BORDER_WIDTH_PT,
-        column_gap_pt: 0.0,
-        minimum_column_width_pt: TABLE_MIN_COLUMN_WIDTH_PT,
-        minimum_row_ascent_pt: 10.0,
-        minimum_row_descent_pt: 4.0,
-    }
-}
-
 const LINE_GRID_LATIN_SAMPLE: char = 'M';
 // 零推进行内文本岛使用独立的透明推进，保留可与相邻正文区分的点击槽位。
 const EMPTY_INLINE_MATH_CARET_ADVANCE_PT: f32 = 1.5;
@@ -118,9 +99,9 @@ const EMPTY_INLINE_MATH_CARET_ADVANCE_PT: f32 = 1.5;
 /// 可复用塑形器；调用方跨文档代际复用字体目录，避免按段落扫描系统字体。
 #[derive(Default)]
 pub struct DocumentLayoutService {
-    layouter: ParagraphLayouter,
+    pub(super) layouter: ParagraphLayouter,
     line_grid_metrics_cache: Option<LineGridMetricsCache>,
-    math_layout_engine: Option<caret_math::layout::MathLayoutEngine>,
+    pub(super) math_layout_engine: Option<caret_math::layout::MathLayoutEngine>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -131,10 +112,21 @@ struct LineGridMetricsCache {
     metrics: caret_layout::FontLineMetrics,
 }
 
-struct ParagraphShapingSettings<'a> {
-    base_style: &'a ShapingStyle,
-    text_settings: &'a ResolvedDocumentTextSettings,
-    content_width_pt: f32,
+pub(super) struct ParagraphShapingSettings<'a> {
+    pub(super) base_style: &'a ShapingStyle,
+    pub(super) text_settings: &'a ResolvedDocumentTextSettings,
+    pub(super) content_width_pt: f32,
+}
+
+/// 单个段落的塑形请求；把可选复用、文档与样式设置收束成一条稳定入口。
+pub(super) struct ParagraphShapingRequest<'a> {
+    pub(super) document: &'a Document,
+    pub(super) paragraph: &'a Paragraph,
+    pub(super) story: StoryId,
+    pub(super) environment_ids: &'a [NodeId],
+    pub(super) width_pt: f32,
+    pub(super) reuse: Option<(&'a DocumentLayoutSnapshot, Option<&'a NodeId>)>,
+    pub(super) settings: &'a ParagraphShapingSettings<'a>,
 }
 
 impl DocumentLayoutService {
@@ -142,7 +134,7 @@ impl DocumentLayoutService {
         Self::default()
     }
 
-    fn resolve_line_grid_metrics(
+    pub(super) fn resolve_line_grid_metrics(
         &mut self,
         catalog: &mut FontCatalog,
         settings: &ResolvedDocumentTextSettings,
@@ -305,14 +297,16 @@ impl DocumentLayoutService {
                     width_pt,
                 } => {
                     let (laid_out, style) = self.shape_paragraph(
-                        document,
-                        paragraph,
-                        story.clone(),
-                        environment_ids,
-                        *width_pt,
-                        reuse,
                         catalog,
-                        &settings,
+                        ParagraphShapingRequest {
+                            document,
+                            paragraph,
+                            story: story.clone(),
+                            environment_ids,
+                            width_pt: *width_pt,
+                            reuse,
+                            settings: &settings,
+                        },
                     )?;
                     paragraphs.push(laid_out);
                     resolved_styles.push(style);
@@ -324,20 +318,22 @@ impl DocumentLayoutService {
                     space_after_pt,
                 } => {
                     let (laid_out, styles, shaped) = self.shape_table(
-                        document,
-                        table,
-                        environment_ids,
-                        *space_before_pt,
-                        *space_after_pt,
-                        reuse,
                         catalog,
-                        &settings,
+                        super::table_layout::TableShapingRequest {
+                            document,
+                            table,
+                            environment_ids,
+                            space_before_pt: *space_before_pt,
+                            space_after_pt: *space_after_pt,
+                            reuse,
+                            settings: &settings,
+                        },
                     )?;
                     for (paragraph, style) in laid_out.into_iter().zip(styles) {
                         paragraphs.push(paragraph);
                         resolved_styles.push(style);
                     }
-                    shaped_tables.push(shaped);
+                    shaped_tables.extend(shaped);
                 }
                 LayoutInput::ExplicitBreak | LayoutInput::MathBlock { .. } => {}
             }
@@ -346,18 +342,20 @@ impl DocumentLayoutService {
         Ok((paragraphs, resolved_styles, shaped_tables))
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn shape_paragraph(
+    pub(super) fn shape_paragraph(
         &mut self,
-        document: &Document,
-        paragraph: &Paragraph,
-        story: StoryId,
-        environment_ids: &[NodeId],
-        width_pt: f32,
-        reuse: Option<(&DocumentLayoutSnapshot, Option<&NodeId>)>,
         catalog: &mut FontCatalog,
-        settings: &ParagraphShapingSettings<'_>,
+        request: ParagraphShapingRequest<'_>,
     ) -> Result<(LaidOutParagraph, ResolvedParagraphStyle), DocumentLayoutError> {
+        let ParagraphShapingRequest {
+            document,
+            paragraph,
+            story,
+            environment_ids,
+            width_pt,
+            reuse,
+            settings,
+        } = request;
         let ParagraphShapingSettings {
             base_style,
             text_settings,
@@ -461,134 +459,6 @@ impl DocumentLayoutService {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn shape_table(
-        &mut self,
-        document: &Document,
-        table: &caret_doc::Table,
-        environment_ids: &[NodeId],
-        space_before_pt: f32,
-        space_after_pt: f32,
-        reuse: Option<(&DocumentLayoutSnapshot, Option<&NodeId>)>,
-        catalog: &mut FontCatalog,
-        settings: &ParagraphShapingSettings<'_>,
-    ) -> Result<
-        (
-            Vec<LaidOutParagraph>,
-            Vec<ResolvedParagraphStyle>,
-            ShapedTable,
-        ),
-        DocumentLayoutError,
-    > {
-        let column_count = table.rows.first().map_or(0, |row| row.cells.len());
-        if column_count == 0 {
-            return Err(DocumentLayoutError::UnsupportedContent);
-        }
-        let options = table_layout_options(settings.content_width_pt, column_count);
-        let column_width_pt = caret_layout::table_column_width_pt(&options)
-            .map_err(|error| DocumentLayoutError::Pagination(error.to_string()))?;
-        let line_grid_metrics = self.resolve_line_grid_metrics(
-            catalog,
-            settings.text_settings,
-            settings.base_style,
-            settings.text_settings.default_language(),
-        )?;
-        let table_id = table.id.clone();
-        let mut paragraphs = Vec::new();
-        let mut styles = Vec::new();
-        let mut measured_rows = Vec::with_capacity(table.rows.len());
-        let mut shaped_rows = Vec::with_capacity(table.rows.len());
-        for row in &table.rows {
-            let mut measured_cells = Vec::with_capacity(row.cells.len());
-            let mut shaped_cells = Vec::with_capacity(row.cells.len());
-            for cell in &row.cells {
-                let story = StoryId::TableCell {
-                    table_id: table_id.clone(),
-                    row_id: row.id.clone(),
-                    cell_id: cell.id.clone(),
-                };
-                let mut cell_paragraphs = Vec::new();
-                let mut paragraph_offsets = Vec::new();
-                let mut content_height_pt = 0.0_f64;
-                let mut previous_space_after_pt = 0.0_f64;
-                for block in &cell.blocks {
-                    let Block::Paragraph(paragraph) = block else {
-                        // 单元格内公式/环境/嵌套表的布局随 046 后续切片接入；
-                        // 当前明确拒绝而不是静默漏画。
-                        return Err(DocumentLayoutError::UnsupportedContent);
-                    };
-                    let (laid_out, style) = self.shape_paragraph(
-                        document,
-                        paragraph,
-                        story.clone(),
-                        environment_ids,
-                        column_width_pt as f32,
-                        reuse,
-                        catalog,
-                        settings,
-                    )?;
-                    let index = paragraphs.len();
-                    let paragraph_height_pt = laid_out
-                        .layout
-                        .paragraph
-                        .lines
-                        .iter()
-                        .map(|line| f64::from(line.metrics.height_pt))
-                        .sum::<f64>();
-                    let space_before_pt = f64::from(style.space_before_pt);
-                    if !cell_paragraphs.is_empty() {
-                        content_height_pt += previous_space_after_pt.max(space_before_pt);
-                    }
-                    paragraph_offsets.push(content_height_pt);
-                    content_height_pt += paragraph_height_pt;
-                    previous_space_after_pt = f64::from(style.space_after_pt);
-                    paragraphs.push(laid_out);
-                    styles.push(style);
-                    cell_paragraphs.push(index);
-                }
-                if cell_paragraphs.is_empty() {
-                    return Err(DocumentLayoutError::UnsupportedContent);
-                }
-                let first_baseline_pt = paragraph_offsets.first().copied().unwrap_or(0.0)
-                    + f64::from(
-                        paragraphs[*cell_paragraphs.first().unwrap_or(&0)]
-                            .layout
-                            .paragraph
-                            .lines
-                            .first()
-                            .map_or(0.0, |line| line.metrics.baseline_pt),
-                    );
-                measured_cells.push(caret_layout::TableCellMeasurement {
-                    content_height_pt,
-                    first_baseline_pt,
-                });
-                shaped_cells.push(ShapedTableCell {
-                    paragraphs: cell_paragraphs,
-                    paragraph_offsets,
-                });
-            }
-            measured_rows.push(caret_layout::TableRowMeasurement {
-                cells: measured_cells,
-            });
-            shaped_rows.push(ShapedTableRow {
-                cells: shaped_cells,
-            });
-        }
-        let _ = line_grid_metrics;
-        let grid = caret_layout::layout_table_grid(&measured_rows, options)
-            .map_err(|error| DocumentLayoutError::Pagination(error.to_string()))?;
-        Ok((
-            paragraphs,
-            styles,
-            ShapedTable {
-                table_id,
-                grid,
-                rows: shaped_rows,
-                space_before_pt,
-                space_after_pt,
-            },
-        ))
-    }
-
     fn layout_with_reuse(
         &mut self,
         document: &Document,
@@ -738,6 +608,10 @@ impl DocumentLayoutService {
         );
         let math_projection_index = MathProjectionIndex::new(math_projections);
         let text_diagnostics = collect_text_layout_diagnostics(&paragraphs, &math_blocks);
+        let table_layouts = shaped_tables
+            .iter()
+            .map(|table| (table.table_id.clone(), std::sync::Arc::clone(&table.grid)))
+            .collect();
         Ok(DocumentLayoutSnapshot {
             session_id: None,
             document_generation,
@@ -753,6 +627,7 @@ impl DocumentLayoutService {
             pages: page_geometries.pages,
             environment_ranges: page_geometries.environment_ranges,
             math_blocks,
+            table_layouts,
             math_block_text_layouts,
             math_block_sources,
             math_hosts,
@@ -804,7 +679,7 @@ impl PageGeometries {
                             caret_layout::TablePaginationInput {
                                 table_id: &shaped.table_id,
                                 x_offset_pt,
-                                layout: &shaped.grid,
+                                layout: shaped.grid.as_ref(),
                                 space_before_pt: shaped.space_before_pt,
                                 space_after_pt: shaped.space_after_pt,
                             },
@@ -949,88 +824,6 @@ impl MathProjectionIndex {
             by_id,
         }
     }
-}
-
-/// 把表格片段展开为单元格段落的页面行位置与绘制片段，并写入同一几何来源。
-fn expand_table_fragments(
-    pages: &mut [PageLayoutSnapshot],
-    shaped_tables: &[ShapedTable],
-    paragraphs: &mut [LaidOutParagraph],
-) -> Result<(), DocumentLayoutError> {
-    for (page_index, page) in pages.iter_mut().enumerate() {
-        let fragments = page.layout.table_fragments.clone();
-        for fragment in fragments {
-            let Some(shaped) = shaped_tables
-                .iter()
-                .find(|table| table.table_id == fragment.table_id)
-            else {
-                return Err(DocumentLayoutError::InvalidDocument("missing table".into()));
-            };
-            let origin_x_pt = page.margin_left_pt + f64::from(fragment.x_offset_pt);
-            let origin_y_pt = page.margin_top_pt + f64::from(fragment.y_offset_pt);
-            for row_index in fragment.row_range.clone() {
-                let Some(shaped_row) = shaped.rows.get(row_index) else {
-                    continue;
-                };
-                let Some(grid_row) = shaped.grid.rows.get(row_index) else {
-                    continue;
-                };
-                for (cell_index, shaped_cell) in shaped_row.cells.iter().enumerate() {
-                    let Some(grid_cell) = grid_row.cells.get(cell_index) else {
-                        continue;
-                    };
-                    let content_x_pt = origin_x_pt + grid_cell.content_x_pt;
-                    let content_y_pt = origin_y_pt + grid_cell.content_y_pt;
-                    let clip = [
-                        content_x_pt,
-                        origin_y_pt + grid_row.top_pt,
-                        content_x_pt + grid_cell.content_width_pt,
-                        origin_y_pt + grid_row.top_pt + grid_row.height_pt,
-                    ];
-                    for (paragraph_offset, paragraph_index) in
-                        shaped_cell.paragraphs.iter().enumerate()
-                    {
-                        let Some(paragraph) = paragraphs.get_mut(*paragraph_index) else {
-                            continue;
-                        };
-                        let paragraph_y_pt = content_y_pt
-                            + shaped_cell
-                                .paragraph_offsets
-                                .get(paragraph_offset)
-                                .copied()
-                                .unwrap_or(0.0);
-                        let mut y0_pt = paragraph_y_pt;
-                        for (line_index, line) in
-                            paragraph.layout.paragraph.lines.iter().enumerate()
-                        {
-                            if let Some(location) = paragraph.line_locations.get_mut(line_index) {
-                                *location = Some(CaretLineLocation {
-                                    page_index,
-                                    x0_pt: content_x_pt,
-                                    y0_pt,
-                                    clip: Some(clip),
-                                });
-                            }
-                            y0_pt += f64::from(line.metrics.height_pt);
-                        }
-                        page.layout.fragments.push(caret_layout::ParagraphFragment {
-                            paragraph_id: paragraph.id.clone(),
-                            line_range: 0..paragraph.layout.paragraph.lines.len(),
-                            x_offset_pt: (content_x_pt - page.margin_left_pt) as f32,
-                            y_offset_pt: (paragraph_y_pt - page.margin_top_pt) as f32,
-                            clip: Some(caret_layout::FragmentClip {
-                                x0_pt: (clip[0] - page.margin_left_pt) as f32,
-                                y0_pt: (clip[1] - page.margin_top_pt) as f32,
-                                x1_pt: (clip[2] - page.margin_left_pt) as f32,
-                                y1_pt: (clip[3] - page.margin_top_pt) as f32,
-                            }),
-                        });
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
 }
 
 fn collect_math_hosts(blocks: &[Block], hosts: &mut HashMap<NodeId, MathTextLayoutHost>) {
@@ -2223,32 +2016,6 @@ struct MathLayoutContext<'a> {
     space_before_pt: f32,
     space_after_pt: f32,
     caret_metrics: LineMetrics,
-}
-
-/// 一次表格布局中已测量的单元格段落索引与网格几何。
-struct ShapedTable {
-    table_id: NodeId,
-    grid: caret_layout::TableGridLayout,
-    rows: Vec<ShapedTableRow>,
-    space_before_pt: f32,
-    space_after_pt: f32,
-}
-
-struct ShapedTableRow {
-    cells: Vec<ShapedTableCell>,
-}
-
-type ShapedParagraphs = (
-    Vec<LaidOutParagraph>,
-    Vec<ResolvedParagraphStyle>,
-    Vec<ShapedTable>,
-);
-
-struct ShapedTableCell {
-    /// 指向本次布局 `paragraphs` 向量的索引。
-    paragraphs: Vec<usize>,
-    /// 每个段落内容顶边相对单元格内容区顶边的偏移，单位为 pt。
-    paragraph_offsets: Vec<f64>,
 }
 
 enum LayoutInput<'a> {

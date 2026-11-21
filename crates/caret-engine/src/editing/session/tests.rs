@@ -3144,3 +3144,20 @@ fn table_cell_inline_math_enter_is_rejected() {
         Err(EditError::UnsupportedTableCellMath)
     ));
 }
+
+#[test]
+fn table_insertion_inside_cell_is_rejected_without_document_change() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("session must open: {error}"));
+    session
+        .run(Command::InsertTable)
+        .unwrap_or_else(|error| panic!("table must insert: {error}"));
+    let before = session.document().clone();
+    let generation = session.document_generation();
+    assert!(matches!(
+        session.run(Command::EditorKey(EditorKey::InsertTable)),
+        Err(EditError::TableInsertionUnsupported)
+    ));
+    assert_eq!(session.document(), &before);
+    assert_eq!(session.document_generation(), generation);
+}

@@ -155,7 +155,7 @@ impl Session {
                     && self.selection.anchor == self.selection.focus
                     && self.paragraph_index.contains_key(&line.at.paragraph_id)
             }),
-            command_ids::INSERT_TABLE => true,
+            command_ids::INSERT_TABLE => self.can_insert_table(),
             command_ids::INSERT_EQUATION => self.can_insert_display_math(false),
             command_ids::INSERT_ALIGN => self.can_insert_display_math(true),
             command_ids::INSERT_INLINE_MATH => self.inline_math_insert_is_available(),

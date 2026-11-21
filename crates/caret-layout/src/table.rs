@@ -16,8 +16,9 @@ mod tests;
 /// 表格网格的算法常量与版心宽度。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TableLayoutOptions {
-    /// 单元格内容区可用总宽度（不含边框与内边距，含列间隙），单位为 pt；必须有限且为正。
-    pub content_width_pt: f64,
+    /// 表格外框可用的最大宽度，单位为 pt；必须有限且为正。
+    /// 列轨道宽度会扣除两侧边框、内边距与列间隙后再等分。
+    pub available_width_pt: f64,
     /// 列数；必须大于零。
     pub column_count: usize,
     /// 单元格内容区四周内边距，单位为 pt；必须有限且非负。
@@ -35,9 +36,34 @@ pub struct TableLayoutOptions {
 }
 
 impl TableLayoutOptions {
+    /// 文档表格 v1 的默认内边距/边线/最小列宽；行最小度量由正文行框提供。
+    pub const DEFAULT_CELL_PADDING_PT: f64 = 4.0;
+    pub const DEFAULT_BORDER_WIDTH_PT: f64 = 0.5;
+    pub const DEFAULT_COLUMN_GAP_PT: f64 = 0.0;
+    pub const DEFAULT_MINIMUM_COLUMN_WIDTH_PT: f64 = 24.0;
+
+    /// 使用文档表格默认视觉参数构造等分列表格选项。
+    pub fn text_defaults(
+        available_width_pt: f64,
+        column_count: usize,
+        minimum_row_ascent_pt: f64,
+        minimum_row_descent_pt: f64,
+    ) -> Self {
+        Self {
+            available_width_pt,
+            column_count,
+            cell_padding_pt: Self::DEFAULT_CELL_PADDING_PT,
+            border_width_pt: Self::DEFAULT_BORDER_WIDTH_PT,
+            column_gap_pt: Self::DEFAULT_COLUMN_GAP_PT,
+            minimum_column_width_pt: Self::DEFAULT_MINIMUM_COLUMN_WIDTH_PT,
+            minimum_row_ascent_pt,
+            minimum_row_descent_pt,
+        }
+    }
+
     fn validate(&self) -> Result<(), TableLayoutError> {
         let finite_non_negative = |value: f64| value.is_finite() && value >= 0.0;
-        if !self.content_width_pt.is_finite() || self.content_width_pt <= 0.0 {
+        if !self.available_width_pt.is_finite() || self.available_width_pt <= 0.0 {
             return Err(TableLayoutError::InvalidOptions);
         }
         if self.column_count == 0 {
@@ -169,16 +195,7 @@ pub fn layout_table_grid(
         }
     }
 
-    let gaps = options.column_gap_pt * (options.column_count.saturating_sub(1) as f64);
-    let available = options.content_width_pt - gaps;
-    if !available.is_finite() {
-        return Err(TableLayoutError::NonFiniteResult);
-    }
-    let column_width =
-        (available / options.column_count as f64).max(options.minimum_column_width_pt);
-    if !column_width.is_finite() || column_width <= 0.0 {
-        return Err(TableLayoutError::NonFiniteResult);
-    }
+    let column_width = table_column_width_pt(&options)?;
 
     let grid_rows = rows
         .iter()
@@ -254,10 +271,22 @@ pub fn layout_table_grid(
         .collect::<Vec<_>>();
     let mut horizontal_rule_positions = Vec::with_capacity(laid_out_rows.len() + 1);
     horizontal_rule_positions.push(0.0);
-    horizontal_rule_positions.extend(laid_out_rows.iter().map(|row| row.top_pt + row.height_pt));
+    horizontal_rule_positions.extend(
+        laid_out_rows
+            .iter()
+            .take(laid_out_rows.len().saturating_sub(1))
+            .map(|row| row.top_pt + row.height_pt),
+    );
+    horizontal_rule_positions.push(height_pt);
     let mut vertical_rule_positions = Vec::with_capacity(columns.len() + 1);
     vertical_rule_positions.push(0.0);
-    vertical_rule_positions.extend(columns.iter().map(|(x, width)| x + width));
+    vertical_rule_positions.extend(
+        columns
+            .iter()
+            .take(columns.len().saturating_sub(1))
+            .map(|(x, width)| x + width + options.column_gap_pt / 2.0),
+    );
+    vertical_rule_positions.push(width_pt);
     let result = TableGridLayout {
         width_pt,
         height_pt,
@@ -302,7 +331,9 @@ pub fn layout_table_grid(
 pub fn table_column_width_pt(options: &TableLayoutOptions) -> Result<f64, TableLayoutError> {
     options.validate()?;
     let gaps = options.column_gap_pt * (options.column_count.saturating_sub(1) as f64);
-    let available = options.content_width_pt - gaps;
+    let available = options.available_width_pt
+        - 2.0 * (options.border_width_pt + options.cell_padding_pt)
+        - gaps;
     if !available.is_finite() {
         return Err(TableLayoutError::NonFiniteResult);
     }

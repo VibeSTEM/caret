@@ -565,7 +565,7 @@ fn malformed_paragraph_lines_do_not_produce_partial_pages() {
 
 fn table_layout(row_heights: &[f64]) -> crate::TableGridLayout {
     let options = crate::TableLayoutOptions {
-        content_width_pt: 100.0,
+        available_width_pt: 100.0,
         column_count: 1,
         cell_padding_pt: 0.0,
         border_width_pt: 0.0,

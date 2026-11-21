@@ -54,27 +54,6 @@ fn paragraph(text: &str) -> Paragraph {
     paragraph
 }
 
-/// 只包含一个文本片段的公式树，用于公式块几何测试。
-fn text_math_tree(text: &str) -> caret_doc::MathTree {
-    caret_doc::MathTree {
-        schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
-        root: caret_doc::MathFlow {
-            id: NodeId::generate(),
-            content: vec![caret_doc::MathContent::Text(TextFlow {
-                runs: vec![Run {
-                    text: text.to_owned(),
-                    language: None,
-                    props: BTreeMap::new(),
-                    extra: BTreeMap::new(),
-                }],
-                extra: BTreeMap::new(),
-            })],
-            extra: BTreeMap::new(),
-        },
-        extra: BTreeMap::new(),
-    }
-}
-
 /// 内容为空的公式树，用于验证退化公式宿主仍产出正高度宿主行框。
 fn empty_math_tree() -> caret_doc::MathTree {
     caret_doc::MathTree {
@@ -3403,7 +3382,7 @@ fn structural_selection_geometry_combines_text_environment_and_math_hosts() {
         Block::Paragraph(before),
         Block::Equation(Equation {
             id: math_id.clone(),
-            math_tree: text_math_tree("x"),
+            math_tree: empty_math_tree(),
             extra: BTreeMap::new(),
         }),
         Block::Paragraph(after),
@@ -3561,7 +3540,7 @@ fn math_block_geometry_uses_the_same_full_width_page_rect_for_selection_and_high
     let mut document = Document::blank();
     document.body.push(Block::Equation(Equation {
         id: math_id.clone(),
-        math_tree: text_math_tree("x"),
+        math_tree: empty_math_tree(),
         extra: BTreeMap::new(),
     }));
     let snapshot = layout_document(&document);
@@ -5560,4 +5539,44 @@ fn basic_table_layout_places_cells_and_shared_caret_geometry() {
         .unwrap_or_else(|| panic!("cell hit must resolve"));
     assert_eq!(hit.position.paragraph_id, first_pos.paragraph_id);
     assert_eq!(hit.position.story, first_pos.story);
+}
+
+#[test]
+fn table_cell_inline_math_is_rejected_without_partial_snapshot() {
+    let inline_math = caret_doc::InlineMath {
+        id: NodeId::generate(),
+        math_tree: empty_math_tree(),
+        extra: BTreeMap::new(),
+    };
+    let mut paragraph = Paragraph::empty(NodeId::generate());
+    paragraph.inlines = vec![ParagraphContent::Math(inline_math)];
+    let cell = TableCell {
+        id: NodeId::generate(),
+        blocks: vec![Block::Paragraph(paragraph)],
+    };
+    let table = Table {
+        id: NodeId::generate(),
+        rows: vec![TableRow {
+            id: NodeId::generate(),
+            cells: vec![cell],
+        }],
+    };
+    let mut document = Document::blank();
+    document.body = vec![Block::Table(table)];
+    let mut service = DocumentLayoutService::new();
+    let mut catalog = test_system_font_catalog();
+    let result = service.layout(&document, 1, &mut catalog, &ShapingStyle::new(1200));
+    assert!(
+        matches!(result, Err(DocumentLayoutError::UnsupportedContent)),
+        "expected unsupported content, got {result:?}"
+    );
+    let valid = service
+        .layout(
+            &Document::blank(),
+            2,
+            &mut catalog,
+            &ShapingStyle::new(1200),
+        )
+        .unwrap_or_else(|error| panic!("service must stay reusable: {error}"));
+    assert_eq!(valid.document_generation, 2);
 }

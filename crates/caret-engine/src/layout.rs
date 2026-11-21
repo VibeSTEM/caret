@@ -30,6 +30,7 @@ mod math_navigation;
 mod math_text;
 mod produce;
 mod query;
+mod table_layout;
 pub(crate) use produce::math_flow_is_empty_host;
 mod shared;
 use shared::*;
@@ -202,6 +203,8 @@ pub struct DocumentLayoutSnapshot {
     pub environment_ranges: Vec<PageEnvironmentRange>,
     /// 已排版的块级公式，页面片段通过 ID 引用同一份 MathBox。
     pub math_blocks: HashMap<NodeId, Arc<caret_math::layout::MathLayout>>,
+    /// 已测量的表格网格几何；页面片段只保存放置引用，几何由快照单点持有。
+    pub(crate) table_layouts: HashMap<NodeId, Arc<caret_layout::TableGridLayout>>,
     /// 块级公式 token 与正文 Parley sidecar 成对保存，避免布局缓存脱离字体数据。
     math_block_text_layouts: HashMap<NodeId, HashMap<u64, MathTextSidecar>>,
     math_block_sources: HashMap<NodeId, MathBlockSource>,

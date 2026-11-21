@@ -55,7 +55,18 @@ impl Session {
         }
     }
 
+    /// 表格只能插入正文/环境正文块序列；标题与单元格内当前明确拒绝。
+    pub(super) fn can_insert_table(&self) -> bool {
+        let Some(location) = self.paragraph_index.get(&self.selection.focus.paragraph_id) else {
+            return false;
+        };
+        !location.is_title && location.container.innermost_cell().is_none()
+    }
+
     pub(super) fn insert_table(&mut self) -> Result<Effect, EditError> {
+        if !self.can_insert_table() {
+            return Err(EditError::TableInsertionUnsupported);
+        }
         let location = self
             .paragraph_index
             .get(&self.selection.focus.paragraph_id)
