@@ -3329,6 +3329,33 @@ fn tall_cell_layout_snapshot_stays_inside_page_bounds() -> Result<(), Box<dyn st
 }
 
 #[test]
+fn table_cells_move_with_visual_and_vertical_arrows_at_boundaries()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.handle_editor_key_json("insert-table")?;
+    let first_cell = match &runtime.session.selection().focus.story {
+        caret_engine::StoryId::TableCell { cell_id, .. } => cell_id.clone(),
+        story => return Err(format!("focus must start in a table cell: {story:?}").into()),
+    };
+    runtime.move_visual_caret_json(true, false)?;
+    let after_right = match &runtime.session.selection().focus.story {
+        caret_engine::StoryId::TableCell { cell_id, .. } => cell_id.clone(),
+        story => return Err(format!("right arrow left the table: {story:?}").into()),
+    };
+    assert_ne!(after_right, first_cell, "Right must move to the next cell");
+    runtime.move_visual_caret_json(false, false)?;
+    runtime.move_vertical_caret_json(1, false)?;
+    assert!(
+        matches!(
+            &runtime.session.selection().focus.story,
+            caret_engine::StoryId::TableCell { .. }
+        ),
+        "Down must move to the cell below, not leave the table"
+    );
+    Ok(())
+}
+
+#[test]
 fn body_before_table_keeps_cell_caret_and_fragment_identity()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut runtime = DocumentViewRuntime::new_blank()?;
