@@ -95,6 +95,31 @@ impl Session {
         extend: bool,
     ) -> Result<Effect, EditError> {
         self.validate_navigation_generation(&generation)?;
+        if focus.story != self.selection.focus.story
+            && (matches!(focus.story, crate::StoryId::TableCell { .. })
+                || matches!(self.selection.focus.story, crate::StoryId::TableCell { .. }))
+        {
+            // 表格是块宿主：跨 Story 候选不能直接提交（TableCell 位置与 Body
+            // 位置不可比较）。普通移动按块邻接进入表格，其余跨格候选收敛为
+            // no-op，避免 layout 候选把 QML 导航打成 position_story_mismatch。
+            if extend {
+                return Ok(Effect::default());
+            }
+            if let Some(direction) = direction
+                && matches!(self.selection.focus.story, crate::StoryId::Body)
+            {
+                if self.enter_adjacent_table(direction)? {
+                    return Ok(Effect {
+                        selection_changed: true,
+                        ..Effect::default()
+                    });
+                }
+                // 候选可能跳过紧邻的公式/环境（扁平段落顺序不含公式）；表格
+                // 不直接相邻时回落到既有复杂块边缘逻辑，不能把方向键吃掉。
+                return self.complete_horizontal_document_edge(direction, false);
+            }
+            return Ok(Effect::default());
+        }
         let retained_empty_inline_host = if !extend
             && focus.paragraph_id == self.selection.focus.paragraph_id
             && focus.story == self.selection.focus.story
@@ -302,6 +327,12 @@ impl Session {
             return Ok(Effect::default());
         }
         if !extend {
+            if self.enter_adjacent_table(direction)? {
+                return Ok(Effect {
+                    selection_changed: true,
+                    ..Effect::default()
+                });
+            }
             if self.enter_adjacent_block_math_if_present(direction)? {
                 return Ok(Effect {
                     selection_changed: true,

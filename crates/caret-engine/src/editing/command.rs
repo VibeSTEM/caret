@@ -44,6 +44,13 @@ pub enum Direction {
     Forward,
 }
 
+/// Delete 物理键来源；行/列删除共用领域动作，但按具体按键归入 backspace/delete handler。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableDeleteBase {
+    Backspace,
+    Delete,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum EditorKey {
     Escape,
@@ -66,9 +73,9 @@ pub enum EditorKey {
     /// 插入表格（046 起由命令面板/Alt+T 触发）。
     InsertTable,
     TableInsertRow(Direction),
-    TableDeleteRow,
+    TableDeleteRow(TableDeleteBase),
     TableInsertColumn(Direction),
-    TableDeleteColumn,
+    TableDeleteColumn(TableDeleteBase),
     LeftArrow {
         candidate: Option<NavigationCandidate>,
         extend: bool,
@@ -283,14 +290,14 @@ impl Command {
             Self::EditorKey(EditorKey::TableInsertRow(Direction::Forward)) => {
                 command_ids::TABLE_INSERT_ROW_AFTER
             }
-            Self::EditorKey(EditorKey::TableDeleteRow) => command_ids::TABLE_DELETE_ROW,
+            Self::EditorKey(EditorKey::TableDeleteRow(_)) => command_ids::TABLE_DELETE_ROW,
             Self::EditorKey(EditorKey::TableInsertColumn(Direction::Backward)) => {
                 command_ids::TABLE_INSERT_COL_BEFORE
             }
             Self::EditorKey(EditorKey::TableInsertColumn(Direction::Forward)) => {
                 command_ids::TABLE_INSERT_COL_AFTER
             }
-            Self::EditorKey(EditorKey::TableDeleteColumn) => command_ids::TABLE_DELETE_COL,
+            Self::EditorKey(EditorKey::TableDeleteColumn(_)) => command_ids::TABLE_DELETE_COL,
             Self::EditorKey(EditorKey::ShiftEnter) => "interaction.shift_enter",
             Self::EditorKey(EditorKey::ModBackspace) => "interaction.mod_backspace",
             Self::EditorKey(EditorKey::LeftArrow { .. }) => "navigation.left",

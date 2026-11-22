@@ -10,7 +10,15 @@ use crate::editing::paragraph_ops::{
 };
 use caret_doc::{Block, NodeId, Paragraph, Table, TableCell, TableRow};
 
+/// 方向键在单元格边界的移动轴。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TableArrowAxis {
+    Horizontal,
+    Vertical,
+}
+
 /// 当前段落所在的表格单元格上下文。
+#[derive(Clone)]
 pub(super) struct TableContext {
     /// 表格块所在容器（单元格之前的容器路径）。
     pub(super) table_container: BlockContainerPath,
@@ -264,6 +272,197 @@ impl Session {
         )?))
     }
 
+    /// 从表格相邻正文段落进入表格首/末格；成功时提交选区。
+    pub(super) fn enter_adjacent_table(&mut self, direction: Direction) -> Result<bool, EditError> {
+        let Some(location) = self
+            .paragraph_index
+            .get(&self.selection.focus.paragraph_id)
+            .cloned()
+        else {
+            return Ok(false);
+        };
+        if location.container.innermost_cell().is_some() || location.is_title {
+            return Ok(false);
+        }
+        let Some(block_index) = location.block_path.last().copied() else {
+            return Ok(false);
+        };
+        let Some(blocks) = block_list_in_container(&self.document.body, &location.container) else {
+            return Ok(false);
+        };
+        let neighbour = match direction {
+            Direction::Backward => block_index.checked_sub(1),
+            Direction::Forward => block_index.checked_add(1),
+        };
+        let Some(Block::Table(table)) = neighbour.and_then(|index| blocks.get(index)) else {
+            return Ok(false);
+        };
+        let table = table.clone();
+        let (row_index, cell_index, forward) = match direction {
+            Direction::Backward => (
+                table.rows.len().saturating_sub(1),
+                table
+                    .rows
+                    .last()
+                    .map_or(0, |row| row.cells.len().saturating_sub(1)),
+                false,
+            ),
+            Direction::Forward => (0, 0, true),
+        };
+        let Some(target) = table_target(&table, row_index, cell_index, forward) else {
+            return Ok(false);
+        };
+        if !self.paragraph_index.contains_key(&target.paragraph_id) {
+            return Ok(false);
+        }
+        self.selection = Selection {
+            anchor: target.clone(),
+            focus: target,
+        };
+        Ok(true)
+    }
+
+    /// Escape 从单元格回到表格前/后的相邻正文段落；表格末尾没有尾随段落时保持。
+    pub(super) fn exit_table_for_escape(&mut self) -> Result<Option<Effect>, EditError> {
+        let Some(context) = self.table_context() else {
+            return Ok(None);
+        };
+        if let Some(effect) = self.leave_table(context.clone(), true)? {
+            return Ok(Some(effect));
+        }
+        let Some(context) = self.table_context() else {
+            return Ok(None);
+        };
+        self.leave_table(context, false)
+    }
+
+    /// 判断方向键是否落在单元格首/末内容边界；返回上下文供导航与 app 查询共用。
+    /// 边界按 cell 块和逻辑文本偏移判定，不感知布局视觉行。
+    fn table_arrow_boundary_state(
+        &self,
+        axis: TableArrowAxis,
+        direction: Direction,
+    ) -> Result<Option<(TableContext, usize)>, EditError> {
+        let Some(context) = self.table_context() else {
+            return Ok(None);
+        };
+        let Some(location) = self
+            .paragraph_index
+            .get(&self.selection.focus.paragraph_id)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        if location.container.innermost_cell().is_none() {
+            return Ok(None);
+        }
+        // 允许表格本身位于块环境内；只拒绝单元格内再包一层环境造成的嵌套落点。
+        let outside_cell_environment_depth = location
+            .container
+            .container_before_innermost_cell()
+            .map_or(0, |container| container.environment_depth());
+        if location.container.environment_depth() != outside_cell_environment_depth {
+            return Ok(None);
+        }
+        let Some(block_index) = location.block_path.last().copied() else {
+            return Ok(None);
+        };
+        let table = self.current_table(&context)?;
+        let Some(row) = table.rows.get(context.row_index) else {
+            return Ok(None);
+        };
+        let Some(cell) = row.cells.get(context.cell_index) else {
+            return Ok(None);
+        };
+        let Some(Block::Paragraph(paragraph)) = cell.blocks.get(block_index) else {
+            return Ok(None);
+        };
+        if paragraph.id != self.selection.focus.paragraph_id {
+            return Ok(None);
+        }
+        let text_len = crate::editing::text_map::TextMap::new(paragraph)
+            .map_err(|error| EditError::InvalidDocument(error.to_string()))?
+            .text
+            .len();
+        let at_boundary = match axis {
+            TableArrowAxis::Horizontal => match direction {
+                Direction::Backward => block_index == 0 && self.selection.focus.offset == 0,
+                Direction::Forward => {
+                    block_index + 1 == cell.blocks.len() && self.selection.focus.offset == text_len
+                }
+            },
+            TableArrowAxis::Vertical => match direction {
+                Direction::Backward => block_index == 0,
+                Direction::Forward => block_index + 1 == cell.blocks.len(),
+            },
+        };
+        Ok(at_boundary.then_some((context, block_index)))
+    }
+
+    /// app 纵向导航查询：当前焦点是否位于 cell 首/末块的纵向边界。
+    /// 该查询不感知视觉行；折行文本的视觉行导航仍由布局候选负责。
+    pub fn table_vertical_block_boundary(&self, direction: Direction) -> bool {
+        self.table_arrow_boundary_state(TableArrowAxis::Vertical, direction)
+            .is_ok_and(|state| state.is_some())
+    }
+
+    /// 方向键在单元格首/末内容边界进入相邻单元格；返回 `None` 表示不在边界、交给文本/外层导航。
+    /// 表格边缘仍消费按键（`Some(default)`），不让普通方向键把光标带出表格。
+    pub(super) fn table_arrow_step(
+        &mut self,
+        axis: TableArrowAxis,
+        direction: Direction,
+    ) -> Result<Option<Effect>, EditError> {
+        let Some((context, _block_index)) = self.table_arrow_boundary_state(axis, direction)?
+        else {
+            return Ok(None);
+        };
+        let table = self.current_table(&context)?;
+        let columns = table.rows.first().map_or(0, |row| row.cells.len());
+        let (target_row, target_cell) = match axis {
+            TableArrowAxis::Horizontal => {
+                let index = context.row_index * columns + context.cell_index;
+                if direction == Direction::Backward {
+                    if index == 0 {
+                        return Ok(Some(self.leave_table(context, false)?.unwrap_or_default()));
+                    }
+                    let previous = index - 1;
+                    (previous / columns, previous % columns)
+                } else {
+                    let next = index + 1;
+                    if next >= table.rows.len() * columns {
+                        return Ok(Some(self.leave_table(context, true)?.unwrap_or_default()));
+                    }
+                    (next / columns, next % columns)
+                }
+            }
+            TableArrowAxis::Vertical => {
+                let target_row = match direction {
+                    Direction::Backward => {
+                        let Some(row) = context.row_index.checked_sub(1) else {
+                            return Ok(Some(self.leave_table(context, false)?.unwrap_or_default()));
+                        };
+                        row
+                    }
+                    Direction::Forward => {
+                        let row = context.row_index + 1;
+                        if row >= table.rows.len() {
+                            return Ok(Some(self.leave_table(context, true)?.unwrap_or_default()));
+                        }
+                        row
+                    }
+                };
+                (target_row, context.cell_index)
+            }
+        };
+        Ok(Some(self.focus_table_cell(
+            &table,
+            target_row,
+            target_cell,
+            direction == Direction::Forward,
+        )?))
+    }
+
     /// 纯单元格移动只改变选区，不产生文档补丁、generation 或历史步。
     fn focus_table_cell(
         &mut self,
@@ -445,14 +644,21 @@ fn empty_cell() -> TableCell {
     }
 }
 
-/// 表格单元格内首个可聚焦段落的文档位置。
+/// 表格单元格内可聚焦段落的首/末落点：forward 取首段起点，backward 取末段终点。
 fn table_target(table: &Table, row_index: usize, cell_index: usize, forward: bool) -> Option<Pos> {
     let row = table.rows.get(row_index)?;
     let cell = row.cells.get(cell_index)?;
-    let paragraph = cell.blocks.iter().find_map(|block| match block {
-        Block::Paragraph(paragraph) => Some(paragraph),
-        _ => None,
-    })?;
+    let paragraph = if forward {
+        cell.blocks.iter().find_map(|block| match block {
+            Block::Paragraph(paragraph) => Some(paragraph),
+            _ => None,
+        })
+    } else {
+        cell.blocks.iter().rev().find_map(|block| match block {
+            Block::Paragraph(paragraph) => Some(paragraph),
+            _ => None,
+        })
+    }?;
     let text_len = crate::editing::text_map::TextMap::new(paragraph)
         .ok()?
         .text

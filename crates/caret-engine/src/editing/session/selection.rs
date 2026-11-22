@@ -503,6 +503,29 @@ impl Session {
         logical_direction: Option<Direction>,
     ) -> Result<Effect, EditError> {
         self.ensure_math_edit_revision_current()?;
+        if selection.focus.story != self.selection.focus.story
+            && (matches!(selection.focus.story, crate::StoryId::TableCell { .. })
+                || matches!(self.selection.focus.story, crate::StoryId::TableCell { .. }))
+        {
+            // 表格是块宿主，TableCell 位置与 Body/环境位置不可比较。扩选候选在
+            // 表格边界收敛为 no-op；普通纵向/横向移动交给块邻接入口；其余跨格
+            // 候选保持原位，避免布局候选把 QML 导航变成 position_story_mismatch。
+            let extending = self.selection.anchor != self.selection.focus
+                || selection.anchor != selection.focus;
+            if extending {
+                return Ok(Effect::default());
+            }
+            if let Some(direction) = logical_direction
+                && matches!(self.selection.focus.story, crate::StoryId::Body)
+                && self.enter_adjacent_table(direction)?
+            {
+                return Ok(Effect {
+                    selection_changed: true,
+                    ..Effect::default()
+                });
+            }
+            return Ok(Effect::default());
+        }
         self.validate_navigation_position(&selection.anchor)?;
         self.validate_navigation_position(&selection.focus)?;
         // 候选可以落在不同 Story（例如从正文进入环境标题），因此用共享结构端点

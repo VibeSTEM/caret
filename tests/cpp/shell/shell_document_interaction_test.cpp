@@ -760,10 +760,12 @@ void ShellDocumentInteractionTest::documentCanvasRoutesCommandKeysAndKeepsNormal
     QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("table-insert-row-before"));
     QTest::keyClick(&window, Qt::Key_Backspace, Qt::AltModifier | Qt::ShiftModifier);
     QCOMPARE(editor_keys.size(), 1);
-    QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("table-delete-row"));
+    QCOMPARE(editor_keys.takeFirst().at(0).toString(),
+             QStringLiteral("table-delete-row-backspace"));
     QTest::keyClick(&window, Qt::Key_Delete, Qt::AltModifier);
     QCOMPARE(editor_keys.size(), 1);
-    QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("table-delete-column"));
+    QCOMPARE(editor_keys.takeFirst().at(0).toString(),
+             QStringLiteral("table-delete-column-delete"));
 #else
     QTest::keyClick(&window, Qt::Key_Down, Qt::AltModifier);
     QCOMPARE(editor_keys.size(), 1);
@@ -773,10 +775,12 @@ void ShellDocumentInteractionTest::documentCanvasRoutesCommandKeysAndKeepsNormal
     QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("table-insert-col-before"));
     QTest::keyClick(&window, Qt::Key_Backspace, Qt::AltModifier | Qt::ShiftModifier);
     QCOMPARE(editor_keys.size(), 1);
-    QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("table-delete-row"));
+    QCOMPARE(editor_keys.takeFirst().at(0).toString(),
+             QStringLiteral("table-delete-row-backspace"));
     QTest::keyClick(&window, Qt::Key_Delete, Qt::AltModifier);
     QCOMPARE(editor_keys.size(), 1);
-    QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("table-delete-column"));
+    QCOMPARE(editor_keys.takeFirst().at(0).toString(),
+             QStringLiteral("table-delete-column-delete"));
 #endif
     QInputMethodEvent preedit(QStringLiteral("ni"), {});
     QCoreApplication::sendEvent(canvas, &preedit);

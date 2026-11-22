@@ -25,8 +25,8 @@ pub use editing::{
     MathSequenceStep, MathTextFlowPath, MathTextFlowPathStep, MathTextInputContext,
     MathTextPosition, MathTreePosition, MathTreePositionError, NavigationCandidate,
     NavigationGeneration, NavigationIntent, Pos, PositionMap, Selection, Session,
-    SessionCaretSnapshot, SessionCheckpoint, StoryId, StructureSelection, utf8_offset_to_utf16,
-    utf16_offset_to_utf8,
+    SessionCaretSnapshot, SessionCheckpoint, StoryId, StructureSelection, TableDeleteBase,
+    utf8_offset_to_utf16, utf16_offset_to_utf8,
 };
 pub use layout::{
     DocumentLayoutError, DocumentLayoutRuntime, DocumentLayoutService, DocumentLayoutSnapshot,

@@ -5658,6 +5658,103 @@ fn table_cell_block_measurements_place_multiple_paragraphs() {
 }
 
 #[test]
+fn table_cell_guidelines_use_symmetric_mesh_rects() {
+    let table = Table {
+        id: NodeId::generate(),
+        rows: (0..2)
+            .map(|_| TableRow {
+                id: NodeId::generate(),
+                cells: (0..2)
+                    .map(|_| TableCell {
+                        id: NodeId::generate(),
+                        blocks: vec![Block::Paragraph(paragraph(""))],
+                    })
+                    .collect(),
+            })
+            .collect(),
+    };
+    let table_id = table.id.clone();
+    let row0 = table.rows[0].clone();
+    let row1 = table.rows[1].clone();
+    let mut document = Document::blank();
+    document.body = vec![Block::Table(table)];
+    let snapshot = layout_document(&document);
+    let rect_for = |row: &TableRow, cell: &TableCell| {
+        let paragraph = cell
+            .blocks
+            .iter()
+            .find_map(|block| match block {
+                Block::Paragraph(paragraph) => Some(paragraph),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("cell paragraph"));
+        let pos = Pos {
+            story: StoryId::TableCell {
+                table_id: table_id.clone(),
+                row_id: row.id.clone(),
+                cell_id: cell.id.clone(),
+            },
+            paragraph_id: paragraph.id.clone(),
+            offset: 0,
+            affinity: Affinity::Upstream,
+        };
+        snapshot
+            .table_guidelines(&pos)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| panic!("cell guideline"))
+    };
+    let grid = snapshot
+        .table_layouts
+        .get(&table_id)
+        .unwrap_or_else(|| panic!("table grid"));
+    let page = &snapshot.pages[0];
+    let fragment = page
+        .layout
+        .table_fragments
+        .first()
+        .unwrap_or_else(|| panic!("table fragment"));
+    let table_origin_x = page.margin_left_pt + f64::from(fragment.x_offset_pt);
+    let left = rect_for(&row0, &row0.cells[0]);
+    let right = rect_for(&row0, &row0.cells[1]);
+    let lower = rect_for(&row1, &row1.cells[0]);
+    assert!((left.x0_pt - table_origin_x).abs() < 0.01);
+    assert!((right.x1_pt - (table_origin_x + grid.width_pt)).abs() < 0.01);
+    assert!((left.x1_pt - right.x0_pt).abs() < 0.01);
+    assert!((left.x1_pt - left.x0_pt - (right.x1_pt - right.x0_pt)).abs() < 0.01);
+    assert!(
+        (lower.y0_pt
+            - (page.margin_top_pt + f64::from(fragment.y_offset_pt) + grid.rows[1].top_pt))
+            .abs()
+            < 0.01
+    );
+    assert!((left.y1_pt - lower.y0_pt).abs() < 0.01);
+    let highlight = snapshot.table_block_highlight_rects(&Pos {
+        story: StoryId::TableCell {
+            table_id,
+            row_id: row0.id.clone(),
+            cell_id: row0.cells[0].id.clone(),
+        },
+        paragraph_id: match &row0.cells[0].blocks[0] {
+            Block::Paragraph(paragraph) => paragraph.id.clone(),
+            _ => unreachable!(),
+        },
+        offset: 0,
+        affinity: Affinity::Upstream,
+    });
+    assert_eq!(highlight.len(), 1);
+    let first_row = grid.rows.first().unwrap_or_else(|| panic!("first row"));
+    let last_row = grid.rows.last().unwrap_or_else(|| panic!("last row"));
+    let expected_y0 = page.margin_top_pt + f64::from(fragment.y_offset_pt) + first_row.top_pt;
+    let expected_y1 =
+        page.margin_top_pt + f64::from(fragment.y_offset_pt) + last_row.top_pt + last_row.height_pt;
+    assert!((highlight[0].x0_pt - table_origin_x).abs() < 0.01);
+    assert!((highlight[0].x1_pt - (table_origin_x + grid.width_pt)).abs() < 0.01);
+    assert!((highlight[0].y0_pt - expected_y0).abs() < 0.01);
+    assert!((highlight[0].y1_pt - expected_y1).abs() < 0.01);
+}
+
+#[test]
 fn table_cell_display_equation_is_measured_projected_and_drawn() {
     let equation = Equation {
         id: NodeId::generate(),

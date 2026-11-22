@@ -1,6 +1,6 @@
 # 快捷键
 
-更新日期：2026-11-08。当前支持的画布按键统一经 Session 键盘入口仲裁；实现架构见[快捷键管理架构](keyboard-shortcut-architecture.md)。结构内移动、结构首尾和表格快捷键仍是后续目标。命令 id 见[命令](../editor/commands.md)。
+更新日期：2026-11-08。当前支持的画布按键统一经 Session 键盘入口仲裁；实现架构见[快捷键管理架构](keyboard-shortcut-architecture.md)。结构内移动、结构首尾和表格快捷键已接入；表格修饰键按具体基础键归档。命令 id 见[命令](../editor/commands.md)。
 
 本文中的 `Mod` 是平台抽象修饰键：macOS 映射为 Command，Windows/Linux 映射为 Ctrl。快捷键和代码使用 `Mod` 表示这一映射；平台差异只在本说明中定义。
 
@@ -31,6 +31,7 @@ Esc 和 Shift+Esc 由当前焦点作用域处理；事件到达画布后交给 R
 | 移除当前行内/块环境并保留内容 | Ctrl+Backspace | Command+Backspace |
 | 左右 / 上下移动插入点 | 方向键 | 方向键 |
 | 扩展选区 | Shift+方向键 | Shift+方向键 |
+| 表格单元格内换格/表格进出（内容首/末边界） | 方向键 | 方向键 |
 | 移至视觉行首 / 行尾 | Home / End | Home / End |
 | 前向删除 | Delete | Delete |
 | 上一块 / 下一块 | Ctrl+↑ / ↓ | Option+↑ / ↓ |
@@ -45,7 +46,7 @@ Esc 和 Shift+Esc 由当前焦点作用域处理；事件到达画布后交给 R
 
 逐级扩大选区使用物理 Control+Space；macOS 上不是 Command+Space。Qt 的平台修饰键语义映射由画布统一处理。
 
-表格里，上一块 / 下一块（Linux / Windows 的 Ctrl+↑ / ↓、macOS 的 Option+↑ / ↓）先按行移动；到边缘时若相邻正文段落存在则离开表格，表格位于文档末尾且无尾随段落时保持（v1 限制，见 046）。单元格之间的移动用结构内移动那一组。表内键意图已在 Rust Session 实现，native 画布已接线 Shift+Tab、Alt+T 与行列插入/删除键（046）；`\table` 命令面板入口已启用。
+表格里，上一块 / 下一块（Linux / Windows 的 Ctrl+↑ / ↓、macOS 的 Option+↑ / ↓）先按行移动；到边缘时若相邻正文段落存在则离开表格，表格位于文档末尾且无尾随段落时保持（v1 限制，见 046）。单元格之间的移动还可用普通方向键：在单元格内容首/末边界时，左右按行优先、上下同列换格；表格边缘在存在相邻正文段落时按块行为离开表格，否则保持。表内键已在 Rust Session 与 native 画布接线（Shift+Tab、Alt+T、行列插入/删除）；`\table` 命令面板入口已启用。
 
 插入行列和删除行列只在表格内可用。插入方向以当前单元格为基准：↑ / ↓ 在前 / 后插入行，← / → 在前 / 后插入列。删除列保持 Alt+Backspace / Delete（macOS Option+Backspace / Delete）；删除行使用 Alt+Shift+Backspace / Delete（macOS Option+Shift+Backspace / Delete）。macOS 的 Option+↑ / ↓ 始终用于导航，不插入行。
 

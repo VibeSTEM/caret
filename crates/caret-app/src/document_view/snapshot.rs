@@ -330,24 +330,28 @@ pub(super) fn caret_geometry_with_block_boundary_exit(
 
 fn block_environment_highlight_rects(
     environment_id: Option<&NodeId>,
+    focus: &caret_engine::Pos,
     snapshot: &caret_engine::DocumentLayoutSnapshot,
 ) -> Value {
-    let Some(environment_id) = environment_id else {
-        return Value::Array(Vec::new());
-    };
-    rectangle_values(
-        snapshot
-            .environment_ranges
-            .iter()
-            .filter(|range| &range.environment_id == environment_id)
-            .map(|range| PageSelectionRect {
-                page_index: range.page_index,
-                x0_pt: range.x0_pt,
-                y0_pt: range.y0_pt,
-                x1_pt: range.x1_pt,
-                y1_pt: range.y1_pt,
-            }),
-    )
+    let mut rectangles = Vec::new();
+    if let Some(environment_id) = environment_id {
+        rectangles.extend(
+            snapshot
+                .environment_ranges
+                .iter()
+                .filter(|range| &range.environment_id == environment_id)
+                .map(|range| PageSelectionRect {
+                    page_index: range.page_index,
+                    x0_pt: range.x0_pt,
+                    y0_pt: range.y0_pt,
+                    x1_pt: range.x1_pt,
+                    y1_pt: range.y1_pt,
+                }),
+        );
+    }
+    // 表格单元格与 Section/Equation 共用同一 block 高亮层；几何来自同一快照网格。
+    rectangles.extend(snapshot.table_block_highlight_rects(focus));
+    rectangle_values(rectangles)
 }
 
 /// 以活动 Equation/Align 的整栏公式几何生成块层高亮；几何来自同一代布局快照。
@@ -555,6 +559,7 @@ impl HighlightState {
         Ok(HighlightRectangles {
             block_environment: block_environment_highlight_rects(
                 self.focus_environment_id.as_ref(),
+                &self.inline_focus,
                 snapshot,
             ),
             math_block: math_block_highlight_rects(self.math_block_target.as_ref(), snapshot)?,

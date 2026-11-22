@@ -655,11 +655,36 @@ impl Session {
             }
             return Ok(Effect::default());
         };
-        let story = self
-            .structure_index
-            .title_environment_id(&target_id)
-            .cloned()
-            .map_or(StoryId::Body, StoryId::EnvironmentTitle);
+        // 结构索引的全序也包含表格 cell 段落；目标 Story 必须取段落索引的
+        // 容器身份，不能一律投影成 Body，否则会提交跨 Story 位置并报
+        // position_story_mismatch。
+        let target_story = self
+            .paragraph_index
+            .get(&target_id)
+            .map(|location| location.story.clone());
+        if target_story
+            .as_ref()
+            .is_some_and(|story| matches!(story, StoryId::TableCell { .. }))
+            && !matches!(self.selection.focus.story, StoryId::TableCell { .. })
+        {
+            let direction = match &command {
+                Command::MoveStructure(direction) => *direction,
+                _ => Direction::Forward,
+            };
+            if self.enter_adjacent_table(direction)? {
+                return Ok(Effect {
+                    selection_changed: true,
+                    ..Effect::default()
+                });
+            }
+            return Ok(Effect::default());
+        }
+        let story = target_story.unwrap_or_else(|| {
+            self.structure_index
+                .title_environment_id(&target_id)
+                .cloned()
+                .map_or(StoryId::Body, StoryId::EnvironmentTitle)
+        });
         let mut target = Pos {
             story,
             paragraph_id: target_id,

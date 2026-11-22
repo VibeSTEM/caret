@@ -15,5 +15,7 @@ class ShellDocumentCanvasTest final : public ShellTestBase {
 #ifdef CARET_ENABLE_APP
     void glyphFrameAdapterRejectsFramesOutsideCanvasLimits();
     void underlinedTextRendersTheRustFfiDecorationInTheQtCanvas();
+    void tableGuidelinesReplacePreviousCellInsteadOfAccumulating();
+    void tableBorderLinesKeepUniformThicknessAtFractionalCoordinates();
 #endif
 };

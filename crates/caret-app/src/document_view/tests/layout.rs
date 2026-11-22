@@ -2,7 +2,7 @@
 
 use super::*;
 use caret_doc::{
-    Align, BlockEnvironment, BlockEnvironmentKind, Equation, InlineEnvironment,
+    Align, Block, BlockEnvironment, BlockEnvironmentKind, Equation, InlineEnvironment,
     InlineEnvironmentKind, InlineMath, MathAlignRow, MathContent, MathFlow, MathTree, NodeId,
     Paragraph, ParagraphContent, Run, TextFlow,
 };
@@ -304,7 +304,9 @@ fn clicking_math_text_installs_tree_focus_and_publishes_its_caret()
         .math_text_input_context()
         .ok_or_else(|| std::io::Error::other("math text input context is missing"))?
         .focus;
-    runtime.move_visual_caret_json(true, false)?;
+    runtime
+        .move_visual_caret_json(true, false)
+        .map_err(|e| format!("right: {e}"))?;
     let moved_focus = runtime
         .session
         .math_text_input_context()
@@ -372,14 +374,18 @@ fn clicking_math_text_installs_tree_focus_and_publishes_its_caret()
         .command_line()
         .ok_or_else(|| std::io::Error::other("math command line was not retained"))?
         .cursor;
-    runtime.move_visual_caret_json(false, false)?;
+    runtime
+        .move_visual_caret_json(false, false)
+        .map_err(|e| format!("left: {e}"))?;
     let cursor_after_navigation = runtime
         .session
         .command_line()
         .ok_or_else(|| std::io::Error::other("math command line was lost by navigation"))?
         .cursor;
     assert_eq!(cursor_after_navigation, cursor_before_navigation - 1);
-    runtime.move_vertical_caret_json(1, false)?;
+    runtime
+        .move_vertical_caret_json(1, false)
+        .map_err(|e| format!("down: {e}"))?;
     runtime.move_to_visual_line_edge_json(false, false)?;
     runtime.move_to_visual_line_edge_json(true, false)?;
     assert_eq!(
@@ -775,7 +781,9 @@ fn vertical_math_navigation_moves_between_align_rows_and_edits_the_new_cell()
     let placed: Value =
         serde_json::from_str(&runtime.place_caret_at_page_json(page_index as i32, x_pt, y_pt)?)?;
     assert_eq!(placed["mathText"], true);
-    runtime.move_vertical_caret_json(1, false)?;
+    runtime
+        .move_vertical_caret_json(1, false)
+        .map_err(|e| format!("down: {e}"))?;
     let context = runtime
         .session
         .math_text_input_context()
@@ -864,7 +872,9 @@ fn empty_equation_host_keeps_hit_caret_edit_and_history_without_placeholder_box(
     let caret: Value = serde_json::from_str(&runtime.current_caret_json()?)?;
     assert!(caret["y1Pt"].as_f64() > caret["y0Pt"].as_f64());
 
-    runtime.insert_text_json("x".to_owned())?;
+    runtime
+        .insert_text_json("x".to_owned())
+        .map_err(|e| format!("type: {e}"))?;
     assert!(matches!(
         &runtime.document().body[1],
         Block::Equation(equation) if !equation.math_tree.root.content.is_empty()
@@ -997,7 +1007,9 @@ fn nonempty_math_structure_can_be_hit_and_focused() -> Result<(), Box<dyn std::e
     editing_runtime.command_line_command_json("begin", String::new())?;
     editing_runtime.command_line_command_json("type", "math".to_owned())?;
     editing_runtime.command_line_command_json("accept", String::new())?;
-    editing_runtime.insert_text_json("x".to_owned())?;
+    editing_runtime
+        .insert_text_json("x".to_owned())
+        .map_err(|e| format!("type: {e}"))?;
     let bytes = caret_doc::CdocFile::new(editing_runtime.session.document().clone())?.to_bytes()?;
     let opened = caret_doc::open(&bytes)?;
     let caret_doc::OpenedDocument::Editable(reopened) = opened else {
@@ -2534,7 +2546,9 @@ fn plain_arrow_collapses_a_structural_selection_instead_of_moving_from_its_focus
     );
 
     // 折叠消费了本次按键；再从折叠落点按 Right 正常前进一个视觉步长。
-    runtime.move_visual_caret_json(true, false)?;
+    runtime
+        .move_visual_caret_json(true, false)
+        .map_err(|e| format!("right: {e}"))?;
     assert_eq!(runtime.session.selection().focus.paragraph_id, after_id);
     assert_eq!(runtime.session.selection().focus.offset, 1);
     Ok(())
@@ -2565,7 +2579,9 @@ fn plain_left_collapses_a_text_structural_selection_to_its_document_start()
     assert!(runtime.session.has_structure_selection());
     assert_eq!(runtime.session.selection().focus.paragraph_id, after_id);
 
-    runtime.move_visual_caret_json(false, false)?;
+    runtime
+        .move_visual_caret_json(false, false)
+        .map_err(|e| format!("left: {e}"))?;
 
     // Left 折叠到结构范围起点（前一端段落末尾），而不是从焦点向左退一个字符。
     assert!(!runtime.session.has_structure_selection());
@@ -3175,7 +3191,9 @@ fn dragging_across_inline_math_and_rtl_text_keeps_page_bounded_rects()
     runtime.command_line_command_json("begin", String::new())?;
     runtime.command_line_command_json("type", "math".to_owned())?;
     runtime.command_line_command_json("accept", String::new())?;
-    runtime.insert_text_json("x".to_owned())?;
+    runtime
+        .insert_text_json("x".to_owned())
+        .map_err(|e| format!("type: {e}"))?;
     runtime.handle_editor_key_json("escape")?;
     runtime.layout_snapshot_json()?;
     let paragraph_id = runtime
@@ -3329,6 +3347,428 @@ fn tall_cell_layout_snapshot_stays_inside_page_bounds() -> Result<(), Box<dyn st
 }
 
 #[test]
+fn empty_body_paragraph_vertical_arrow_stays_put() -> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    let before = runtime.session.selection().focus.clone();
+    runtime
+        .move_vertical_caret_json(1, false)
+        .map_err(|e| format!("empty body down: {e}"))?;
+    assert_eq!(runtime.session.selection().focus, before);
+    runtime
+        .move_vertical_caret_json(-1, false)
+        .map_err(|e| format!("empty body up: {e}"))?;
+    assert_eq!(runtime.session.selection().focus, before);
+    Ok(())
+}
+
+#[test]
+fn table_host_horizontal_navigation_and_shift_never_mismatch_story()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.insert_text_json("BEFORE".to_owned())?;
+    runtime.handle_editor_key_json("insert-table")?;
+    runtime.handle_editor_key_json("escape")?;
+    assert!(matches!(
+        &runtime.session.selection().focus.story,
+        caret_engine::StoryId::Body
+    ));
+    runtime
+        .move_visual_caret_json(true, false)
+        .map_err(|error| format!("plain right into table: {error}"))?;
+    assert!(
+        matches!(
+            &runtime.session.selection().focus.story,
+            caret_engine::StoryId::TableCell { .. }
+        ),
+        "Right after a body paragraph must enter the adjacent table"
+    );
+    runtime.handle_editor_key_json("escape")?;
+    let before_shift = runtime.session.selection().focus.clone();
+    runtime
+        .move_visual_caret_json(true, true)
+        .map_err(|error| format!("shift right at table edge: {error}"))?;
+    assert_eq!(
+        runtime.session.selection().focus,
+        before_shift,
+        "Shift+Right into a table must not cross stories or move the caret"
+    );
+    runtime
+        .move_vertical_caret_json(1, true)
+        .map_err(|error| format!("shift down at table edge: {error}"))?;
+    assert_eq!(
+        runtime.session.selection().focus,
+        before_shift,
+        "Shift+Down into a table must not cross stories or move the caret"
+    );
+    Ok(())
+}
+
+#[test]
+fn shift_extension_at_cell_boundary_with_active_selection_stays_in_cell()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.handle_editor_key_json("insert-table")?;
+    runtime.insert_text_json("ab".to_owned())?;
+    let cell = match &runtime.session.selection().focus.story {
+        caret_engine::StoryId::TableCell { cell_id, .. } => cell_id.clone(),
+        story => return Err(format!("focus must start in a table cell: {story:?}").into()),
+    };
+    for _ in 0..3 {
+        runtime
+            .move_visual_caret_json(false, true)
+            .map_err(|error| format!("shift left with active selection: {error}"))?;
+    }
+    assert!(
+        matches!(&runtime.session.selection().focus.story, caret_engine::StoryId::TableCell { cell_id: current, .. } if current == &cell),
+        "Shift extension must stay inside the focused cell"
+    );
+    Ok(())
+}
+
+#[test]
+fn table_structure_keys_outside_table_are_noops() -> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.insert_text_json("body".to_owned())?;
+    let generation = runtime.session.document_generation();
+    for key in [
+        "table-insert-row-before",
+        "table-insert-row-after",
+        "table-insert-col-before",
+        "table-insert-col-after",
+        "table-delete-row-backspace",
+        "table-delete-row-delete",
+        "table-delete-column-backspace",
+        "table-delete-column-delete",
+    ] {
+        runtime
+            .handle_editor_key_json(key)
+            .map_err(|error| format!("{key} outside table: {error}"))?;
+        assert_eq!(runtime.session.document_generation(), generation);
+    }
+    Ok(())
+}
+
+#[test]
+fn structure_keys_enter_and_leave_table_across_block_boundaries()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.insert_text_json("BEFORE".to_owned())?;
+    runtime.handle_editor_key_json("insert-table")?;
+    runtime.handle_editor_key_json("escape")?;
+    runtime
+        .handle_editor_key_json("structure-next")
+        .map_err(|error| format!("structure next into table: {error}"))?;
+    assert!(
+        matches!(
+            &runtime.session.selection().focus.story,
+            caret_engine::StoryId::TableCell { .. }
+        ),
+        "structure-next from the adjacent body paragraph must enter the table first cell"
+    );
+    runtime
+        .handle_editor_key_json("structure-previous")
+        .map_err(|error| format!("structure previous out of table: {error}"))?;
+    assert!(
+        matches!(
+            &runtime.session.selection().focus.story,
+            caret_engine::StoryId::Body
+        ),
+        "structure-previous at the first table row must leave to the adjacent body paragraph"
+    );
+    Ok(())
+}
+
+#[test]
+fn table_after_display_equation_does_not_swallow_horizontal_edge()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut base = Document::blank();
+    base.body = vec![
+        Block::Paragraph(paragraph_with_id(&NodeId::generate(), "P")),
+        Block::Equation(Equation {
+            id: NodeId::generate(),
+            math_tree: MathTree {
+                schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+                root: MathFlow {
+                    id: NodeId::generate(),
+                    content: vec![MathContent::Text(TextFlow {
+                        runs: vec![Run {
+                            text: "ab".to_owned(),
+                            language: None,
+                            props: BTreeMap::new(),
+                            extra: BTreeMap::new(),
+                        }],
+                        extra: BTreeMap::new(),
+                    })],
+                    extra: BTreeMap::new(),
+                },
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        }),
+    ];
+    let without_table = base.clone();
+    base.body.push(serde_json::from_value(serde_json::json!({
+        "type": "table",
+        "id": "table-after-equation",
+        "rows": [
+            {"id": "row-a", "cells": [
+                {"id": "cell-a0", "blocks": [{"type": "paragraph", "id": "p-a0", "inlines": []}]},
+                {"id": "cell-a1", "blocks": [{"type": "paragraph", "id": "p-a1", "inlines": []}]}
+            ]}
+        ]
+    }))?);
+    let mut control = DocumentViewRuntime::new(without_table)?;
+    let mut with_table = DocumentViewRuntime::new(base)?;
+    for index in 0..3 {
+        control
+            .move_visual_caret_json(true, false)
+            .map_err(|error| format!("control right {index}: {error}"))?;
+        with_table
+            .move_visual_caret_json(true, false)
+            .map_err(|error| format!("table right {index}: {error}"))?;
+    }
+    let control_interaction: Value = serde_json::from_str(&control.interaction_state_json()?)?;
+    let table_interaction: Value = serde_json::from_str(&with_table.interaction_state_json()?)?;
+    assert_eq!(
+        table_interaction["caretGeometry"], control_interaction["caretGeometry"],
+        "a table after a display equation must not swallow the horizontal edge"
+    );
+    Ok(())
+}
+
+#[test]
+fn unavailable_table_key_is_noop_and_escape_exits_table_to_body()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.insert_text_json("BEFORE".to_owned())?;
+    runtime.handle_editor_key_json("insert-table")?;
+    let generation = runtime.session.document_generation();
+    runtime
+        .handle_editor_key_json("insert-table")
+        .map_err(|error| format!("insert-table inside cell must not error: {error}"))?;
+    assert_eq!(runtime.session.document_generation(), generation);
+    runtime
+        .handle_editor_key_json("escape")
+        .map_err(|error| format!("escape: {error}"))?;
+    assert!(
+        matches!(
+            &runtime.session.selection().focus.story,
+            caret_engine::StoryId::Body
+        ),
+        "Escape from a cell must exit to the adjacent body paragraph"
+    );
+    assert_eq!(runtime.session.selection().focus.offset, 6);
+    Ok(())
+}
+
+#[test]
+fn shift_arrows_at_cell_boundary_extend_inside_cell_without_error()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.handle_editor_key_json("insert-table")?;
+    runtime.insert_text_json("ab".to_owned())?;
+    let cell = match &runtime.session.selection().focus.story {
+        caret_engine::StoryId::TableCell { cell_id, .. } => cell_id.clone(),
+        story => return Err(format!("focus must start in a table cell: {story:?}").into()),
+    };
+    runtime
+        .move_visual_caret_json(true, true)
+        .map_err(|error| format!("shift right: {error}"))?;
+    assert_eq!(
+        runtime.session.selection().anchor,
+        runtime.session.selection().focus
+    );
+    assert!(
+        matches!(&runtime.session.selection().focus.story, caret_engine::StoryId::TableCell { cell_id: current, .. } if current == &cell),
+        "Shift+Right at the cell content boundary must not cross to another cell"
+    );
+    runtime
+        .move_vertical_caret_json(1, true)
+        .map_err(|error| format!("shift down: {error}"))?;
+    assert!(
+        matches!(&runtime.session.selection().focus.story, caret_engine::StoryId::TableCell { cell_id: current, .. } if current == &cell),
+        "Shift+Down at the cell boundary must not leave the cell"
+    );
+    Ok(())
+}
+
+#[test]
+fn populated_table_cells_move_up_and_down_with_shared_targets()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.handle_editor_key_json("insert-table")?;
+    let first_row = match &runtime.session.selection().focus.story {
+        caret_engine::StoryId::TableCell { row_id, .. } => row_id.clone(),
+        story => return Err(format!("focus must start in a table cell: {story:?}").into()),
+    };
+    runtime.insert_text_json("a".to_owned())?;
+    runtime.move_vertical_caret_json(1, false)?;
+    runtime.insert_text_json("b".to_owned())?;
+    runtime.move_vertical_caret_json(-1, false)?;
+    let up_focus = runtime.session.selection().focus.clone();
+    assert!(
+        matches!(&up_focus.story, caret_engine::StoryId::TableCell { row_id, .. } if row_id == &first_row),
+        "Up from a populated target cell must return to the first row"
+    );
+    assert_eq!(up_focus.offset, 1, "Up enters the source cell at line end");
+    runtime.move_vertical_caret_json(1, false)?;
+    let down_focus = runtime.session.selection().focus.clone();
+    assert!(
+        matches!(&down_focus.story, caret_engine::StoryId::TableCell { row_id, .. } if row_id != &first_row),
+        "Down from a populated cell must reach the second row"
+    );
+    assert_eq!(
+        down_focus.offset, 0,
+        "Down enters the target cell at line start"
+    );
+    Ok(())
+}
+
+#[test]
+fn wrapped_cell_text_vertical_arrows_move_visual_lines_not_cells()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.handle_editor_key_json("insert-table")?;
+    runtime.insert_text_json("word ".repeat(30))?;
+    let paragraph_id = runtime.session.selection().focus.paragraph_id.clone();
+    let text_len = runtime.session.selection().focus.offset;
+    runtime
+        .move_vertical_caret_json(-1, false)
+        .map_err(|e| format!("wrapped up: {e}"))?;
+    assert_eq!(
+        runtime.session.selection().focus.paragraph_id,
+        paragraph_id,
+        "Up in wrapped cell text must stay in the same paragraph"
+    );
+    assert!(
+        runtime.session.selection().focus.offset < text_len,
+        "Up in wrapped cell text must move to the previous visual line"
+    );
+
+    // 回到首视觉行起点，再按 Down 必须留在同段落到下一视觉行。
+    for _ in 0..text_len {
+        if runtime.session.selection().focus.offset == 0 {
+            break;
+        }
+        runtime
+            .move_visual_caret_json(false, false)
+            .map_err(|e| format!("wrapped left: {e}"))?;
+    }
+    assert_eq!(runtime.session.selection().focus.offset, 0);
+    runtime
+        .move_vertical_caret_json(1, false)
+        .map_err(|e| format!("wrapped down: {e}"))?;
+    assert_eq!(
+        runtime.session.selection().focus.paragraph_id,
+        paragraph_id,
+        "Down in wrapped cell text must stay in the same paragraph"
+    );
+    assert!(
+        runtime.session.selection().focus.offset > 0,
+        "Down in wrapped cell text must move to the next visual line"
+    );
+    Ok(())
+}
+
+#[test]
+fn table_wire_intents_reach_row_and_column_commands() -> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.handle_editor_key_json("insert-table")?;
+    let table_shape = |runtime: &DocumentViewRuntime| {
+        runtime
+            .session
+            .document()
+            .body
+            .iter()
+            .find_map(|block| match block {
+                Block::Table(table) => Some((table.rows.len(), table.rows[0].cells.len())),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("table must exist"))
+    };
+    assert_eq!(table_shape(&runtime), (2, 2));
+    runtime.handle_editor_key_json("table-insert-row-before")?;
+    assert_eq!(table_shape(&runtime), (3, 2));
+    runtime.handle_editor_key_json("table-insert-col-after")?;
+    assert_eq!(table_shape(&runtime), (3, 3));
+    runtime.handle_editor_key_json("table-delete-row-backspace")?;
+    assert_eq!(table_shape(&runtime), (2, 3));
+    runtime.handle_editor_key_json("table-delete-column-delete")?;
+    assert_eq!(table_shape(&runtime), (2, 2));
+    Ok(())
+}
+
+#[test]
+fn table_cells_move_with_visual_and_vertical_arrows_at_boundaries()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.handle_editor_key_json("insert-table")?;
+    let first_root = match &runtime.session.selection().focus.story {
+        caret_engine::StoryId::TableCell {
+            row_id, cell_id, ..
+        } => (row_id.clone(), cell_id.clone()),
+        story => return Err(format!("focus must start in a table cell: {story:?}").into()),
+    };
+    let before_caret: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+    runtime
+        .move_visual_caret_json(true, false)
+        .map_err(|e| format!("right: {e}"))?;
+    let after_right = match &runtime.session.selection().focus.story {
+        caret_engine::StoryId::TableCell {
+            row_id, cell_id, ..
+        } => (row_id.clone(), cell_id.clone()),
+        story => return Err(format!("right arrow left the table: {story:?}").into()),
+    };
+    assert_eq!(after_right.0, first_root.0, "Right stays on the same row");
+    assert_ne!(after_right.1, first_root.1, "Right moves to the next cell");
+    runtime
+        .move_visual_caret_json(false, false)
+        .map_err(|e| format!("left: {e}"))?;
+    runtime
+        .move_vertical_caret_json(1, false)
+        .map_err(|e| format!("down1: {e}"))?;
+    let after_down_row = match &runtime.session.selection().focus.story {
+        caret_engine::StoryId::TableCell { row_id, .. } => row_id.clone(),
+        story => return Err(format!("Down left the table: {story:?}").into()),
+    };
+    assert_ne!(after_down_row, first_root.0, "Down moves to the next row");
+    assert_eq!(
+        runtime.session.selection().focus.offset,
+        0,
+        "Down enters the target cell at its first paragraph start"
+    );
+    let down_caret: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+    let down_x = down_caret["caretGeometry"]["xPt"]
+        .as_f64()
+        .ok_or("down caret x")?;
+    let before_x = before_caret["caretGeometry"]["xPt"]
+        .as_f64()
+        .ok_or("before caret x")?;
+    assert!(
+        (down_x - before_x).abs() < 0.01,
+        "Down must keep the same column x (before {before_x}, after {down_x})"
+    );
+    assert!(
+        down_caret["caretGeometry"]["y0Pt"].as_f64()
+            > before_caret["caretGeometry"]["y0Pt"].as_f64(),
+        "Down caret must move to the lower row"
+    );
+    runtime
+        .insert_text_json("x".to_owned())
+        .map_err(|e| format!("type: {e}"))?;
+    let before_edge = runtime.session.selection().focus.clone();
+    runtime
+        .move_vertical_caret_json(1, false)
+        .map_err(|e| format!("down2: {e}"))?;
+    assert_eq!(
+        runtime.session.selection().focus,
+        before_edge,
+        "Down at the last table row must be a focus-preserving no-op"
+    );
+    Ok(())
+}
+
+#[test]
 fn body_before_table_keeps_cell_caret_and_fragment_identity()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut runtime = DocumentViewRuntime::new_blank()?;
@@ -3428,11 +3868,35 @@ fn inserted_table_renders_cell_paragraphs_and_navigates() -> Result<(), Box<dyn 
         serde_json::json!(0)
     );
 
+    let first_guideline = snapshot["tableGuidelines"][0].clone();
+    let first_highlight = snapshot["blockEnvironmentHighlightRects"][0].clone();
+    assert_eq!(
+        snapshot["blockEnvironmentHighlightRects"]
+            .as_array()
+            .map(Vec::len),
+        Some(1),
+        "focused table must use the shared block highlight layer"
+    );
     let interaction: Value = serde_json::from_str(&runtime.handle_editor_key_json("tab")?)?;
     assert_eq!(
         interaction["tableGuidelines"].as_array().map(Vec::len),
         Some(1),
         "selection-only navigation must refresh table guidelines"
+    );
+    assert_eq!(
+        interaction["blockEnvironmentHighlightRects"]
+            .as_array()
+            .map(Vec::len),
+        Some(1),
+        "cell focus change must refresh shared block highlight"
+    );
+    assert_ne!(
+        interaction["tableGuidelines"][0], first_guideline,
+        "guideline must move with the focused cell"
+    );
+    assert_eq!(
+        interaction["blockEnvironmentHighlightRects"][0], first_highlight,
+        "whole-table block highlight stays stable while moving between cells"
     );
     let json = runtime.layout_snapshot_json()?;
     let snapshot: Value = serde_json::from_str(&json)?;

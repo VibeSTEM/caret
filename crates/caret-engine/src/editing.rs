@@ -21,7 +21,9 @@ mod session;
 mod tests;
 mod text_map;
 
-pub use command::{Command, Direction, EditorKey, NavigationCandidate, NavigationGeneration};
+pub use command::{
+    Command, Direction, EditorKey, NavigationCandidate, NavigationGeneration, TableDeleteBase,
+};
 pub use command_line::{CommandLine, CommandLineMode, CommandLineWireField};
 pub use command_registry::CommandCandidate;
 pub use environment::{

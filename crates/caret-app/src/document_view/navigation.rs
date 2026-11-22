@@ -453,6 +453,14 @@ impl DocumentViewRuntime {
             self.preferred_visual_x_pt = Some(target_margin.map_or(x, |margin| x - margin));
             return Ok(result);
         }
+        let table_vertical_boundary = !extend
+            && self
+                .session
+                .table_vertical_block_boundary(if line_delta < 0 {
+                    caret_engine::Direction::Backward
+                } else {
+                    caret_engine::Direction::Forward
+                });
         let at_vertical_edge = {
             let focus = self.session.selection().focus.clone();
             let visual_affinity = self.session.selection_visual_affinity();
@@ -468,14 +476,21 @@ impl DocumentViewRuntime {
             paragraph
                 .layout
                 .move_vertical(cursor, line_delta, preferred_x)
-                .is_none()
+                .is_none_or(|(next, _)| next.byte_index() == cursor.byte_index())
         };
         if at_vertical_edge {
+            let focus_before_edge = self.session.selection().focus.clone();
             let result = dispatch_navigation_key(
                 self,
                 vertical_navigation_key(line_delta, None, extend),
                 "navigation.vertical_edge",
             )?;
+            // 表格 cell 边界或共享宿主导航已经在 phase1 原子地完成换格/消费按键；
+            // 不能再让 phase2 用旧几何候选提交第二次移动。
+            if table_vertical_boundary || self.session.selection().focus != focus_before_edge {
+                self.preferred_visual_x_pt = None;
+                return Ok(result);
+            }
             if self.session.math_edit().is_some()
                 || self.session.math_block_boundary_exit().is_some()
                 || self
