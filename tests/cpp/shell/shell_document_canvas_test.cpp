@@ -210,12 +210,12 @@ void ShellDocumentCanvasTest::tableGuidelinesReplacePreviousCellInsteadOfAccumul
     window.show();
     QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 3000);
 
-    const auto red_pixels_near = [canvas, &window](double x, double y, double half) {
+    const auto red_pixels_near = [canvas, &window](const QPointF& page_point, double half) {
         const QImage frame = window.grabWindow().convertToFormat(QImage::Format_ARGB32);
         if (frame.isNull()) {
             return 0;
         }
-        const QPointF center = canvas->documentToContent(0, QPointF(x, y));
+        const QPointF center = canvas->documentToContent(0, page_point);
         const qreal scale_x = static_cast<qreal>(frame.width()) / window.width();
         const qreal scale_y = static_cast<qreal>(frame.height()) / window.height();
         const QRect rect(qFloor((center.x() - half) * scale_x),
@@ -241,10 +241,10 @@ void ShellDocumentCanvasTest::tableGuidelinesReplacePreviousCellInsteadOfAccumul
                                         {QStringLiteral("y1Pt"), y0 + 30.0}}};
     };
     canvas->setTableGuidelines(guideline(10.0, 10.0));
-    QTRY_VERIFY_WITH_TIMEOUT(red_pixels_near(25.0, 25.0, 20.0) > 0, 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(red_pixels_near(QPointF(25.0, 25.0), 20.0) > 0, 3000);
     canvas->setTableGuidelines(guideline(70.0, 70.0));
-    QTRY_VERIFY_WITH_TIMEOUT(red_pixels_near(25.0, 25.0, 20.0) == 0, 3000);
-    QVERIFY(red_pixels_near(85.0, 85.0, 20.0) > 0);
+    QTRY_VERIFY_WITH_TIMEOUT(red_pixels_near(QPointF(25.0, 25.0), 20.0) == 0, 3000);
+    QVERIFY(red_pixels_near(QPointF(85.0, 85.0), 20.0) > 0);
 }
 
 void ShellDocumentCanvasTest::underlinedTextRendersTheRustFfiDecorationInTheQtCanvas() {
