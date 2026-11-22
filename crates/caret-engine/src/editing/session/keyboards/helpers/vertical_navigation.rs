@@ -218,13 +218,14 @@ impl Session {
                     if extend {
                         return Ok(Effect::default());
                     }
-                    if matches!(self.selection.focus.story, crate::StoryId::Body)
-                        && self.enter_adjacent_table(direction)?
-                    {
-                        return Ok(Effect {
-                            selection_changed: true,
-                            ..Effect::default()
-                        });
+                    if matches!(self.selection.focus.story, crate::StoryId::Body) {
+                        if self.enter_adjacent_table(direction)? {
+                            return Ok(Effect {
+                                selection_changed: true,
+                                ..Effect::default()
+                            });
+                        }
+                        return self.complete_vertical_document_edge(direction, false);
                     }
                     return Ok(Effect::default());
                 }

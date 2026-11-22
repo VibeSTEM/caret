@@ -148,7 +148,7 @@ impl Session {
 impl Session {
     /// Alt+Left：在单元格左侧插入列。
     pub(super) fn handle_left_arrow_table_insert_column(&mut self) -> Result<Effect, EditError> {
-        if !super::helpers::table::table_keyboard_context_available(self) {
+        if !super::helpers::table::table_cell_keyboard_available(self) {
             return Ok(Effect::default());
         }
         self.insert_table_column(Direction::Backward)

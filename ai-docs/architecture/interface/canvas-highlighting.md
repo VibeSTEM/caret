@@ -4,7 +4,7 @@
 
 ## 表格编辑辅助线
 
-焦点位于表格单元格时，Rust 以同一份 `TableGridLayout` 和页面 `TableFragment` 派生网格 cell 外框：该矩形同时进入共享 block 高亮层（奶油黄，与 Section/Equation 同层）和 `tableGuidelines`（页面局部矩形，已裁到纸张内）。native 只按快照几何绘制块高亮与虚线（固定 dash/gap），不重算单元格边界；虚线颜色来自 `color-table-guideline` 主题 token。辅助线不写入 `.cdoc`、不参与命中，焦点变化通过交互快照整体替换，切换 cell 不保留旧矩形。
+焦点位于表格内时，Rust 以同一份 `TableGridLayout` 和页面 `TableFragment` 派生两层几何：整张表格的 fragment 矩形进入共享 block 高亮层（奶油黄，与 Section/Equation 同层），当前 cell 的网格外框进入 `tableGuidelines` 虚线层（页面局部矩形，已裁到纸张内）。表格边框始终为实线；整表高亮表达“表格块处于焦点”，cell 虚线表达“当前编辑单元格”。native 只按快照几何绘制块高亮与虚线（固定 dash/gap），不重算单元格边界；虚线颜色来自 `color-table-guideline` 主题 token。辅助线不写入 `.cdoc`、不参与命中，焦点变化通过交互快照整体替换，切换 cell 不保留旧矩形，离开表格两层同时清空。
 
 ## 两个渲染层
 

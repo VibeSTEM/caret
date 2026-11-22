@@ -3426,6 +3426,29 @@ fn shift_extension_at_cell_boundary_with_active_selection_stays_in_cell()
 }
 
 #[test]
+fn table_structure_keys_outside_table_are_noops() -> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.insert_text_json("body".to_owned())?;
+    let generation = runtime.session.document_generation();
+    for key in [
+        "table-insert-row-before",
+        "table-insert-row-after",
+        "table-insert-col-before",
+        "table-insert-col-after",
+        "table-delete-row-backspace",
+        "table-delete-row-delete",
+        "table-delete-column-backspace",
+        "table-delete-column-delete",
+    ] {
+        runtime
+            .handle_editor_key_json(key)
+            .map_err(|error| format!("{key} outside table: {error}"))?;
+        assert_eq!(runtime.session.document_generation(), generation);
+    }
+    Ok(())
+}
+
+#[test]
 fn structure_keys_enter_and_leave_table_across_block_boundaries()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut runtime = DocumentViewRuntime::new_blank()?;
@@ -3451,6 +3474,64 @@ fn structure_keys_enter_and_leave_table_across_block_boundaries()
             caret_engine::StoryId::Body
         ),
         "structure-previous at the first table row must leave to the adjacent body paragraph"
+    );
+    Ok(())
+}
+
+#[test]
+fn table_after_display_equation_does_not_swallow_horizontal_edge()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut base = Document::blank();
+    base.body = vec![
+        Block::Paragraph(paragraph_with_id(&NodeId::generate(), "P")),
+        Block::Equation(Equation {
+            id: NodeId::generate(),
+            math_tree: MathTree {
+                schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+                root: MathFlow {
+                    id: NodeId::generate(),
+                    content: vec![MathContent::Text(TextFlow {
+                        runs: vec![Run {
+                            text: "ab".to_owned(),
+                            language: None,
+                            props: BTreeMap::new(),
+                            extra: BTreeMap::new(),
+                        }],
+                        extra: BTreeMap::new(),
+                    })],
+                    extra: BTreeMap::new(),
+                },
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        }),
+    ];
+    let without_table = base.clone();
+    base.body.push(serde_json::from_value(serde_json::json!({
+        "type": "table",
+        "id": "table-after-equation",
+        "rows": [
+            {"id": "row-a", "cells": [
+                {"id": "cell-a0", "blocks": [{"type": "paragraph", "id": "p-a0", "inlines": []}]},
+                {"id": "cell-a1", "blocks": [{"type": "paragraph", "id": "p-a1", "inlines": []}]}
+            ]}
+        ]
+    }))?);
+    let mut control = DocumentViewRuntime::new(without_table)?;
+    let mut with_table = DocumentViewRuntime::new(base)?;
+    for index in 0..3 {
+        control
+            .move_visual_caret_json(true, false)
+            .map_err(|error| format!("control right {index}: {error}"))?;
+        with_table
+            .move_visual_caret_json(true, false)
+            .map_err(|error| format!("table right {index}: {error}"))?;
+    }
+    let control_interaction: Value = serde_json::from_str(&control.interaction_state_json()?)?;
+    let table_interaction: Value = serde_json::from_str(&with_table.interaction_state_json()?)?;
+    assert_eq!(
+        table_interaction["caretGeometry"], control_interaction["caretGeometry"],
+        "a table after a display equation must not swallow the horizontal edge"
     );
     Ok(())
 }

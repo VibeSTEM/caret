@@ -20,7 +20,7 @@ impl Session {
 impl Session {
     /// Alt+Down：在单元格下方插入行。
     pub(super) fn handle_down_arrow_table_insert_row(&mut self) -> Result<Effect, EditError> {
-        if !super::helpers::table::table_keyboard_context_available(self) {
+        if !super::helpers::table::table_cell_keyboard_available(self) {
             return Ok(Effect::default());
         }
         self.insert_table_row(Direction::Forward)

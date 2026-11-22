@@ -20,7 +20,7 @@ impl Session {
 impl Session {
     /// Alt+Up：在单元格上方插入行；修饰差异归本按键。
     pub(super) fn handle_up_arrow_table_insert_row(&mut self) -> Result<Effect, EditError> {
-        if !super::helpers::table::table_keyboard_context_available(self) {
+        if !super::helpers::table::table_cell_keyboard_available(self) {
             return Ok(Effect::default());
         }
         self.insert_table_row(Direction::Backward)

@@ -107,12 +107,16 @@ impl Session {
             }
             if let Some(direction) = direction
                 && matches!(self.selection.focus.story, crate::StoryId::Body)
-                && self.enter_adjacent_table(direction)?
             {
-                return Ok(Effect {
-                    selection_changed: true,
-                    ..Effect::default()
-                });
+                if self.enter_adjacent_table(direction)? {
+                    return Ok(Effect {
+                        selection_changed: true,
+                        ..Effect::default()
+                    });
+                }
+                // 候选可能跳过紧邻的公式/环境（扁平段落顺序不含公式）；表格
+                // 不直接相邻时回落到既有复杂块边缘逻辑，不能把方向键吃掉。
+                return self.complete_horizontal_document_edge(direction, false);
             }
             return Ok(Effect::default());
         }
