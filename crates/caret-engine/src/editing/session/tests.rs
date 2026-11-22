@@ -3709,6 +3709,26 @@ fn table_cell_inline_math_can_enter_math_edit() {
 }
 
 #[test]
+fn table_command_inside_cell_is_unavailable_without_error() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("session must open: {error}"));
+    session
+        .run(Command::InsertTable)
+        .unwrap_or_else(|error| panic!("table must insert: {error}"));
+    let generation = session.document_generation();
+    session
+        .run(Command::BeginCommandLine)
+        .unwrap_or_else(|error| panic!("command line must start: {error}"));
+    session
+        .run(Command::TypeCommandLine("table".to_owned()))
+        .unwrap_or_else(|error| panic!("table query must type: {error}"));
+    session
+        .run(Command::AcceptCommandLine)
+        .unwrap_or_else(|error| panic!("unavailable table command must not error: {error}"));
+    assert_eq!(session.document_generation(), generation);
+}
+
+#[test]
 fn table_insertion_key_inside_cell_is_ignored_without_document_change() {
     let mut session = Session::new(Document::blank())
         .unwrap_or_else(|error| panic!("session must open: {error}"));
