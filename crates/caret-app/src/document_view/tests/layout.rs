@@ -3347,6 +3347,21 @@ fn tall_cell_layout_snapshot_stays_inside_page_bounds() -> Result<(), Box<dyn st
 }
 
 #[test]
+fn empty_body_paragraph_vertical_arrow_stays_put() -> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    let before = runtime.session.selection().focus.clone();
+    runtime
+        .move_vertical_caret_json(1, false)
+        .map_err(|e| format!("empty body down: {e}"))?;
+    assert_eq!(runtime.session.selection().focus, before);
+    runtime
+        .move_vertical_caret_json(-1, false)
+        .map_err(|e| format!("empty body up: {e}"))?;
+    assert_eq!(runtime.session.selection().focus, before);
+    Ok(())
+}
+
+#[test]
 fn wrapped_cell_text_vertical_arrows_move_visual_lines_not_cells()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut runtime = DocumentViewRuntime::new_blank()?;
