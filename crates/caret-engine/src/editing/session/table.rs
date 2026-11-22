@@ -335,8 +335,9 @@ impl Session {
         Ok(at_boundary.then_some((context, block_index)))
     }
 
-    /// app 视觉导航在候选为空时查询：当前纵向方向键是否应交给共享 cell 导航。
-    pub fn table_vertical_arrow_boundary(&self, direction: Direction) -> bool {
+    /// app 在 phase1 后查询：当前焦点是否位于 cell 首/末块的纵向边界。
+    /// 该查询不感知视觉行；折行文本的视觉行导航仍由布局候选负责。
+    pub fn table_vertical_block_boundary(&self, direction: Direction) -> bool {
         self.table_arrow_boundary_state(TableArrowAxis::Vertical, direction)
             .is_ok_and(|state| state.is_some())
     }

@@ -2676,6 +2676,22 @@ fn table_arrows_enter_multi_paragraph_cell_at_first_or_last_paragraph() {
     assert_eq!(session.selection.focus.paragraph_id, p_a0);
     assert_eq!(session.selection.focus.offset, 2);
 
+    let cell_b1 = NodeId::parse("cell-b1").unwrap_or_else(|error| panic!("{error}"));
+    let p_b1 = NodeId::parse("p-b1").unwrap_or_else(|error| panic!("{error}"));
+    select(&mut session, &row_b, &cell_b1, &p_b1, 0);
+    run_ok(
+        &mut session,
+        Command::EditorKey(EditorKey::LeftArrow {
+            candidate: None,
+            extend: false,
+        }),
+    );
+    assert_eq!(
+        session.selection.focus.paragraph_id,
+        NodeId::parse("p-b0b").unwrap_or_else(|error| panic!("{error}"))
+    );
+    assert_eq!(session.selection.focus.offset, 2);
+
     let cell_a1 = NodeId::parse("cell-a1").unwrap_or_else(|error| panic!("{error}"));
     let p_a1 = NodeId::parse("p-a1").unwrap_or_else(|error| panic!("{error}"));
     select(&mut session, &row_a, &cell_a1, &p_a1, 0);

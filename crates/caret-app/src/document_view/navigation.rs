@@ -456,7 +456,7 @@ impl DocumentViewRuntime {
         let table_vertical_boundary = !extend
             && self
                 .session
-                .table_vertical_arrow_boundary(if line_delta < 0 {
+                .table_vertical_block_boundary(if line_delta < 0 {
                     caret_engine::Direction::Backward
                 } else {
                     caret_engine::Direction::Forward
@@ -478,7 +478,7 @@ impl DocumentViewRuntime {
                 .move_vertical(cursor, line_delta, preferred_x)
                 .is_none_or(|(next, _)| next.byte_index() == cursor.byte_index())
         };
-        if at_vertical_edge || table_vertical_boundary {
+        if at_vertical_edge {
             let focus_before_edge = self.session.selection().focus.clone();
             let result = dispatch_navigation_key(
                 self,

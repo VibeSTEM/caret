@@ -3347,6 +3347,52 @@ fn tall_cell_layout_snapshot_stays_inside_page_bounds() -> Result<(), Box<dyn st
 }
 
 #[test]
+fn wrapped_cell_text_vertical_arrows_move_visual_lines_not_cells()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.handle_editor_key_json("insert-table")?;
+    runtime.insert_text_json("word ".repeat(30))?;
+    let paragraph_id = runtime.session.selection().focus.paragraph_id.clone();
+    let text_len = runtime.session.selection().focus.offset;
+    runtime
+        .move_vertical_caret_json(-1, false)
+        .map_err(|e| format!("wrapped up: {e}"))?;
+    assert_eq!(
+        runtime.session.selection().focus.paragraph_id,
+        paragraph_id,
+        "Up in wrapped cell text must stay in the same paragraph"
+    );
+    assert!(
+        runtime.session.selection().focus.offset < text_len,
+        "Up in wrapped cell text must move to the previous visual line"
+    );
+
+    // 回到首视觉行起点，再按 Down 必须留在同段落到下一视觉行。
+    for _ in 0..text_len {
+        if runtime.session.selection().focus.offset == 0 {
+            break;
+        }
+        runtime
+            .move_visual_caret_json(false, false)
+            .map_err(|e| format!("wrapped left: {e}"))?;
+    }
+    assert_eq!(runtime.session.selection().focus.offset, 0);
+    runtime
+        .move_vertical_caret_json(1, false)
+        .map_err(|e| format!("wrapped down: {e}"))?;
+    assert_eq!(
+        runtime.session.selection().focus.paragraph_id,
+        paragraph_id,
+        "Down in wrapped cell text must stay in the same paragraph"
+    );
+    assert!(
+        runtime.session.selection().focus.offset > 0,
+        "Down in wrapped cell text must move to the next visual line"
+    );
+    Ok(())
+}
+
+#[test]
 fn table_wire_intents_reach_row_and_column_commands() -> Result<(), Box<dyn std::error::Error>> {
     let mut runtime = DocumentViewRuntime::new_blank()?;
     runtime.handle_editor_key_json("insert-table")?;
