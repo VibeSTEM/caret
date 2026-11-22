@@ -108,7 +108,8 @@
 - 2026-11-22：根据真实窗口测试与维护者反馈创建；确认按 080 共享宿主协议、076 键盘架构收敛，不继续扩大 table_keys.rs。
 - 2026-11-22：键盘结构收敛：删除 `table_keys.rs`；Shift+Tab 进 `tab.rs`，Alt+T 新建 `alt_t.rs`，Alt+↑/↓ 行列插入进 `up_arrow.rs`/`down_arrow.rs`/`left_arrow.rs`/`right_arrow.rs`，Alt(+Shift)+Backspace/Delete 行列删除进 `backspace.rs`/`delete.rs`；每类 EditorKey 按具体按键一行分派，`helpers/table.rs` 只保留共享上下文判定。
 - 2026-11-22：app 级方向键换格回归（visual/vertical navigation 路径）通过；键盘路由/快捷键文档同步为按实体键归档。
-- 2026-11-22：按维护者截图反馈继续修复：block 高亮从当前 cell 改为整张表格（所有 cell 完整奶油黄）且边框保持实线；当前 cell 仅保留网格外框虚线；方向键在表格边缘按块宿主离开/进入相邻正文段落，Escape 从 cell 退出；普通/Shift 方向键的跨 Story 表格候选统一在共享导航提交点收敛（扩选 no-op、普通移动进入相邻格），消除 `edit.position_story_mismatch`；不可用表格插入键 no-op，消除 `table_insertion_unsupported`；native 轴线按设备像素对齐，修复 Enter 后边框粗细不均。补 engine/app/native 回归。
+- 2026-11-22：结构导航键在 body↔table 边界的目标 Story 改为从段落索引推导，进入/离开表格按块邻接处理，消除 `struct.next: edit.position_story_mismatch`。
+- 2026-11-22：按维护者截图反馈继续修复：block 高亮从当前 cell 改为整张表格（所有 cell 完整奶油黄）且边框保持实线；当前 cell 仅保留网格外框虚线；方向键在表格边缘按块宿主离开/进入相邻正文段落，Escape 从 cell 退出；普通/Shift 方向键与结构导航键的跨 Story 表格候选统一收敛（扩选 no-op、普通移动进入相邻格），消除 `edit.position_story_mismatch`；不可用表格插入键 no-op，消除 `table_insertion_unsupported`；native 轴线按设备像素对齐，修复 Enter 后边框粗细不均。补 engine/app/native 回归。
 - 2026-11-22：领域评审三轮修复：方向键 cell 目标确实改用共享 `focus_table_cell` 提交；补 app 非空目标 cell Up/Down 回归。纵向 app phase1 只由视觉边界触发，`table_vertical_block_boundary` 仅用于 phase1 后早退；折行 cell 纵向文本行导航恢复并补 app 回归；方向键目标提交改用共享 `focus_table_cell`；补正文空段纵向 no-op 测试。
 - 2026-11-22：领域评审修复：vertical app phase1/phase2 双提交收敛（表格边界消费一次、失败不改焦点）；空 paragraph 纵向边界识别；单元格内多段 Enter/Left/Up 首末段落点统一；环境内表格允许方向键换格；删除调试输出；app 测试改为断言目标行/列 x/offset/末行 no-op，并补 wire 行列命令用例；几何测试断言表格外框/规则线而非仅相对关系。
 - 2026-11-22：表格 cell 外框改为 `TableGridLayout` 网格矩形单点派生：同一矩形进入共享 block 高亮层和 `tableGuidelines`（含边框/内边距拆分后的对称左右边界），修复 2×2 左右起始不一致与辅助线内容盒内缩；新增 engine 对称几何/共享高亮测试、app 切换 cell 高亮/辅助线替换测试、C++ native 指南线整体替换测试（红色像素验证旧矩形清除）。
