@@ -80,7 +80,7 @@
 | 2026-11-22 | `cargo fmt --all -- --check`、`cargo format --check`、`cargo clippy --locked --offline --workspace --all-targets -- -D warnings` | 格式与静态检查 | 通过 |
 | 2026-11-22 | `cargo test --locked --offline --workspace` | 全量 Rust/native/QML 回归 | 通过：2083 passed / 1 ignored（34 个测试 target，合计 2084 项，含 native 聚合；engine 973/app 369/layout 160/structure 15） |
 | 2026-11-22 | `cargo lint --check` | Rust/C++/QML/CMake/依赖 9 阶段 | 通过：9/9 |
-| 2026-11-22 | PR [#169](https://github.com/VibeSTEM/caret/pull/169) CI | 适用作业通过 | 通过：12/12 作业成功 |
+| 2026-11-22 | PR [#169](https://github.com/VibeSTEM/caret/pull/169) CI（HEAD `71318c7`，run 45027580206） | 适用作业通过 | 通过：12/12 作业成功 |
 | — | 真实窗口人工视觉：焦点高亮、虚线对齐、缩放/翻页/前后台 | 桌面可观察 | 未执行：本环境只有 headless app/native 与 CTest；与 046 先例一致，作为外部验收限制记录 |
 | — | bidi/RTL 视觉边界、跨格 Shift 扩选、cell 内嵌环境/公式停靠点 | 后续同族任务 | 未验证/未实现：不属于本任务范围，已列限制 |
 
