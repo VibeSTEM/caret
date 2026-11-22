@@ -3426,6 +3426,36 @@ fn shift_extension_at_cell_boundary_with_active_selection_stays_in_cell()
 }
 
 #[test]
+fn structure_keys_enter_and_leave_table_across_block_boundaries()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.insert_text_json("BEFORE".to_owned())?;
+    runtime.handle_editor_key_json("insert-table")?;
+    runtime.handle_editor_key_json("escape")?;
+    runtime
+        .handle_editor_key_json("structure-next")
+        .map_err(|error| format!("structure next into table: {error}"))?;
+    assert!(
+        matches!(
+            &runtime.session.selection().focus.story,
+            caret_engine::StoryId::TableCell { .. }
+        ),
+        "structure-next from the adjacent body paragraph must enter the table first cell"
+    );
+    runtime
+        .handle_editor_key_json("structure-previous")
+        .map_err(|error| format!("structure previous out of table: {error}"))?;
+    assert!(
+        matches!(
+            &runtime.session.selection().focus.story,
+            caret_engine::StoryId::Body
+        ),
+        "structure-previous at the first table row must leave to the adjacent body paragraph"
+    );
+    Ok(())
+}
+
+#[test]
 fn unavailable_table_key_is_noop_and_escape_exits_table_to_body()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut runtime = DocumentViewRuntime::new_blank()?;

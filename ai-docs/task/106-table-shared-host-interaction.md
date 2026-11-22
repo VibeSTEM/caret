@@ -74,11 +74,11 @@
 | 日期 | 环境 / 命令 | 预期 | 实际结果 |
 | --- | --- | --- | --- |
 | 2026-11-22 | `cargo test -p caret-engine --lib` | 键盘/表格/方向键/高亮几何行为 | 通过：972 项 |
-| 2026-11-22 | `cargo test -p caret-app --lib` | app 快照高亮/辅助线/方向键换格、wire 命令、进出/错误收敛 | 通过：366 项 |
+| 2026-11-22 | `cargo test -p caret-app --lib` | app 快照高亮/辅助线/方向键换格、wire 命令、进出/错误收敛 | 通过：367 项 |
 | 2026-11-22 | `cargo test -p caret-tests --test native` | native CTest、辅助线替换、边框像素厚度 | 通过：CTest 20/20，新 C++ 用例验证旧矩形清除与亚像素轴线厚度一致 |
 | 2026-11-22 | PR #169 后续截图反馈 | 整表高亮、块进出、QML 错误、边框粗细 | 修复并补测试；待复评/CI |
 | 2026-11-22 | `cargo fmt --all -- --check`、`cargo format --check`、`cargo clippy --locked --offline --workspace --all-targets -- -D warnings` | 格式与静态检查 | 通过 |
-| 2026-11-22 | `cargo test --locked --offline --workspace` | 全量 Rust/native/QML 回归 | 通过：2081 项（engine 972/app 366/layout 160/structure 15 + native 聚合） |
+| 2026-11-22 | `cargo test --locked --offline --workspace` | 全量 Rust/native/QML 回归 | 通过：2082 项（engine 972/app 367/layout 160/structure 15 + native 聚合） |
 | 2026-11-22 | `cargo lint --check` | Rust/C++/QML/CMake/依赖 9 阶段 | 通过：9/9 |
 | 2026-11-22 | PR [#169](https://github.com/VibeSTEM/caret/pull/169) CI | 适用作业通过 | 通过：12/12 作业成功 |
 | — | 真实窗口人工视觉：焦点高亮、虚线对齐、缩放/翻页/前后台 | 桌面可观察 | 未执行：本环境只有 headless app/native 与 CTest；与 046 先例一致，作为外部验收限制记录 |
@@ -88,6 +88,7 @@
 
 - 真实窗口人工视觉验收未执行（headless 证据：engine/app 快照、native CTest 20/20、C++ 辅助线像素替换与边框厚度测试）。
 - bidi/RTL 单元格边界仍按逻辑 offset 判定，未验证视觉边界。
+- 环境（Section）body 含表格时，表格结构选区跨越宿主会触发 `layout.stale_selection_geometry` 粘滞错误（发布端 `crates/caret-app/src/document_view/snapshot.rs`）；表格结构选区/范围删除属后续同族任务，本任务未改。
 - 表格 cell 内**跨 cell 扩选**收敛为 no-op（保持 cell 内扩选）；cell 内嵌环境的方向键落点、cell 内显示公式宿主停靠点错误为后续同族任务，本任务未改。
 - 命中框仍按 046 既有列内缩推导，未与新 cell 外框完全统一；记录为后续几何收敛项。
 - `table_vertical_block_boundary` 只表示 cell 首/末块，不感知视觉行；折行 text 的视觉行导航由布局候选负责。
