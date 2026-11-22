@@ -681,9 +681,6 @@ impl DocumentLayoutSnapshot {
         Some(geometry)
     }
 
-    /// 当前焦点所在单元格的编辑辅助线矩形；焦点不在表格内时为空。
-    ///
-    /// 辅助线只表达编辑焦点，不进入 `.cdoc`，也不参与命中。
     /// 焦点单元格的网格外框（含边框/内边距拆分后的整个 cell 矩形）；焦点不在表格内为空。
     fn focused_table_cell_rect(&self, position: &Pos) -> Option<PageSelectionRect> {
         let paragraph = self.paragraph_by_id(&position.paragraph_id)?;
@@ -693,7 +690,7 @@ impl DocumentLayoutSnapshot {
         let cell = paragraph.container.innermost_cell()?;
         let grid = self.table_layouts.get(&cell.table_id)?;
         let row = grid.rows.get(cell.row_index)?;
-        let cell_geometry = row.cells.get(cell.cell_index)?;
+        row.cells.get(cell.cell_index)?;
         let horizontal_inset_pt = grid.columns.first().map_or(0.0, |(x, _)| *x);
         let vertical_inset_pt = grid.rows.first().map_or(0.0, |row| row.top_pt);
         let x0_cell = if cell.cell_index == 0 {
@@ -724,7 +721,6 @@ impl DocumentLayoutSnapshot {
                 .get(cell.row_index + 1)
                 .map_or(row.top_pt + row.height_pt, |next| next.top_pt)
         };
-        let _ = cell_geometry;
         for (page_index, page) in self.pages.iter().enumerate() {
             for fragment in &page.layout.table_fragments {
                 if fragment.table_id != cell.table_id

@@ -271,9 +271,8 @@ impl Session {
         )?))
     }
 
-    /// 方向键在单元格首/末内容边界进入相邻单元格；返回 `None` 表示不在边界、交给文本/外层导航。
-    /// 表格边缘仍消费按键（`Some(default)`），不让普通方向键把光标带出表格。
     /// 判断方向键是否落在单元格首/末内容边界；返回上下文供导航与 app 查询共用。
+    /// 边界按 cell 块和逻辑文本偏移判定，不感知布局视觉行。
     fn table_arrow_boundary_state(
         &self,
         axis: TableArrowAxis,
@@ -289,9 +288,9 @@ impl Session {
         else {
             return Ok(None);
         };
-        let Some(_cell) = location.container.innermost_cell() else {
+        if location.container.innermost_cell().is_none() {
             return Ok(None);
-        };
+        }
         // 允许表格本身位于块环境内；只拒绝单元格内再包一层环境造成的嵌套落点。
         let outside_cell_environment_depth = location
             .container
@@ -335,7 +334,7 @@ impl Session {
         Ok(at_boundary.then_some((context, block_index)))
     }
 
-    /// app 在 phase1 后查询：当前焦点是否位于 cell 首/末块的纵向边界。
+    /// app 纵向导航查询：当前焦点是否位于 cell 首/末块的纵向边界。
     /// 该查询不感知视觉行；折行文本的视觉行导航仍由布局候选负责。
     pub fn table_vertical_block_boundary(&self, direction: Direction) -> bool {
         self.table_arrow_boundary_state(TableArrowAxis::Vertical, direction)

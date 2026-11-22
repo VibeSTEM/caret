@@ -61,12 +61,12 @@
 
 ## 验收标准
 
-- [ ] 真实窗口/快照中单元格焦点使用共享 block 高亮层；高亮与虚线几何同源，前后台切换、缩放、翻页一致。
-- [ ] 辅助线定位正确；Tab/方向键/点击切换单元格时旧虚线清除，离开表格无残留；native 严格快照校验通过。
-- [ ] 方向键在 cell 内容边界移动相邻 cell（左右行优先、上下同列优先），有文本时保持文本导航；失败不改变文档/焦点。
-- [ ] `table_keys.rs` 删除，Shift+Tab 在 tab.rs、Alt+T 在 alt_t.rs、Alt+方向键在对应方向键文件、Alt(+Shift)+Backspace/Delete 在 backspace/delete 文件；helpers 不复制上下文优先级。
-- [ ] 2×2 表格左右起始/几何对称，测试断言列宽、内容 x、规则线和辅助线一致。
-- [ ] 行为/native/QML/快照回归、fmt/format/clippy/lint 通过；领域评审与独立 final review 通过，PR 创建并 CI 通过。
+- [ ] 单元格焦点使用共享 block 高亮层；高亮与虚线几何同源，前后台切换、缩放、翻页一致。（headless engine/app/native 快照与像素测试通过；真实窗口人工视觉未执行，见限制）
+- [x] 辅助线定位正确；Tab/方向键/点击切换单元格时旧虚线清除，离开表格无残留；native 严格快照校验通过。
+- [x] 方向键在 cell 内容边界移动相邻 cell（左右行优先、上下同列优先），有文本时保持文本导航；失败不改变文档/焦点。
+- [x] `table_keys.rs` 删除，Shift+Tab 在 tab.rs、Alt+T 在 alt_t.rs、Alt+方向键在对应方向键文件、Alt(+Shift)+Backspace/Delete 在 backspace/delete 文件；helpers 不复制上下文优先级。
+- [x] 2×2 表格左右起始/几何对称，测试断言表格外框/规则线/内容 x/辅助线一致。
+- [ ] 行为/native/QML/快照回归、fmt/format/clippy/lint 通过；领域评审与独立 final review 通过，PR 创建并 CI 通过。（回归与评审已完成；PR/CI 待创建）
 
 ## 验证计划与结果
 
@@ -76,6 +76,24 @@
 | 2026-11-22 | `cargo test -p caret-app --lib` | app 快照高亮/辅助线/方向键换格、wire 命令 | 通过：362 项 |
 | 2026-11-22 | `cargo test -p caret-tests --test native` | native CTest 与指南线替换渲染 | 通过：CTest 20/20，新 C++ 用例验证旧矩形清除 |
 | 2026-11-22 | `cargo fmt --all -- --check`、`cargo format --check`、`cargo clippy --locked --offline --workspace --all-targets -- -D warnings` | 格式与静态检查 | 通过 |
+| 2026-11-22 | `cargo test --locked --offline --workspace` | 全量 Rust/native/QML 回归 | 通过：2077 项（engine 971/app 362/layout 160/structure 15 + native 聚合） |
+| 2026-11-22 | `cargo lint --check` | Rust/C++/QML/CMake/依赖 9 阶段 | 通过：9/9 |
+| — | 真实窗口人工视觉：焦点高亮、虚线对齐、缩放/翻页/前后台 | 桌面可观察 | 未执行：本环境只有 headless app/native 与 CTest；与 046 先例一致，作为外部验收限制记录 |
+| — | bidi/RTL 视觉边界、跨格 Shift 扩选、cell 内嵌环境/公式停靠点 | 后续同族任务 | 未验证/未实现：不属于本任务范围，已列限制 |
+
+## 已知限制与未执行项
+
+- 真实窗口人工视觉验收未执行（headless 证据：engine/app 快照、native CTest 20/20、C++ 辅助线像素替换测试）。
+- bidi/RTL 单元格边界仍按逻辑 offset 判定，未验证视觉边界。
+- Shift+方向键跨 cell 扩选、cell 内嵌环境的方向键落点、cell 内显示公式宿主停靠点错误为 main 既有行为/后续同族任务，本任务未改。
+- 命中框仍按 046 既有列内缩推导，未与新 cell 外框完全统一；记录为后续几何收敛项。
+- `table_vertical_block_boundary` 只表示 cell 首/末块，不感知视觉行；折行 text 的视觉行导航由布局候选负责。
+- 未新增 QML 代码；QML 仅沿用既有 `tableGuidelines`/`blockHighlightRects` 绑定，由 native CTest Qml.ShellLoad 覆盖加载。
+
+## 独立评审
+
+- **领域评审（未参与实现，只读）**：三轮。首轮发现纵向方向键 app phase1/phase2 双提交、空 cell 边界 no-op、多段目标落点、测试弱断言等 P1/P2；修复后复验发现折行 cell 文本纵向导航回归（P1）；再修复后确认 P1 清零，仅剩记录/覆盖 P2/P3。评审同时核对 076/080 键盘与宿主结构、wire 协议、高亮/辅助线同源、C++ 像素测试真实性。
+- **独立最终评审（未参与实现，只读完整 diff）**：范围 `70985b0...2fc395a`。独立复跑 workspace 2077 项、native CTest 20/20、fmt/format/clippy/lint 9/9；差分探针验证 `edit.position_story_mismatch` 旧问题消失、2×2 高亮/辅助线逐字段一致、离开表格清空、正文折行导航无回归；确认 `table_keys.rs` 无残留、逐键归档与 wire 拆分为真。无 P1/P2 代码阻断；P2 仅要求本记录补齐（本节），P3 为注释/测试强度/既有 hit clip 等后续项。结论：可创建 PR；本记录与 PR CI 齐备后可标 `implemented`。
 
 ## 风险与回退
 

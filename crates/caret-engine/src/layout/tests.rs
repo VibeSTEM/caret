@@ -5679,7 +5679,7 @@ fn table_cell_guidelines_use_symmetric_mesh_rects() {
     let mut document = Document::blank();
     document.body = vec![Block::Table(table)];
     let snapshot = layout_document(&document);
-    let rect_for = |row: &TableRow, cell: &TableCell, row_index: usize, cell_index: usize| {
+    let rect_for = |row: &TableRow, cell: &TableCell| {
         let paragraph = cell
             .blocks
             .iter()
@@ -5698,7 +5698,6 @@ fn table_cell_guidelines_use_symmetric_mesh_rects() {
             offset: 0,
             affinity: Affinity::Upstream,
         };
-        let _ = (row_index, cell_index);
         snapshot
             .table_guidelines(&pos)
             .into_iter()
@@ -5716,9 +5715,9 @@ fn table_cell_guidelines_use_symmetric_mesh_rects() {
         .first()
         .unwrap_or_else(|| panic!("table fragment"));
     let table_origin_x = page.margin_left_pt + f64::from(fragment.x_offset_pt);
-    let left = rect_for(&row0, &row0.cells[0], 0, 0);
-    let right = rect_for(&row0, &row0.cells[1], 0, 1);
-    let lower = rect_for(&row1, &row1.cells[0], 1, 0);
+    let left = rect_for(&row0, &row0.cells[0]);
+    let right = rect_for(&row0, &row0.cells[1]);
+    let lower = rect_for(&row1, &row1.cells[0]);
     assert!((left.x0_pt - table_origin_x).abs() < 0.01);
     assert!((right.x1_pt - (table_origin_x + grid.width_pt)).abs() < 0.01);
     assert!((left.x1_pt - right.x0_pt).abs() < 0.01);
