@@ -54,7 +54,7 @@ Qt QKeyEvent → 平台键映射 → 编辑器意图
 | `mod_c.rs` / `mod_v.rs` | Mod+C / Mod+V；已接入 | 复制/粘贴的会话语义与作用域；系统剪贴板读写由 app 适配层提供 |
 | `mod_z.rs` | Mod+Z / Mod+Shift+Z；已接入 | 画布焦点下的 Undo/Redo Session 优先级、公式源码草稿本地历史与文档历史；工具栏仍使用 undo()/redo() 命令 API |
 
-当前逐键入口覆盖[唯一键位清单](keyboard-shortcuts.md)中所有已支持的画布编辑器快捷键；表格修饰键按基础实体键归入 `tab.rs`/`up_arrow.rs`/`down_arrow.rs`/`left_arrow.rs`/`right_arrow.rs`/`backspace.rs`/`delete.rs`，`helpers/table.rs` 只放共享上下文判定与单元格边界动作，不另行决定优先级。未来新增编辑器快捷键也按具体快捷键或独立语义家族加入同一目录，不在 app、QML 或领域模块另建仲裁入口。目标结构是 `keyboards.rs` 只做模块注册和 `run_editor_key` 分派；本键状态优先级与具体动作由逐键 handler 负责。只有同一候选校验/提交确实被多个键以相同不变量调用时，才放进 `keyboards/helpers.rs` 与 `keyboards/helpers/`，辅助模块不得重新决定上下文优先级。app 保有并计算页面布局模型和视觉几何，engine 不复制或重算这些数据。候选无效时必须在任何焦点/文档迁移前拒绝，保证失败原子性。
+当前逐键入口覆盖[唯一键位清单](keyboard-shortcuts.md)中所有已支持的画布编辑器快捷键；表格修饰键按基础实体键归入 `tab.rs`/`up_arrow.rs`/`down_arrow.rs`/`left_arrow.rs`/`right_arrow.rs`/`backspace.rs`/`delete.rs`，`helpers/table.rs` 只放共享上下文判定，单元格边界动作由 Session 表格导航统一提供，不另行决定优先级。未来新增编辑器快捷键也按具体快捷键或独立语义家族加入同一目录，不在 app、QML 或领域模块另建仲裁入口。目标结构是 `keyboards.rs` 只做模块注册和 `run_editor_key` 分派；本键状态优先级与具体动作由逐键 handler 负责。只有同一候选校验/提交确实被多个键以相同不变量调用时，才放进 `keyboards/helpers.rs` 与 `keyboards/helpers/`，辅助模块不得重新决定上下文优先级。app 保有并计算页面布局模型和视觉几何，engine 不复制或重算这些数据。候选无效时必须在任何焦点/文档迁移前拒绝，保证失败原子性。
 
 只改变扩选/修饰状态的变体（如 Shift+方向键）随基础键处理；形成独立语义动作的修饰快捷键（如 Mod+Backspace、Mod+Z）可有独立文件，仍由单一 Session 键盘入口分派。Qt 负责物理键和平台修饰映射；IME 预编辑仍由 Qt 输入适配先处理。
 

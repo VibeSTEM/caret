@@ -5705,11 +5705,30 @@ fn table_cell_guidelines_use_symmetric_mesh_rects() {
             .next()
             .unwrap_or_else(|| panic!("cell guideline"))
     };
+    let grid = snapshot
+        .table_layouts
+        .get(&table_id)
+        .unwrap_or_else(|| panic!("table grid"));
+    let page = &snapshot.pages[0];
+    let fragment = page
+        .layout
+        .table_fragments
+        .first()
+        .unwrap_or_else(|| panic!("table fragment"));
+    let table_origin_x = page.margin_left_pt + f64::from(fragment.x_offset_pt);
     let left = rect_for(&row0, &row0.cells[0], 0, 0);
     let right = rect_for(&row0, &row0.cells[1], 0, 1);
     let lower = rect_for(&row1, &row1.cells[0], 1, 0);
+    assert!((left.x0_pt - table_origin_x).abs() < 0.01);
+    assert!((right.x1_pt - (table_origin_x + grid.width_pt)).abs() < 0.01);
     assert!((left.x1_pt - right.x0_pt).abs() < 0.01);
     assert!((left.x1_pt - left.x0_pt - (right.x1_pt - right.x0_pt)).abs() < 0.01);
+    assert!(
+        (lower.y0_pt
+            - (page.margin_top_pt + f64::from(fragment.y_offset_pt) + grid.rows[1].top_pt))
+            .abs()
+            < 0.01
+    );
     assert!((left.y1_pt - lower.y0_pt).abs() < 0.01);
     let highlight = snapshot.table_cell_highlight_rects(&Pos {
         story: StoryId::TableCell {

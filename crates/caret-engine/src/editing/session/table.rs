@@ -273,11 +273,12 @@ impl Session {
 
     /// 方向键在单元格首/末内容边界进入相邻单元格；返回 `None` 表示不在边界、交给文本/外层导航。
     /// 表格边缘仍消费按键（`Some(default)`），不让普通方向键把光标带出表格。
-    pub(super) fn table_arrow_step(
-        &mut self,
+    /// 判断方向键是否落在单元格首/末内容边界；返回上下文供导航与 app 查询共用。
+    fn table_arrow_boundary_state(
+        &self,
         axis: TableArrowAxis,
         direction: Direction,
-    ) -> Result<Option<Effect>, EditError> {
+    ) -> Result<Option<(TableContext, usize)>, EditError> {
         let Some(context) = self.table_context() else {
             return Ok(None);
         };
@@ -288,12 +289,15 @@ impl Session {
         else {
             return Ok(None);
         };
-        if location.container.environment_depth() != 0 {
-            eprintln!(
-                "DEBUG table_arrow_step: env depth {} loc={:?}",
-                location.container.environment_depth(),
-                location
-            );
+        let Some(_cell) = location.container.innermost_cell() else {
+            return Ok(None);
+        };
+        // 允许表格本身位于块环境内；只拒绝单元格内再包一层环境造成的嵌套落点。
+        let outside_cell_environment_depth = location
+            .container
+            .container_before_innermost_cell()
+            .map_or(0, |container| container.environment_depth());
+        if location.container.environment_depth() != outside_cell_environment_depth {
             return Ok(None);
         }
         let Some(block_index) = location.block_path.last().copied() else {
@@ -317,22 +321,38 @@ impl Session {
             .text
             .len();
         let at_boundary = match axis {
-            // 横向前提是真正到达单元格内文本边界，避免在单元格中间跳格。
             TableArrowAxis::Horizontal => match direction {
                 Direction::Backward => block_index == 0 && self.selection.focus.offset == 0,
                 Direction::Forward => {
                     block_index + 1 == cell.blocks.len() && self.selection.focus.offset == text_len
                 }
             },
-            // 纵向由调用方确认没有同段落视觉行候选，只需确认处于 cell 首/末块。
             TableArrowAxis::Vertical => match direction {
                 Direction::Backward => block_index == 0,
                 Direction::Forward => block_index + 1 == cell.blocks.len(),
             },
         };
-        if !at_boundary {
+        Ok(at_boundary.then_some((context, block_index)))
+    }
+
+    /// app 视觉导航在候选为空时查询：当前纵向方向键是否应交给共享 cell 导航。
+    pub fn table_vertical_arrow_boundary(&self, direction: Direction) -> bool {
+        self.table_arrow_boundary_state(TableArrowAxis::Vertical, direction)
+            .is_ok_and(|state| state.is_some())
+    }
+
+    /// 方向键在单元格首/末内容边界进入相邻单元格；返回 `None` 表示不在边界、交给文本/外层导航。
+    /// 表格边缘仍消费按键（`Some(default)`），不让普通方向键把光标带出表格。
+    pub(super) fn table_arrow_step(
+        &mut self,
+        axis: TableArrowAxis,
+        direction: Direction,
+    ) -> Result<Option<Effect>, EditError> {
+        let Some((context, _block_index)) = self.table_arrow_boundary_state(axis, direction)?
+        else {
             return Ok(None);
-        }
+        };
+        let table = self.current_table(&context)?;
         let columns = table.rows.first().map_or(0, |row| row.cells.len());
         let (target_row, target_cell) = match axis {
             TableArrowAxis::Horizontal => {
@@ -572,14 +592,21 @@ fn empty_cell() -> TableCell {
     }
 }
 
-/// 表格单元格内首个可聚焦段落的文档位置。
+/// 表格单元格内可聚焦段落的首/末落点：forward 取首段起点，backward 取末段终点。
 fn table_target(table: &Table, row_index: usize, cell_index: usize, forward: bool) -> Option<Pos> {
     let row = table.rows.get(row_index)?;
     let cell = row.cells.get(cell_index)?;
-    let paragraph = cell.blocks.iter().find_map(|block| match block {
-        Block::Paragraph(paragraph) => Some(paragraph),
-        _ => None,
-    })?;
+    let paragraph = if forward {
+        cell.blocks.iter().find_map(|block| match block {
+            Block::Paragraph(paragraph) => Some(paragraph),
+            _ => None,
+        })
+    } else {
+        cell.blocks.iter().rev().find_map(|block| match block {
+            Block::Paragraph(paragraph) => Some(paragraph),
+            _ => None,
+        })
+    }?;
     let text_len = crate::editing::text_map::TextMap::new(paragraph)
         .ok()?
         .text

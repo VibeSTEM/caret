@@ -33,7 +33,7 @@
 - 表格单元格焦点高亮进入共享 block 高亮层；辅助线只从同一宿主/网格几何派生，不再维护第二套坐标。
 - 辅助线切换单元格时原子替换，离开表格清空；修复页面裁剪、缩放与分页下的定位。
 - 方向键在单元格内容边界进入相邻单元格（左右按行优先，上下按列），与 Tab/Shift+Tab 共用表格导航适配器；单元格内仍有文本时保持文本导航。
-- 键盘按 076/080 重组：`table_keys.rs` 删除；Shift+Tab 并入 `tab.rs`，Alt+T 新建 `alt_t.rs`，Alt+方向键分别并入 `left_arrow.rs`/`right_arrow.rs`/`up_arrow.rs`/`down_arrow.rs`，Alt(+Shift)+Backspace/Delete 分别并入 `backspace.rs`/`delete.rs`；表格领域动作放 `keyboards/helpers/table.rs`/`helpers.navigation`，不重新决定上下文优先级。
+- 键盘按 076/080 重组：`table_keys.rs` 删除；Shift+Tab 并入 `tab.rs`，Alt+T 新建 `alt_t.rs`，Alt+方向键分别并入 `left_arrow.rs`/`right_arrow.rs`/`up_arrow.rs`/`down_arrow.rs`，Alt(+Shift)+Backspace/Delete 分别并入 `backspace.rs`/`delete.rs`；表格领域动作保留在 `editing/session/table.rs`，`keyboards/helpers/table.rs` 只放共享上下文判定，不重新决定上下文优先级。
 - 2×2 表格左右几何来源单一化并修复真实窗口起始位置不一致；用同一 `TableGridLayout`/页面片段导出高亮与辅助线。
 - 行为、快照、native/QML 回归与文档同步。
 
@@ -72,8 +72,8 @@
 
 | 日期 | 环境 / 命令 | 预期 | 实际结果 |
 | --- | --- | --- | --- |
-| 2026-11-22 | `cargo test -p caret-engine --lib` | 键盘/表格/方向键/高亮几何行为 | 通过：970 项 |
-| 2026-11-22 | `cargo test -p caret-app --lib` | app 快照高亮/辅助线/方向键换格 | 通过：357 项 |
+| 2026-11-22 | `cargo test -p caret-engine --lib` | 键盘/表格/方向键/高亮几何行为 | 通过：971 项 |
+| 2026-11-22 | `cargo test -p caret-app --lib` | app 快照高亮/辅助线/方向键换格、wire 命令 | 通过：359 项 |
 | 2026-11-22 | `cargo test -p caret-tests --test native` | native CTest 与指南线替换渲染 | 通过：CTest 20/20，新 C++ 用例验证旧矩形清除 |
 | 2026-11-22 | `cargo fmt --all -- --check`、`cargo format --check`、`cargo clippy --locked --offline --workspace --all-targets -- -D warnings` | 格式与静态检查 | 通过 |
 
@@ -86,5 +86,6 @@
 - 2026-11-22：根据真实窗口测试与维护者反馈创建；确认按 080 共享宿主协议、076 键盘架构收敛，不继续扩大 table_keys.rs。
 - 2026-11-22：键盘结构收敛：删除 `table_keys.rs`；Shift+Tab 进 `tab.rs`，Alt+T 新建 `alt_t.rs`，Alt+↑/↓ 行列插入进 `up_arrow.rs`/`down_arrow.rs`/`left_arrow.rs`/`right_arrow.rs`，Alt(+Shift)+Backspace/Delete 行列删除进 `backspace.rs`/`delete.rs`；每类 EditorKey 按具体按键一行分派，`helpers/table.rs` 只保留共享上下文判定。
 - 2026-11-22：app 级方向键换格回归（visual/vertical navigation 路径）通过；键盘路由/快捷键文档同步为按实体键归档。
+- 2026-11-22：领域评审修复：vertical app phase1/phase2 双提交收敛（表格边界消费一次、失败不改焦点）；空 paragraph 纵向边界识别；单元格内多段 Enter/Left/Up 首末段落点统一；环境内表格允许方向键换格；删除调试输出；app 测试改为断言目标行/列 x/offset/末行 no-op，并补 wire 行列命令用例；几何测试断言表格外框/规则线而非仅相对关系。
 - 2026-11-22：表格 cell 外框改为 `TableGridLayout` 网格矩形单点派生：同一矩形进入共享 block 高亮层和 `tableGuidelines`（含边框/内边距拆分后的对称左右边界），修复 2×2 左右起始不一致与辅助线内容盒内缩；新增 engine 对称几何/共享高亮测试、app 切换 cell 高亮/辅助线替换测试、C++ native 指南线整体替换测试（红色像素验证旧矩形清除）。
 - 2026-11-22：方向键单元格边界移动：单元格首/末文本边界按行优先进入相邻 cell（上下同列），表格边缘消费为 no-op；新增 2×2 行为测试。

@@ -2601,6 +2601,96 @@ fn two_by_two_table_session() -> (Session, NodeId, NodeId, NodeId, NodeId) {
 }
 
 #[test]
+fn table_arrows_enter_multi_paragraph_cell_at_first_or_last_paragraph() {
+    let value = serde_json::json!({
+        "type": "table",
+        "id": "table-multi",
+        "rows": [
+            {"id": "row-a", "cells": [
+                {"id": "cell-a0", "blocks": [{"type": "paragraph", "id": "p-a0", "inlines": [{"type": "text", "runs": [{"text": "ab", "props": {}}]}]}]},
+                {"id": "cell-a1", "blocks": [{"type": "paragraph", "id": "p-a1", "inlines": [{"type": "text", "runs": [{"text": "cd", "props": {}}]}]}]}
+            ]},
+            {"id": "row-b", "cells": [
+                {"id": "cell-b0", "blocks": [
+                    {"type": "paragraph", "id": "p-b0a", "inlines": [{"type": "text", "runs": [{"text": "ef", "props": {}}]}]},
+                    {"type": "paragraph", "id": "p-b0b", "inlines": [{"type": "text", "runs": [{"text": "gh", "props": {}}]}]}
+                ]},
+                {"id": "cell-b1", "blocks": [{"type": "paragraph", "id": "p-b1", "inlines": [{"type": "text", "runs": [{"text": "ij", "props": {}}]}]}]}
+            ]}
+        ]
+    });
+    let table: Block = serde_json::from_value(value)
+        .unwrap_or_else(|error| panic!("multi paragraph table must parse: {error}"));
+    let mut document = Document::blank();
+    document.body.push(table);
+    let mut session =
+        Session::new(document).unwrap_or_else(|error| panic!("table document must open: {error}"));
+    let table_id = NodeId::parse("table-multi").unwrap_or_else(|error| panic!("{error}"));
+    let row_a = NodeId::parse("row-a").unwrap_or_else(|error| panic!("{error}"));
+    let cell_a0 = NodeId::parse("cell-a0").unwrap_or_else(|error| panic!("{error}"));
+    let p_a0 = NodeId::parse("p-a0").unwrap_or_else(|error| panic!("{error}"));
+    let row_b = NodeId::parse("row-b").unwrap_or_else(|error| panic!("{error}"));
+    let cell_b0 = NodeId::parse("cell-b0").unwrap_or_else(|error| panic!("{error}"));
+    let p_b0a = NodeId::parse("p-b0a").unwrap_or_else(|error| panic!("{error}"));
+
+    let select =
+        |session: &mut Session, row: &NodeId, cell: &NodeId, paragraph: &NodeId, offset| {
+            let position = Pos {
+                story: StoryId::TableCell {
+                    table_id: table_id.clone(),
+                    row_id: row.clone(),
+                    cell_id: cell.clone(),
+                },
+                paragraph_id: paragraph.clone(),
+                offset,
+                affinity: Affinity::Downstream,
+            };
+            session
+                .set_selection(Some(Selection {
+                    anchor: position.clone(),
+                    focus: position,
+                }))
+                .unwrap_or_else(|error| panic!("cell selection must work: {error}"));
+        };
+    select(&mut session, &row_a, &cell_a0, &p_a0, 2);
+    run_ok(
+        &mut session,
+        Command::EditorKey(EditorKey::DownArrow {
+            candidate: None,
+            extend: false,
+            structure: false,
+        }),
+    );
+    assert_eq!(session.selection.focus.paragraph_id, p_b0a);
+    assert_eq!(session.selection.focus.offset, 0);
+
+    select(&mut session, &row_b, &cell_b0, &p_b0a, 0);
+    run_ok(
+        &mut session,
+        Command::EditorKey(EditorKey::UpArrow {
+            candidate: None,
+            extend: false,
+            structure: false,
+        }),
+    );
+    assert_eq!(session.selection.focus.paragraph_id, p_a0);
+    assert_eq!(session.selection.focus.offset, 2);
+
+    let cell_a1 = NodeId::parse("cell-a1").unwrap_or_else(|error| panic!("{error}"));
+    let p_a1 = NodeId::parse("p-a1").unwrap_or_else(|error| panic!("{error}"));
+    select(&mut session, &row_a, &cell_a1, &p_a1, 0);
+    run_ok(
+        &mut session,
+        Command::EditorKey(EditorKey::LeftArrow {
+            candidate: None,
+            extend: false,
+        }),
+    );
+    assert_eq!(session.selection.focus.paragraph_id, p_a0);
+    assert_eq!(session.selection.focus.offset, 2);
+}
+
+#[test]
 fn arrow_keys_move_between_cells_at_content_boundaries() {
     let (mut session, table_id, row_a, cell_a0, paragraph_a0) = two_by_two_table_session();
     let generation = session.document_generation();
