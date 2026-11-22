@@ -535,10 +535,26 @@ void build_glyph_frame(PageGlyphNode* group, QQuickWindow* window, const QVarian
         auto* shape_item = new QSGNode();
         group->shape_nodes->appendChildNode(shape_item);
         if (shape.kind == 0) {
-            const QPointF first = origin;
-            const QPointF second = document_to_content(
+            QPointF first = origin;
+            QPointF second = document_to_content(
                 page_index, QPointF(shape.x_pt + shape.dx_pt, shape.y_pt + shape.dy_pt));
-            const qreal line_width = shape.stroke_width_pt * logical_scale;
+            qreal line_width = shape.stroke_width_pt * logical_scale;
+            // 轴对齐线条对齐设备像素网格，避免表格边框因亚像素相位呈粗细不一。
+            const bool vertical = std::abs(shape.dx_pt) <= std::numeric_limits<qreal>::epsilon();
+            const bool horizontal = std::abs(shape.dy_pt) <= std::numeric_limits<qreal>::epsilon();
+            if (vertical || horizontal) {
+                const qreal physical_width = std::max<qreal>(1.0, std::round(line_width * dpr));
+                line_width = physical_width / dpr;
+                if (vertical) {
+                    const qreal x = (std::floor(first.x() * dpr) + 0.5) / dpr;
+                    first.setX(x);
+                    second.setX(x);
+                } else {
+                    const qreal y = (std::floor(first.y() * dpr) + 0.5) / dpr;
+                    first.setY(y);
+                    second.setY(y);
+                }
+            }
             const QColor color(shape.stroke_red, shape.stroke_green, shape.stroke_blue,
                                shape.stroke_alpha);
             const qreal half_width = line_width / 2.0;

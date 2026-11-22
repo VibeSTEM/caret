@@ -2737,7 +2737,7 @@ fn arrow_keys_move_between_cells_at_content_boundaries() {
     session
         .set_selection(Some(Selection {
             anchor: start.clone(),
-            focus: start,
+            focus: start.clone(),
         }))
         .unwrap_or_else(|error| panic!("cell start selection must work: {error}"));
     run_ok(
@@ -2747,12 +2747,18 @@ fn arrow_keys_move_between_cells_at_content_boundaries() {
             extend: false,
         }),
     );
-    assert!(matches!(
-        &session.selection.focus.story,
-        StoryId::TableCell { cell_id, .. } if cell_id.to_string() == "cell-a0"
-    ));
+    assert!(
+        matches!(&session.selection.focus.story, StoryId::Body),
+        "Left at the first cell exits to the adjacent body paragraph like a block host"
+    );
 
     // 首格首段开头 Down 应进入同一列下一行。
+    session
+        .set_selection(Some(Selection {
+            anchor: start.clone(),
+            focus: start,
+        }))
+        .unwrap_or_else(|error| panic!("cell start selection must work: {error}"));
     run_ok(
         &mut session,
         Command::EditorKey(EditorKey::DownArrow {
@@ -2766,6 +2772,96 @@ fn arrow_keys_move_between_cells_at_content_boundaries() {
         StoryId::TableCell { row_id, cell_id, .. }
             if row_id.to_string() == "row-b" && cell_id.to_string() == "cell-b0"
     ));
+}
+
+#[test]
+fn table_block_enter_and_exit_follow_adjacent_paragraph_navigation() {
+    let before = Paragraph::empty(NodeId::generate());
+    let before_id = before.id.clone();
+    let after = Paragraph::empty(NodeId::generate());
+    let after_id = after.id.clone();
+    let table = serde_json::from_value::<Block>(serde_json::json!({
+        "type": "table",
+        "id": "table-blocks",
+        "rows": [
+            {"id": "row-a", "cells": [
+                {"id": "cell-a0", "blocks": [{"type": "paragraph", "id": "p-a0", "inlines": [{"type": "text", "runs": [{"text": "ab", "props": {}}]}]}]},
+                {"id": "cell-a1", "blocks": [{"type": "paragraph", "id": "p-a1", "inlines": [{"type": "text", "runs": [{"text": "cd", "props": {}}]}]}]}
+            ]},
+            {"id": "row-b", "cells": [
+                {"id": "cell-b0", "blocks": [{"type": "paragraph", "id": "p-b0", "inlines": [{"type": "text", "runs": [{"text": "ef", "props": {}}]}]}]},
+                {"id": "cell-b1", "blocks": [{"type": "paragraph", "id": "p-b1", "inlines": [{"type": "text", "runs": [{"text": "gh", "props": {}}]}]}]}
+            ]}
+        ]
+    }))
+    .unwrap_or_else(|error| panic!("table fixture: {error}"));
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(before), table, Block::Paragraph(after)];
+    let mut session =
+        Session::new(document).unwrap_or_else(|error| panic!("session must open: {error}"));
+    let before_pos = Pos {
+        story: StoryId::Body,
+        paragraph_id: before_id,
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
+    session
+        .set_selection(Some(Selection {
+            anchor: before_pos.clone(),
+            focus: before_pos,
+        }))
+        .unwrap_or_else(|error| panic!("before selection: {error}"));
+    run_ok(
+        &mut session,
+        Command::EditorKey(EditorKey::DownArrow {
+            candidate: None,
+            extend: false,
+            structure: false,
+        }),
+    );
+    assert_eq!(session.selection.focus.paragraph_id.to_string(), "p-a0");
+
+    let table_id = NodeId::parse("table-blocks").unwrap_or_else(|error| panic!("{error}"));
+    let row_b = NodeId::parse("row-b").unwrap_or_else(|error| panic!("{error}"));
+    let cell_b1 = NodeId::parse("cell-b1").unwrap_or_else(|error| panic!("{error}"));
+    let p_b1 = NodeId::parse("p-b1").unwrap_or_else(|error| panic!("{error}"));
+    let last = Pos {
+        story: StoryId::TableCell {
+            table_id,
+            row_id: row_b,
+            cell_id: cell_b1,
+        },
+        paragraph_id: p_b1,
+        offset: 2,
+        affinity: Affinity::Downstream,
+    };
+    session
+        .set_selection(Some(Selection {
+            anchor: last.clone(),
+            focus: last,
+        }))
+        .unwrap_or_else(|error| panic!("last cell selection: {error}"));
+    run_ok(
+        &mut session,
+        Command::EditorKey(EditorKey::DownArrow {
+            candidate: None,
+            extend: false,
+            structure: false,
+        }),
+    );
+    assert_eq!(session.selection.focus.story, StoryId::Body);
+    assert_eq!(session.selection.focus.paragraph_id, after_id);
+    assert_eq!(session.selection.focus.offset, 0);
+
+    run_ok(
+        &mut session,
+        Command::EditorKey(EditorKey::UpArrow {
+            candidate: None,
+            extend: false,
+            structure: false,
+        }),
+    );
+    assert_eq!(session.selection.focus.paragraph_id.to_string(), "p-b1");
 }
 
 #[test]
@@ -3613,7 +3709,7 @@ fn table_cell_inline_math_can_enter_math_edit() {
 }
 
 #[test]
-fn table_insertion_inside_cell_is_rejected_without_document_change() {
+fn table_insertion_key_inside_cell_is_ignored_without_document_change() {
     let mut session = Session::new(Document::blank())
         .unwrap_or_else(|error| panic!("session must open: {error}"));
     session
@@ -3621,10 +3717,12 @@ fn table_insertion_inside_cell_is_rejected_without_document_change() {
         .unwrap_or_else(|error| panic!("table must insert: {error}"));
     let before = session.document().clone();
     let generation = session.document_generation();
-    assert!(matches!(
-        session.run(Command::EditorKey(EditorKey::InsertTable)),
-        Err(EditError::TableInsertionUnsupported)
-    ));
+    assert!(
+        session
+            .run(Command::EditorKey(EditorKey::InsertTable))
+            .is_ok(),
+        "unavailable table insertion key must be a no-op, not a QML error"
+    );
     assert_eq!(session.document(), &before);
     assert_eq!(session.document_generation(), generation);
 }

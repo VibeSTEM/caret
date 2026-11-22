@@ -128,6 +128,96 @@ void ShellDocumentCanvasTest::mathSourceDisablesInputMethodAndCancelsPreedit() {
 }
 
 #ifdef CARET_ENABLE_APP
+void ShellDocumentCanvasTest::tableBorderLinesKeepUniformThicknessAtFractionalCoordinates() {
+    caret::ffi::PageGlyphFrame frame{};
+    frame.document_generation = 1;
+    frame.font_generation = 1;
+    frame.page_index = 0;
+    const auto push_line = [&frame](const QPointF& start, const QPointF& delta) {
+        caret::ffi::GlyphShape shape{};
+        shape.kind = 0;
+        shape.x_pt = start.x();
+        shape.y_pt = start.y();
+        shape.dx_pt = delta.x();
+        shape.dy_pt = delta.y();
+        shape.stroke_enabled = true;
+        shape.stroke_red = 112;
+        shape.stroke_green = 112;
+        shape.stroke_blue = 112;
+        shape.stroke_alpha = 255;
+        shape.stroke_width_pt = 0.5;
+        frame.shapes.push_back(shape);
+    };
+    // 亚像素相位不同的横/竖线都必须落在同一物理像素宽度。
+    for (const double y : {20.0, 40.4, 60.9}) {
+        push_line(QPointF(10.0, y), QPointF(100.0, 0.0));
+    }
+    for (const double x : {20.0, 60.5, 90.8}) {
+        push_line(QPointF(x, 50.0), QPointF(0.0, 55.0));
+    }
+    const QVariantMap frame_map = caret::glyph_frame_adapter::to_variant_map(frame, 96.0 / 72.0);
+    QVERIFY2(frame_map.value(QStringLiteral("valid")).toBool(),
+             qPrintable(frame_map.value(QStringLiteral("error")).toString()));
+
+    QQuickWindow window;
+    window.resize(160, 160);
+    auto* canvas = new caret::DocumentCanvas(window.contentItem());
+    canvas->setPageSizesPt({QSizeF(120.0, 120.0)});
+    canvas->setPageMarginsPt({{QStringLiteral("top"), 0.0},
+                              {QStringLiteral("right"), 0.0},
+                              {QStringLiteral("bottom"), 0.0},
+                              {QStringLiteral("left"), 0.0}});
+    canvas->setPageColor(Qt::white);
+    canvas->setPageBorderColor(Qt::transparent);
+    canvas->setGlyphFrames(QVariantList{frame_map});
+    canvas->setWidth(140);
+    canvas->setHeight(140);
+    window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(!canvas->glyphFrames().isEmpty(), 3000);
+
+    const QImage image = window.grabWindow().convertToFormat(QImage::Format_ARGB32);
+    QVERIFY(!image.isNull());
+    const auto is_border_pixel = [](QRgb pixel) {
+        return qRed(pixel) == 112 && qGreen(pixel) == 112 && qBlue(pixel) == 112;
+    };
+    const auto thickness_runs = [&is_border_pixel, &image](bool horizontal) {
+        const int outer = horizontal ? image.height() : image.width();
+        const int inner = horizontal ? image.width() : image.height();
+        QList<int> runs;
+        int current = 0;
+        for (int o = 0; o < outer; ++o) {
+            int matching = 0;
+            for (int i = 0; i < inner; ++i) {
+                const QRgb pixel = horizontal ? image.pixel(i, o) : image.pixel(o, i);
+                if (is_border_pixel(pixel)) {
+                    ++matching;
+                }
+            }
+            if (matching > 20) {
+                ++current;
+            } else if (current > 0) {
+                runs.push_back(current);
+                current = 0;
+            }
+        }
+        if (current > 0) {
+            runs.push_back(current);
+        }
+        return runs;
+    };
+    const QList<int> horizontals = thickness_runs(true);
+    const QList<int> verticals = thickness_runs(false);
+    QCOMPARE(horizontals.size(), 3);
+    QCOMPARE(verticals.size(), 3);
+    for (const int thick : horizontals) {
+        QCOMPARE(thick, horizontals.first());
+    }
+    for (const int thick : verticals) {
+        QCOMPARE(thick, verticals.first());
+    }
+}
+
 void ShellDocumentCanvasTest::glyphFrameAdapterRejectsFramesOutsideCanvasLimits() {
     const auto invalid_scale_result =
         caret::glyph_frame_adapter::to_variant_map(caret::ffi::PageGlyphFrame{}, 0.0);

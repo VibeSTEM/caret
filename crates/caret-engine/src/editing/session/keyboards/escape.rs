@@ -51,6 +51,9 @@ impl Session {
                 ..Effect::default()
             });
         }
+        if let Some(effect) = self.exit_table_for_escape()? {
+            return Ok(effect);
+        }
         self.run_structure(Command::ExitStructure)
     }
 }

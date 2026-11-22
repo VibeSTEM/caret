@@ -42,6 +42,12 @@ impl Session {
         if self.math_edit.is_some() {
             return self.commit_math_vertical_navigation_candidate(candidate, extend, direction);
         }
+        if extend
+            && self.table_context().is_some()
+            && !self.table_extension_candidate_allowed(candidate.as_ref())
+        {
+            return Ok(Effect::default());
+        }
         if !extend
             && !self.has_structure_selection()
             && candidate.is_none()

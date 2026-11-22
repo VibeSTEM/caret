@@ -302,6 +302,12 @@ impl Session {
             return Ok(Effect::default());
         }
         if !extend {
+            if self.enter_adjacent_table(direction)? {
+                return Ok(Effect {
+                    selection_changed: true,
+                    ..Effect::default()
+                });
+            }
             if self.enter_adjacent_block_math_if_present(direction)? {
                 return Ok(Effect {
                     selection_changed: true,

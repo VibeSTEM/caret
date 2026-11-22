@@ -5729,7 +5729,7 @@ fn table_cell_guidelines_use_symmetric_mesh_rects() {
             < 0.01
     );
     assert!((left.y1_pt - lower.y0_pt).abs() < 0.01);
-    let highlight = snapshot.table_cell_highlight_rects(&Pos {
+    let highlight = snapshot.table_block_highlight_rects(&Pos {
         story: StoryId::TableCell {
             table_id,
             row_id: row0.id.clone(),
@@ -5742,7 +5742,16 @@ fn table_cell_guidelines_use_symmetric_mesh_rects() {
         offset: 0,
         affinity: Affinity::Upstream,
     });
-    assert_eq!(highlight, vec![left]);
+    assert_eq!(highlight.len(), 1);
+    let first_row = grid.rows.first().unwrap_or_else(|| panic!("first row"));
+    let last_row = grid.rows.last().unwrap_or_else(|| panic!("last row"));
+    let expected_y0 = page.margin_top_pt + f64::from(fragment.y_offset_pt) + first_row.top_pt;
+    let expected_y1 =
+        page.margin_top_pt + f64::from(fragment.y_offset_pt) + last_row.top_pt + last_row.height_pt;
+    assert!((highlight[0].x0_pt - table_origin_x).abs() < 0.01);
+    assert!((highlight[0].x1_pt - (table_origin_x + grid.width_pt)).abs() < 0.01);
+    assert!((highlight[0].y0_pt - expected_y0).abs() < 0.01);
+    assert!((highlight[0].y1_pt - expected_y1).abs() < 0.01);
 }
 
 #[test]

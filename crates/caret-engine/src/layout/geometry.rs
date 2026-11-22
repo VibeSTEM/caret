@@ -762,9 +762,56 @@ impl DocumentLayoutSnapshot {
         self.focused_table_cell_rect(position).into_iter().collect()
     }
 
-    /// 当前焦点单元格的共享 block 高亮矩形；不在表格内返回空。
-    pub fn table_cell_highlight_rects(&self, position: &Pos) -> Vec<PageSelectionRect> {
-        self.focused_table_cell_rect(position).into_iter().collect()
+    /// 焦点位于表格内时，整张表格的共享 block 高亮矩形（跨页逐 fragment）。
+    pub fn table_block_highlight_rects(&self, position: &Pos) -> Vec<PageSelectionRect> {
+        let Some(paragraph) = self.paragraph_by_id(&position.paragraph_id) else {
+            return Vec::new();
+        };
+        if paragraph.story != position.story {
+            return Vec::new();
+        }
+        let Some(cell) = paragraph.container.innermost_cell() else {
+            return Vec::new();
+        };
+        let Some(grid) = self.table_layouts.get(&cell.table_id) else {
+            return Vec::new();
+        };
+        let mut rectangles = Vec::new();
+        for (page_index, page) in self.pages.iter().enumerate() {
+            for fragment in &page.layout.table_fragments {
+                if fragment.table_id != cell.table_id {
+                    continue;
+                }
+                let Some(first_row) = grid.rows.get(fragment.row_range.start) else {
+                    continue;
+                };
+                let Some(last_row) = grid.rows.get(fragment.row_range.end.saturating_sub(1)) else {
+                    continue;
+                };
+                let x0_pt = page.margin_left_pt + f64::from(fragment.x_offset_pt);
+                let y0_pt = page.margin_top_pt + f64::from(fragment.y_offset_pt) + first_row.top_pt;
+                let x1_pt = x0_pt + grid.width_pt;
+                let y1_pt = page.margin_top_pt
+                    + f64::from(fragment.y_offset_pt)
+                    + last_row.top_pt
+                    + last_row.height_pt;
+                let x0_pt = x0_pt.clamp(0.0, page.width_pt);
+                let x1_pt = x1_pt.clamp(0.0, page.width_pt);
+                let y0_pt = y0_pt.clamp(0.0, page.height_pt);
+                let y1_pt = y1_pt.clamp(0.0, page.height_pt);
+                if x1_pt <= x0_pt || y1_pt <= y0_pt {
+                    continue;
+                }
+                rectangles.push(PageSelectionRect {
+                    page_index,
+                    x0_pt,
+                    y0_pt,
+                    x1_pt,
+                    y1_pt,
+                });
+            }
+        }
+        rectangles
     }
 
     /// 返回裁切到可见分页片段内的选区矩形。

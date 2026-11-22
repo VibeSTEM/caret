@@ -350,7 +350,7 @@ fn block_environment_highlight_rects(
         );
     }
     // 表格单元格与 Section/Equation 共用同一 block 高亮层；几何来自同一快照网格。
-    rectangles.extend(snapshot.table_cell_highlight_rects(focus));
+    rectangles.extend(snapshot.table_block_highlight_rects(focus));
     rectangle_values(rectangles)
 }
 

@@ -8,7 +8,9 @@ use crate::editing::{EditError, Effect};
 
 impl Session {
     pub(super) fn handle_insert_table(&mut self) -> Result<Effect, EditError> {
-        if !super::helpers::table::table_keyboard_context_available(self) {
+        if !super::helpers::table::table_keyboard_context_available(self)
+            || !self.can_insert_table()
+        {
             return Ok(Effect::default());
         }
         self.insert_table()

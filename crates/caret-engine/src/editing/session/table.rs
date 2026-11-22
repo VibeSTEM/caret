@@ -4,6 +4,7 @@
 // 署名：Yuki Lu
 
 use super::*;
+use crate::editing::NavigationCandidate;
 use crate::editing::paragraph_ops::{
     BlockContainerPath, TableCellPath, block_list_in_container, block_list_in_container_mut,
     build_paragraph_index,
@@ -18,6 +19,7 @@ pub(super) enum TableArrowAxis {
 }
 
 /// 当前段落所在的表格单元格上下文。
+#[derive(Clone)]
 pub(super) struct TableContext {
     /// 表格块所在容器（单元格之前的容器路径）。
     pub(super) table_container: BlockContainerPath,
@@ -271,6 +273,84 @@ impl Session {
         )?))
     }
 
+    /// Shift+方向键在 cell 内允许同宿主扩选；跨 cell/跨表候选必须先收敛而不是提交失败。
+    pub(super) fn table_extension_candidate_allowed(
+        &self,
+        candidate: Option<&NavigationCandidate>,
+    ) -> bool {
+        match candidate {
+            None => true,
+            Some(NavigationCandidate::Document { focus, .. }) => {
+                focus.story == self.selection.focus.story
+            }
+            Some(_) => false,
+        }
+    }
+
+    /// 从表格相邻正文段落进入表格首/末格；成功时提交选区。
+    pub(super) fn enter_adjacent_table(&mut self, direction: Direction) -> Result<bool, EditError> {
+        let Some(location) = self
+            .paragraph_index
+            .get(&self.selection.focus.paragraph_id)
+            .cloned()
+        else {
+            return Ok(false);
+        };
+        if location.container.innermost_cell().is_some() || location.is_title {
+            return Ok(false);
+        }
+        let Some(block_index) = location.block_path.last().copied() else {
+            return Ok(false);
+        };
+        let Some(blocks) = block_list_in_container(&self.document.body, &location.container) else {
+            return Ok(false);
+        };
+        let neighbour = match direction {
+            Direction::Backward => block_index.checked_sub(1),
+            Direction::Forward => block_index.checked_add(1),
+        };
+        let Some(Block::Table(table)) = neighbour.and_then(|index| blocks.get(index)) else {
+            return Ok(false);
+        };
+        let table = table.clone();
+        let (row_index, cell_index, forward) = match direction {
+            Direction::Backward => (
+                table.rows.len().saturating_sub(1),
+                table
+                    .rows
+                    .last()
+                    .map_or(0, |row| row.cells.len().saturating_sub(1)),
+                false,
+            ),
+            Direction::Forward => (0, 0, true),
+        };
+        let Some(target) = table_target(&table, row_index, cell_index, forward) else {
+            return Ok(false);
+        };
+        if !self.paragraph_index.contains_key(&target.paragraph_id) {
+            return Ok(false);
+        }
+        self.selection = Selection {
+            anchor: target.clone(),
+            focus: target,
+        };
+        Ok(true)
+    }
+
+    /// Escape 从单元格回到表格前/后的相邻正文段落；表格末尾没有尾随段落时保持。
+    pub(super) fn exit_table_for_escape(&mut self) -> Result<Option<Effect>, EditError> {
+        let Some(context) = self.table_context() else {
+            return Ok(None);
+        };
+        if let Some(effect) = self.leave_table(context.clone(), true)? {
+            return Ok(Some(effect));
+        }
+        let Some(context) = self.table_context() else {
+            return Ok(None);
+        };
+        self.leave_table(context, false)
+    }
+
     /// 判断方向键是否落在单元格首/末内容边界；返回上下文供导航与 app 查询共用。
     /// 边界按 cell 块和逻辑文本偏移判定，不感知布局视觉行。
     fn table_arrow_boundary_state(
@@ -359,14 +439,14 @@ impl Session {
                 let index = context.row_index * columns + context.cell_index;
                 if direction == Direction::Backward {
                     if index == 0 {
-                        return Ok(Some(Effect::default()));
+                        return Ok(Some(self.leave_table(context, false)?.unwrap_or_default()));
                     }
                     let previous = index - 1;
                     (previous / columns, previous % columns)
                 } else {
                     let next = index + 1;
                     if next >= table.rows.len() * columns {
-                        return Ok(Some(Effect::default()));
+                        return Ok(Some(self.leave_table(context, true)?.unwrap_or_default()));
                     }
                     (next / columns, next % columns)
                 }
@@ -375,14 +455,14 @@ impl Session {
                 let target_row = match direction {
                     Direction::Backward => {
                         let Some(row) = context.row_index.checked_sub(1) else {
-                            return Ok(Some(Effect::default()));
+                            return Ok(Some(self.leave_table(context, false)?.unwrap_or_default()));
                         };
                         row
                     }
                     Direction::Forward => {
                         let row = context.row_index + 1;
                         if row >= table.rows.len() {
-                            return Ok(Some(Effect::default()));
+                            return Ok(Some(self.leave_table(context, true)?.unwrap_or_default()));
                         }
                         row
                     }

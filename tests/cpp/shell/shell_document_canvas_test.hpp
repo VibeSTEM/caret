@@ -16,5 +16,6 @@ class ShellDocumentCanvasTest final : public ShellTestBase {
     void glyphFrameAdapterRejectsFramesOutsideCanvasLimits();
     void underlinedTextRendersTheRustFfiDecorationInTheQtCanvas();
     void tableGuidelinesReplacePreviousCellInsteadOfAccumulating();
+    void tableBorderLinesKeepUniformThicknessAtFractionalCoordinates();
 #endif
 };

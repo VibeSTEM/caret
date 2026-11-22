@@ -3362,6 +3362,62 @@ fn empty_body_paragraph_vertical_arrow_stays_put() -> Result<(), Box<dyn std::er
 }
 
 #[test]
+fn unavailable_table_key_is_noop_and_escape_exits_table_to_body()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.insert_text_json("BEFORE".to_owned())?;
+    runtime.handle_editor_key_json("insert-table")?;
+    let generation = runtime.session.document_generation();
+    runtime
+        .handle_editor_key_json("insert-table")
+        .map_err(|error| format!("insert-table inside cell must not error: {error}"))?;
+    assert_eq!(runtime.session.document_generation(), generation);
+    runtime
+        .handle_editor_key_json("escape")
+        .map_err(|error| format!("escape: {error}"))?;
+    assert!(
+        matches!(
+            &runtime.session.selection().focus.story,
+            caret_engine::StoryId::Body
+        ),
+        "Escape from a cell must exit to the adjacent body paragraph"
+    );
+    assert_eq!(runtime.session.selection().focus.offset, 6);
+    Ok(())
+}
+
+#[test]
+fn shift_arrows_at_cell_boundary_extend_inside_cell_without_error()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.handle_editor_key_json("insert-table")?;
+    runtime.insert_text_json("ab".to_owned())?;
+    let cell = match &runtime.session.selection().focus.story {
+        caret_engine::StoryId::TableCell { cell_id, .. } => cell_id.clone(),
+        story => return Err(format!("focus must start in a table cell: {story:?}").into()),
+    };
+    runtime
+        .move_visual_caret_json(true, true)
+        .map_err(|error| format!("shift right: {error}"))?;
+    assert_eq!(
+        runtime.session.selection().anchor,
+        runtime.session.selection().focus
+    );
+    assert!(
+        matches!(&runtime.session.selection().focus.story, caret_engine::StoryId::TableCell { cell_id: current, .. } if current == &cell),
+        "Shift+Right at the cell content boundary must not cross to another cell"
+    );
+    runtime
+        .move_vertical_caret_json(1, true)
+        .map_err(|error| format!("shift down: {error}"))?;
+    assert!(
+        matches!(&runtime.session.selection().focus.story, caret_engine::StoryId::TableCell { cell_id: current, .. } if current == &cell),
+        "Shift+Down at the cell boundary must not leave the cell"
+    );
+    Ok(())
+}
+
+#[test]
 fn populated_table_cells_move_up_and_down_with_shared_targets()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut runtime = DocumentViewRuntime::new_blank()?;
@@ -3644,7 +3700,7 @@ fn inserted_table_renders_cell_paragraphs_and_navigates() -> Result<(), Box<dyn 
             .as_array()
             .map(Vec::len),
         Some(1),
-        "focused table cell must use the shared block highlight layer"
+        "focused table must use the shared block highlight layer"
     );
     let interaction: Value = serde_json::from_str(&runtime.handle_editor_key_json("tab")?)?;
     assert_eq!(
@@ -3663,9 +3719,9 @@ fn inserted_table_renders_cell_paragraphs_and_navigates() -> Result<(), Box<dyn 
         interaction["tableGuidelines"][0], first_guideline,
         "guideline must move with the focused cell"
     );
-    assert_ne!(
+    assert_eq!(
         interaction["blockEnvironmentHighlightRects"][0], first_highlight,
-        "block highlight must move with the focused cell"
+        "whole-table block highlight stays stable while moving between cells"
     );
     let json = runtime.layout_snapshot_json()?;
     let snapshot: Value = serde_json::from_str(&json)?;

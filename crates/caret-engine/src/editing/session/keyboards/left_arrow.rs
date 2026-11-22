@@ -84,6 +84,11 @@ impl Session {
         // 结构范围是文档级选区：普通 Left 先折叠到范围起点并消费按键，不能沿用
         // 折叠在焦点端的文本光标继续后移一个步长。
         if extend {
+            if self.table_context().is_some()
+                && !self.table_extension_candidate_allowed(candidate.as_ref())
+            {
+                return Ok(Effect::default());
+            }
             return self.extend_inline_selection(Direction::Backward, candidate.as_ref());
         }
         if !extend && self.has_structure_selection() {
