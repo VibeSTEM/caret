@@ -193,6 +193,60 @@ void ShellDocumentCanvasTest::glyphFrameAdapterRejectsFramesOutsideCanvasLimits(
                 .toBool());
 }
 
+void ShellDocumentCanvasTest::tableGuidelinesReplacePreviousCellInsteadOfAccumulating() {
+    QQuickWindow window;
+    window.resize(160, 160);
+    auto* canvas = new caret::DocumentCanvas(window.contentItem());
+    canvas->setPageSizesPt({QSizeF(120.0, 120.0)});
+    canvas->setPageMarginsPt({{QStringLiteral("top"), 0.0},
+                              {QStringLiteral("right"), 0.0},
+                              {QStringLiteral("bottom"), 0.0},
+                              {QStringLiteral("left"), 0.0}});
+    canvas->setPageColor(Qt::white);
+    canvas->setPageBorderColor(Qt::transparent);
+    canvas->setTableGuidelineColor(Qt::red);
+    canvas->setWidth(140);
+    canvas->setHeight(140);
+    window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 3000);
+
+    const auto red_pixels_near = [canvas, &window](double x, double y, double half) {
+        const QImage frame = window.grabWindow().convertToFormat(QImage::Format_ARGB32);
+        if (frame.isNull()) {
+            return 0;
+        }
+        const QPointF center = canvas->documentToContent(0, QPointF(x, y));
+        const qreal scale_x = static_cast<qreal>(frame.width()) / window.width();
+        const qreal scale_y = static_cast<qreal>(frame.height()) / window.height();
+        const QRect rect(qFloor((center.x() - half) * scale_x),
+                         qFloor((center.y() - half) * scale_y), qCeil(2.0 * half * scale_x),
+                         qCeil(2.0 * half * scale_y));
+        const QRect bounded = rect.intersected(frame.rect());
+        int count = 0;
+        for (int py = bounded.top(); py <= bounded.bottom(); ++py) {
+            for (int px = bounded.left(); px <= bounded.right(); ++px) {
+                const QRgb pixel = frame.pixel(px, py);
+                if (qRed(pixel) > 200 && qGreen(pixel) < 80 && qBlue(pixel) < 80) {
+                    ++count;
+                }
+            }
+        }
+        return count;
+    };
+    const auto guideline = [](double x0, double y0) {
+        return QVariantList{QVariantMap{{QStringLiteral("pageIndex"), 0},
+                                        {QStringLiteral("x0Pt"), x0},
+                                        {QStringLiteral("y0Pt"), y0},
+                                        {QStringLiteral("x1Pt"), x0 + 30.0},
+                                        {QStringLiteral("y1Pt"), y0 + 30.0}}};
+    };
+    canvas->setTableGuidelines(guideline(10.0, 10.0));
+    QTRY_VERIFY_WITH_TIMEOUT(red_pixels_near(25.0, 25.0, 20.0) > 0, 3000);
+    canvas->setTableGuidelines(guideline(70.0, 70.0));
+    QTRY_VERIFY_WITH_TIMEOUT(red_pixels_near(25.0, 25.0, 20.0) == 0, 3000);
+    QVERIFY(red_pixels_near(85.0, 85.0, 20.0) > 0);
+}
+
 void ShellDocumentCanvasTest::underlinedTextRendersTheRustFfiDecorationInTheQtCanvas() {
     const QPointF phase_baseline(10.0, 20.0);
     const QRectF adjusted_glyph_rect = caret::canvas_detail::glyph_image_rect(

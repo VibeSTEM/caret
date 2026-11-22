@@ -3428,11 +3428,35 @@ fn inserted_table_renders_cell_paragraphs_and_navigates() -> Result<(), Box<dyn 
         serde_json::json!(0)
     );
 
+    let first_guideline = snapshot["tableGuidelines"][0].clone();
+    let first_highlight = snapshot["blockEnvironmentHighlightRects"][0].clone();
+    assert_eq!(
+        snapshot["blockEnvironmentHighlightRects"]
+            .as_array()
+            .map(Vec::len),
+        Some(1),
+        "focused table cell must use the shared block highlight layer"
+    );
     let interaction: Value = serde_json::from_str(&runtime.handle_editor_key_json("tab")?)?;
     assert_eq!(
         interaction["tableGuidelines"].as_array().map(Vec::len),
         Some(1),
         "selection-only navigation must refresh table guidelines"
+    );
+    assert_eq!(
+        interaction["blockEnvironmentHighlightRects"]
+            .as_array()
+            .map(Vec::len),
+        Some(1),
+        "cell focus change must refresh shared block highlight"
+    );
+    assert_ne!(
+        interaction["tableGuidelines"][0], first_guideline,
+        "guideline must move with the focused cell"
+    );
+    assert_ne!(
+        interaction["blockEnvironmentHighlightRects"][0], first_highlight,
+        "block highlight must move with the focused cell"
     );
     let json = runtime.layout_snapshot_json()?;
     let snapshot: Value = serde_json::from_str(&json)?;

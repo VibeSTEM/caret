@@ -5658,6 +5658,76 @@ fn table_cell_block_measurements_place_multiple_paragraphs() {
 }
 
 #[test]
+fn table_cell_guidelines_use_symmetric_mesh_rects() {
+    let table = Table {
+        id: NodeId::generate(),
+        rows: (0..2)
+            .map(|_| TableRow {
+                id: NodeId::generate(),
+                cells: (0..2)
+                    .map(|_| TableCell {
+                        id: NodeId::generate(),
+                        blocks: vec![Block::Paragraph(paragraph(""))],
+                    })
+                    .collect(),
+            })
+            .collect(),
+    };
+    let table_id = table.id.clone();
+    let row0 = table.rows[0].clone();
+    let row1 = table.rows[1].clone();
+    let mut document = Document::blank();
+    document.body = vec![Block::Table(table)];
+    let snapshot = layout_document(&document);
+    let rect_for = |row: &TableRow, cell: &TableCell, row_index: usize, cell_index: usize| {
+        let paragraph = cell
+            .blocks
+            .iter()
+            .find_map(|block| match block {
+                Block::Paragraph(paragraph) => Some(paragraph),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("cell paragraph"));
+        let pos = Pos {
+            story: StoryId::TableCell {
+                table_id: table_id.clone(),
+                row_id: row.id.clone(),
+                cell_id: cell.id.clone(),
+            },
+            paragraph_id: paragraph.id.clone(),
+            offset: 0,
+            affinity: Affinity::Upstream,
+        };
+        let _ = (row_index, cell_index);
+        snapshot
+            .table_guidelines(&pos)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| panic!("cell guideline"))
+    };
+    let left = rect_for(&row0, &row0.cells[0], 0, 0);
+    let right = rect_for(&row0, &row0.cells[1], 0, 1);
+    let lower = rect_for(&row1, &row1.cells[0], 1, 0);
+    assert!((left.x1_pt - right.x0_pt).abs() < 0.01);
+    assert!((left.x1_pt - left.x0_pt - (right.x1_pt - right.x0_pt)).abs() < 0.01);
+    assert!((left.y1_pt - lower.y0_pt).abs() < 0.01);
+    let highlight = snapshot.table_cell_highlight_rects(&Pos {
+        story: StoryId::TableCell {
+            table_id,
+            row_id: row0.id.clone(),
+            cell_id: row0.cells[0].id.clone(),
+        },
+        paragraph_id: match &row0.cells[0].blocks[0] {
+            Block::Paragraph(paragraph) => paragraph.id.clone(),
+            _ => unreachable!(),
+        },
+        offset: 0,
+        affinity: Affinity::Upstream,
+    });
+    assert_eq!(highlight, vec![left]);
+}
+
+#[test]
 fn table_cell_display_equation_is_measured_projected_and_drawn() {
     let equation = Equation {
         id: NodeId::generate(),
