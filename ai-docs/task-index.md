@@ -137,5 +137,6 @@
 | 103 | 工具链 | [Rust 1.100 工具链升级与 Nightly sanitizer 恢复](task/103-rust-1-100-upgrade.md) | P0 | 001、006、070 | M | done |
 | 104 | 工具链 | [Rust 1.100 与质量清理的后续项](task/104-rust-1-100-followups.md) | P2 | 103 | M | done |
 | 105 | 剪贴板 | [剪贴板 Math 形状、错误呈现与跨平台验证](task/105-clipboard-math-range-and-platform.md) | P2 | 091 | M | planned |
+| 106 | 表格 | [表格接入共享宿主交互与编辑几何](task/106-table-shared-host-interaction.md) | P1 | 045、046、076、080、082、083、027 | L | in-progress |
 
 分类描述任务主题；里程碑和实施边界写在对应任务中。任务拆分、状态变更及执行记录以各任务文档为准。
