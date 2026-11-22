@@ -69,13 +69,11 @@ void DocumentCanvas::keyPressEvent(QKeyEvent* event) {
         return;
     }
     if (keyboard::isTableShapeInsert(semantic_modifiers, event->key())) {
-        const QString intent = event->key() == Qt::Key_Up
-            ? QStringLiteral("table-insert-row-before")
-            : event->key() == Qt::Key_Down
-            ? QStringLiteral("table-insert-row-after")
-            : event->key() == Qt::Key_Left
-            ? QStringLiteral("table-insert-col-before")
-            : QStringLiteral("table-insert-col-after");
+        const QString intent =
+            event->key() == Qt::Key_Up     ? QStringLiteral("table-insert-row-before")
+            : event->key() == Qt::Key_Down ? QStringLiteral("table-insert-row-after")
+            : event->key() == Qt::Key_Left ? QStringLiteral("table-insert-col-before")
+                                           : QStringLiteral("table-insert-col-after");
         emit editorKeyRequested(intent);
         event->accept();
         return;

@@ -76,9 +76,7 @@ void DocumentCanvas::setInlineHighlightRects(const QVariantList& rectangles) {
 
 QColor DocumentCanvas::blockHighlightColor() const { return m_block_highlight_color; }
 
-QVariantList DocumentCanvas::tableGuidelines() const {
-    return m_table_guidelines;
-}
+QVariantList DocumentCanvas::tableGuidelines() const { return m_table_guidelines; }
 
 void DocumentCanvas::setTableGuidelines(const QVariantList& guidelines) {
     if (!valid_highlight_rectangles(guidelines,
@@ -91,9 +89,7 @@ void DocumentCanvas::setTableGuidelines(const QVariantList& guidelines) {
     update();
 }
 
-QColor DocumentCanvas::tableGuidelineColor() const {
-    return m_table_guideline_color;
-}
+QColor DocumentCanvas::tableGuidelineColor() const { return m_table_guideline_color; }
 
 void DocumentCanvas::setTableGuidelineColor(const QColor& color) {
     if (m_table_guideline_color == color) {

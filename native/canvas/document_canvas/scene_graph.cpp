@@ -219,8 +219,7 @@ struct GlyphRectangles {
     QRectF source;
 };
 
-void append_shape_lines(QSGNode* parent, const QVector<QPointF>& points, QColor color,
-                        qreal width);
+void append_shape_lines(QSGNode* parent, const QVector<QPointF>& points, QColor color, qreal width);
 
 // 编辑态表格辅助线：沿矩形四边绘制固定 dash/gap 的线段。
 void append_dashed_rect(QSGNode* parent, const QRectF& rect, QColor color) {
@@ -230,8 +229,8 @@ void append_dashed_rect(QSGNode* parent, const QRectF& rect, QColor color) {
     if (rect.isEmpty() || !color.isValid() || color.alpha() == 0) {
         return;
     }
-    const QVector<QPointF> corners = {
-        rect.topLeft(), rect.topRight(), rect.bottomRight(), rect.bottomLeft(), rect.topLeft()};
+    const QVector<QPointF> corners = {rect.topLeft(), rect.topRight(), rect.bottomRight(),
+                                      rect.bottomLeft(), rect.topLeft()};
     for (qsizetype edge = 0; edge + 1 < corners.size(); ++edge) {
         const QPointF first = corners.at(edge);
         const QPointF second = corners.at(edge + 1);
@@ -693,8 +692,7 @@ QSGNode* DocumentCanvas::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*
             root != nullptr ? root->block_highlight_group : nullptr;
         EnvironmentHighlightGroupNode* inline_highlight_group =
             root != nullptr ? root->inline_highlight_group : nullptr;
-        QSGNode* table_guideline_group =
-            root != nullptr ? root->table_guideline_group : nullptr;
+        QSGNode* table_guideline_group = root != nullptr ? root->table_guideline_group : nullptr;
         QSGSimpleRectNode* caret_node = root != nullptr ? root->caret_node : nullptr;
         if (root != nullptr) {
             root->removeChildNode(page_background_group);
@@ -782,8 +780,7 @@ QSGNode* DocumentCanvas::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*
             if (visible_rect.isEmpty()) {
                 continue;
             }
-            append_dashed_rect(root->table_guideline_group, visible_rect,
-                               m_table_guideline_color);
+            append_dashed_rect(root->table_guideline_group, visible_rect, m_table_guideline_color);
         }
     }
     if (root->highlight_revision != m_highlight_revision ||

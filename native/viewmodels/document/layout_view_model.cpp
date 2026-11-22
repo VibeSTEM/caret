@@ -311,7 +311,7 @@ bool LayoutViewModel::installInteraction(const QJsonObject& root) {
     const QJsonValue table_guidelines_value = root.value(QStringLiteral("tableGuidelines"));
     if (!table_guidelines_value.isUndefined() &&
         !layout_snapshot::parse_table_guidelines(table_guidelines_value, m_page_sizes_pt,
-                                                  table_guidelines, m_error)) {
+                                                 table_guidelines, m_error)) {
         return false;
     }
     QVariantList current_structure = m_current_structure;

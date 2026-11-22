@@ -45,11 +45,10 @@ namespace caret::keyboard {
 
 /// 插入行/列：Windows/Linux 为 Alt+方向键，macOS 为 Control+Option+Shift+方向键。
 [[nodiscard]] constexpr bool isTableShapeInsert(Qt::KeyboardModifiers modifiers, int key) {
-    const bool arrow = key == Qt::Key_Up || key == Qt::Key_Down || key == Qt::Key_Left ||
-                       key == Qt::Key_Right;
+    const bool arrow =
+        key == Qt::Key_Up || key == Qt::Key_Down || key == Qt::Key_Left || key == Qt::Key_Right;
 #ifdef Q_OS_MACOS
-    return modifiers == (physicalControlModifier() | Qt::AltModifier | Qt::ShiftModifier) &&
-           arrow;
+    return modifiers == (physicalControlModifier() | Qt::AltModifier | Qt::ShiftModifier) && arrow;
 #else
     return modifiers == Qt::AltModifier && arrow;
 #endif
@@ -63,8 +62,7 @@ namespace caret::keyboard {
 
 /// 删除列：Alt/Option+Backspace 或 Delete。
 [[nodiscard]] constexpr bool isDeleteTableColumn(Qt::KeyboardModifiers modifiers, int key) {
-    return modifiers == Qt::AltModifier &&
-           (key == Qt::Key_Backspace || key == Qt::Key_Delete);
+    return modifiers == Qt::AltModifier && (key == Qt::Key_Backspace || key == Qt::Key_Delete);
 }
 
 } // namespace caret::keyboard
