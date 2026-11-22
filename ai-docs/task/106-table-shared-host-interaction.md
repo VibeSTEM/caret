@@ -1,9 +1,10 @@
 # 106 — 表格接入共享宿主交互与编辑几何（046 后续）
 
-- 状态：in-progress
+- 状态：implemented
 - 依赖：045、046、076、080、082、083、027
 - 优先级：P1
 - 创建 / 更新：2026-11-22 / 2026-11-22
+- PR：[#169](https://github.com/VibeSTEM/caret/pull/169)
 
 ## 目标与背景
 
@@ -66,7 +67,7 @@
 - [x] 方向键在 cell 内容边界移动相邻 cell（左右行优先、上下同列优先），有文本时保持文本导航；失败不改变文档/焦点。
 - [x] `table_keys.rs` 删除，Shift+Tab 在 tab.rs、Alt+T 在 alt_t.rs、Alt+方向键在对应方向键文件、Alt(+Shift)+Backspace/Delete 在 backspace/delete 文件；helpers 不复制上下文优先级。
 - [x] 2×2 表格左右起始/几何对称，测试断言表格外框/规则线/内容 x/辅助线一致。
-- [ ] 行为/native/QML/快照回归、fmt/format/clippy/lint 通过；领域评审与独立 final review 通过，PR 创建并 CI 通过。（回归与评审已完成；PR/CI 待创建）
+- [ ] 行为/native/QML/快照回归、fmt/format/clippy/lint 通过；领域评审与独立 final review 通过，PR 创建并 CI 通过。（PR #169 已创建，12/12 CI 通过）
 
 ## 验证计划与结果
 
@@ -78,6 +79,7 @@
 | 2026-11-22 | `cargo fmt --all -- --check`、`cargo format --check`、`cargo clippy --locked --offline --workspace --all-targets -- -D warnings` | 格式与静态检查 | 通过 |
 | 2026-11-22 | `cargo test --locked --offline --workspace` | 全量 Rust/native/QML 回归 | 通过：2077 项（engine 971/app 362/layout 160/structure 15 + native 聚合） |
 | 2026-11-22 | `cargo lint --check` | Rust/C++/QML/CMake/依赖 9 阶段 | 通过：9/9 |
+| 2026-11-22 | PR [#169](https://github.com/VibeSTEM/caret/pull/169) CI | 适用作业通过 | 通过：12/12 作业成功 |
 | — | 真实窗口人工视觉：焦点高亮、虚线对齐、缩放/翻页/前后台 | 桌面可观察 | 未执行：本环境只有 headless app/native 与 CTest；与 046 先例一致，作为外部验收限制记录 |
 | — | bidi/RTL 视觉边界、跨格 Shift 扩选、cell 内嵌环境/公式停靠点 | 后续同族任务 | 未验证/未实现：不属于本任务范围，已列限制 |
 
