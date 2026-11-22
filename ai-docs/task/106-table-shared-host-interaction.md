@@ -73,7 +73,7 @@
 | 日期 | 环境 / 命令 | 预期 | 实际结果 |
 | --- | --- | --- | --- |
 | 2026-11-22 | `cargo test -p caret-engine --lib` | 键盘/表格/方向键/高亮几何行为 | 通过：971 项 |
-| 2026-11-22 | `cargo test -p caret-app --lib` | app 快照高亮/辅助线/方向键换格、wire 命令 | 通过：361 项 |
+| 2026-11-22 | `cargo test -p caret-app --lib` | app 快照高亮/辅助线/方向键换格、wire 命令 | 通过：362 项 |
 | 2026-11-22 | `cargo test -p caret-tests --test native` | native CTest 与指南线替换渲染 | 通过：CTest 20/20，新 C++ 用例验证旧矩形清除 |
 | 2026-11-22 | `cargo fmt --all -- --check`、`cargo format --check`、`cargo clippy --locked --offline --workspace --all-targets -- -D warnings` | 格式与静态检查 | 通过 |
 
@@ -86,7 +86,7 @@
 - 2026-11-22：根据真实窗口测试与维护者反馈创建；确认按 080 共享宿主协议、076 键盘架构收敛，不继续扩大 table_keys.rs。
 - 2026-11-22：键盘结构收敛：删除 `table_keys.rs`；Shift+Tab 进 `tab.rs`，Alt+T 新建 `alt_t.rs`，Alt+↑/↓ 行列插入进 `up_arrow.rs`/`down_arrow.rs`/`left_arrow.rs`/`right_arrow.rs`，Alt(+Shift)+Backspace/Delete 行列删除进 `backspace.rs`/`delete.rs`；每类 EditorKey 按具体按键一行分派，`helpers/table.rs` 只保留共享上下文判定。
 - 2026-11-22：app 级方向键换格回归（visual/vertical navigation 路径）通过；键盘路由/快捷键文档同步为按实体键归档。
-- 2026-11-22：领域评审二轮修复：纵向 app phase1 只由视觉边界触发，`table_vertical_block_boundary` 仅用于 phase1 后早退；折行 cell 纵向文本行导航恢复并补 app 回归；方向键目标提交改用共享 `focus_table_cell`；补正文空段纵向 no-op 测试。
+- 2026-11-22：领域评审三轮修复：方向键 cell 目标确实改用共享 `focus_table_cell` 提交；补 app 非空目标 cell Up/Down 回归。纵向 app phase1 只由视觉边界触发，`table_vertical_block_boundary` 仅用于 phase1 后早退；折行 cell 纵向文本行导航恢复并补 app 回归；方向键目标提交改用共享 `focus_table_cell`；补正文空段纵向 no-op 测试。
 - 2026-11-22：领域评审修复：vertical app phase1/phase2 双提交收敛（表格边界消费一次、失败不改焦点）；空 paragraph 纵向边界识别；单元格内多段 Enter/Left/Up 首末段落点统一；环境内表格允许方向键换格；删除调试输出；app 测试改为断言目标行/列 x/offset/末行 no-op，并补 wire 行列命令用例；几何测试断言表格外框/规则线而非仅相对关系。
 - 2026-11-22：表格 cell 外框改为 `TableGridLayout` 网格矩形单点派生：同一矩形进入共享 block 高亮层和 `tableGuidelines`（含边框/内边距拆分后的对称左右边界），修复 2×2 左右起始不一致与辅助线内容盒内缩；新增 engine 对称几何/共享高亮测试、app 切换 cell 高亮/辅助线替换测试、C++ native 指南线整体替换测试（红色像素验证旧矩形清除）。
 - 2026-11-22：方向键单元格边界移动：单元格首/末文本边界按行优先进入相邻 cell（上下同列），表格边缘消费为 no-op；新增 2×2 行为测试。

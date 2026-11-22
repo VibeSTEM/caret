@@ -391,25 +391,12 @@ impl Session {
                 (target_row, context.cell_index)
             }
         };
-        let Some(target) = table_target(
+        Ok(Some(self.focus_table_cell(
             &table,
             target_row,
             target_cell,
             direction == Direction::Forward,
-        ) else {
-            return Ok(Some(Effect::default()));
-        };
-        if !self.paragraph_index.contains_key(&target.paragraph_id) {
-            return Ok(Some(Effect::default()));
-        }
-        self.selection = Selection {
-            anchor: target.clone(),
-            focus: target,
-        };
-        Ok(Some(Effect {
-            selection_changed: true,
-            ..Effect::default()
-        }))
+        )?))
     }
 
     /// 纯单元格移动只改变选区，不产生文档补丁、generation 或历史步。

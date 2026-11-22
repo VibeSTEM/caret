@@ -3362,6 +3362,38 @@ fn empty_body_paragraph_vertical_arrow_stays_put() -> Result<(), Box<dyn std::er
 }
 
 #[test]
+fn populated_table_cells_move_up_and_down_with_shared_targets()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.handle_editor_key_json("insert-table")?;
+    let first_row = match &runtime.session.selection().focus.story {
+        caret_engine::StoryId::TableCell { row_id, .. } => row_id.clone(),
+        story => return Err(format!("focus must start in a table cell: {story:?}").into()),
+    };
+    runtime.insert_text_json("a".to_owned())?;
+    runtime.move_vertical_caret_json(1, false)?;
+    runtime.insert_text_json("b".to_owned())?;
+    runtime.move_vertical_caret_json(-1, false)?;
+    let up_focus = runtime.session.selection().focus.clone();
+    assert!(
+        matches!(&up_focus.story, caret_engine::StoryId::TableCell { row_id, .. } if row_id == &first_row),
+        "Up from a populated target cell must return to the first row"
+    );
+    assert_eq!(up_focus.offset, 1, "Up enters the source cell at line end");
+    runtime.move_vertical_caret_json(1, false)?;
+    let down_focus = runtime.session.selection().focus.clone();
+    assert!(
+        matches!(&down_focus.story, caret_engine::StoryId::TableCell { row_id, .. } if row_id != &first_row),
+        "Down from a populated cell must reach the second row"
+    );
+    assert_eq!(
+        down_focus.offset, 0,
+        "Down enters the target cell at line start"
+    );
+    Ok(())
+}
+
+#[test]
 fn wrapped_cell_text_vertical_arrows_move_visual_lines_not_cells()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut runtime = DocumentViewRuntime::new_blank()?;
