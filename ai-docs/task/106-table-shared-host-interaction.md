@@ -73,12 +73,12 @@
 
 | 日期 | 环境 / 命令 | 预期 | 实际结果 |
 | --- | --- | --- | --- |
-| 2026-11-22 | `cargo test -p caret-engine --lib` | 键盘/表格/方向键/高亮几何行为 | 通过：972 项 |
+| 2026-11-22 | `cargo test -p caret-engine --lib` | 键盘/表格/方向键/高亮几何行为 | 通过：973 项 |
 | 2026-11-22 | `cargo test -p caret-app --lib` | app 快照高亮/辅助线/方向键换格、wire 命令、进出/错误收敛 | 通过：369 项 |
 | 2026-11-22 | `cargo test -p caret-tests --test native` | native CTest、辅助线替换、边框像素厚度 | 通过：CTest 20/20，新 C++ 用例验证旧矩形清除与亚像素轴线厚度一致 |
 | 2026-11-22 | PR #169 后续截图反馈 | 整表高亮、块进出、QML 错误、边框粗细 | 修复并补测试；待复评/CI |
 | 2026-11-22 | `cargo fmt --all -- --check`、`cargo format --check`、`cargo clippy --locked --offline --workspace --all-targets -- -D warnings` | 格式与静态检查 | 通过 |
-| 2026-11-22 | `cargo test --locked --offline --workspace` | 全量 Rust/native/QML 回归 | 通过：2084 项（engine 972/app 369/layout 160/structure 15 + native 聚合） |
+| 2026-11-22 | `cargo test --locked --offline --workspace` | 全量 Rust/native/QML 回归 | 通过：2085 passed / 1 ignored（34 个测试 target，含 native 聚合；engine 973/app 369/layout 160/structure 15） |
 | 2026-11-22 | `cargo lint --check` | Rust/C++/QML/CMake/依赖 9 阶段 | 通过：9/9 |
 | 2026-11-22 | PR [#169](https://github.com/VibeSTEM/caret/pull/169) CI | 适用作业通过 | 通过：12/12 作业成功 |
 | — | 真实窗口人工视觉：焦点高亮、虚线对齐、缩放/翻页/前后台 | 桌面可观察 | 未执行：本环境只有 headless app/native 与 CTest；与 046 先例一致，作为外部验收限制记录 |
@@ -115,6 +115,7 @@
 - 2026-11-22：键盘结构收敛：删除 `table_keys.rs`；Shift+Tab 进 `tab.rs`，Alt+T 新建 `alt_t.rs`，Alt+↑/↓ 行列插入进 `up_arrow.rs`/`down_arrow.rs`/`left_arrow.rs`/`right_arrow.rs`，Alt(+Shift)+Backspace/Delete 行列删除进 `backspace.rs`/`delete.rs`；每类 EditorKey 按具体按键一行分派，`helpers/table.rs` 只保留共享上下文判定。
 - 2026-11-22：app 级方向键换格回归（visual/vertical navigation 路径）通过；键盘路由/快捷键文档同步为按实体键归档。
 - 2026-11-22：结构导航键在 body↔table 边界的目标 Story 改为从段落索引推导，进入/离开表格按块邻接处理，消除 `struct.next: edit.position_story_mismatch`。
+- 2026-11-22：命令面板 `\table` 在 cell 内候选不可用时接受路径补引擎回归（不报错、generation 不变）。
 - 2026-11-22：终审修复：跨 Story 表候选在表格不直接相邻（如 `[正文, Equation, Table]`）时回落到既有复杂块边缘逻辑，避免水平方向键被吃掉；表格行列插入/删除键在表格外统一 no-op，消除其余 `edit.invalid_position` QML 警告；同步 canvas-highlighting/structure-navigation 唯一权威文档。
 - 2026-11-22：按维护者截图反馈继续修复：block 高亮从当前 cell 改为整张表格（所有 cell 完整奶油黄）且边框保持实线；当前 cell 仅保留网格外框虚线；方向键在表格边缘按块宿主离开/进入相邻正文段落，Escape 从 cell 退出；普通/Shift 方向键与结构导航键的跨 Story 表格候选统一收敛（扩选 no-op、普通移动进入相邻格），消除 `edit.position_story_mismatch`；不可用表格插入键 no-op，消除 `table_insertion_unsupported`；native 轴线按设备像素对齐，修复 Enter 后边框粗细不均。补 engine/app/native 回归。
 - 2026-11-22：领域评审三轮修复：方向键 cell 目标确实改用共享 `focus_table_cell` 提交；补 app 非空目标 cell Up/Down 回归。纵向 app phase1 只由视觉边界触发，`table_vertical_block_boundary` 仅用于 phase1 后早退；折行 cell 纵向文本行导航恢复并补 app 回归；方向键目标提交改用共享 `focus_table_cell`；补正文空段纵向 no-op 测试。
