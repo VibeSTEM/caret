@@ -5951,10 +5951,26 @@ fn body_before_table_keeps_cell_paragraph_indices_and_hit_geometry_consistent() 
     assert_eq!(cell_hit.position.story, cell.story);
 
     // 点在单元格边框/内边距区域也必须命中该单元格，而不是落到表前正文。
-    let padding_hit = snapshot
-        .hit_test(0, cell_clip.x0_pt + 0.5, cell_clip.y0_pt + 0.5)
-        .unwrap_or_else(|| panic!("cell padding hit must resolve"));
-    assert_eq!(padding_hit.position.paragraph_id, cell_id);
+    let cell_location = cell.line_locations[0]
+        .as_ref()
+        .unwrap_or_else(|| panic!("cell line location must exist"));
+    let hit_clip = cell_location
+        .hit_clip
+        .unwrap_or_else(|| panic!("cell line must publish hit clip"));
+    assert!(
+        hit_clip.x0_pt < cell_clip.x0_pt,
+        "hit clip must include horizontal inset"
+    );
+    for x_pt in [
+        hit_clip.x0_pt + 0.5,
+        cell_clip.x0_pt - 1.5,
+        cell_clip.x1_pt + 1.5,
+    ] {
+        let padding_hit = snapshot
+            .hit_test(0, x_pt, hit_clip.y0_pt + 0.5)
+            .unwrap_or_else(|| panic!("cell padding hit must resolve at {x_pt}"));
+        assert_eq!(padding_hit.position.paragraph_id, cell_id);
+    }
 
     let glyphs = snapshot
         .page_glyphs(0)

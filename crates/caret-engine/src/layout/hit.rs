@@ -39,13 +39,14 @@ impl DocumentLayoutSnapshot {
                 else {
                     continue;
                 };
-                // 单元格行只能命中其内容矩形；正文行没有裁剪框。
-                if let Some(clip) = location.clip
+                // 单元格行按含边框/内边距的命中框参与命中；正文行没有裁剪框。
+                let hit_clip = location.hit_clip.or(location.clip);
+                if let Some(clip) = hit_clip
                     && !clip.contains(x_pt, y_pt)
                 {
                     continue;
                 }
-                let is_clipped_line = location.clip.is_some();
+                let is_clipped_line = hit_clip.is_some();
                 let line_top = location.y0_pt - page.margin_top_pt;
                 let line_bottom = line_top + f64::from(line.metrics.height_pt);
                 let vertical_distance = if content_y < line_top {

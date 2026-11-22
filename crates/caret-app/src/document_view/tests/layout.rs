@@ -3372,6 +3372,13 @@ fn body_before_table_keeps_cell_caret_and_fragment_identity()
         1,
         "cell paragraph must appear exactly once"
     );
+    // 单元格左边缘内边距区域也应命中单元格；内容起点约 76.5，点 73.5 仍应在 cell。
+    let hit: Value = serde_json::from_str(&runtime.hit_test_json(0, 73.5, 105.0)?)?;
+    assert_eq!(
+        hit["position"]["paragraphId"].as_str(),
+        Some(cell_id),
+        "click inside cell padding must hit the cell paragraph"
+    );
     Ok(())
 }
 

@@ -121,6 +121,8 @@ pub(crate) struct CaretLineLocation {
     pub(crate) y0_pt: f64,
     /// 页面局部的矩形裁剪框；正文行为 None。
     pub(crate) clip: Option<PageClip>,
+    /// 命中回退框：包含单元格边框/内边距；caret 与选区仍使用 `clip`。
+    pub(crate) hit_clip: Option<PageClip>,
 }
 
 /// 页面局部矩形裁剪框；caret/选区/命中/绘制共用同一判断。

@@ -831,6 +831,7 @@ impl PageGeometries {
                             x0_pt,
                             y0_pt,
                             clip,
+                            hit_clip: None,
                         });
                     }
                     y0_pt += f64::from(line.metrics.height_pt);

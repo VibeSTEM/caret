@@ -82,6 +82,7 @@
 - 2026-11-22：评审修复：cell 公式块几何/高亮接入页面放置；math 进入/退出/边界停靠容器化；表格键上下文仲裁；macOS 物理 Control；辅助线主题 token/页面裁剪；超高单元格内容按版心裁剪发布，app 级回归覆盖长单元格与 cell 公式快照。
 - 2026-11-22：二轮评审修复：cell 公式/Align 的 Backspace/Delete 对象删除与 Align 行结构提交改容器路径（删除单元格唯一公式时补空段落，正文不变，Undo/Redo 有测试）；被版心裁剪的 cell 公式空高亮降级；app 长单元格测试按所有页/版心断言；012/027/keyboard 文档交接更新。
 - 2026-11-22：三轮评审修复：表格段落在全局段落序列中的基址偏移（表前有正文时 cell 文本不再画错格/丢 caret）；命中测试让单元格裁剪行优先于正文行；被裁剪 cell 公式无可见光标时降级为空光标；新增“正文段落在表格前”的 engine/app 回归（fragment 唯一、caret 在格内、命中 cell）。
+- 2026-11-22：最终 review 修复：分页改为段落 ID 映射；表格后正文 fragment/caret/命中恢复；cell 边框/内边距命中独立 hit clip；cell Shift+方向键 no-op；bench 登记、错误码稳定性与文档收口。
 - 2026-11-22：实现收口：列宽 v1 等分（最小列宽约束）、行高由块级测量决定、行原子分页、单元格内 Paragraph/Equation/Align/InlineMath/环境标题与正文布局、cell 公式编辑（插入/输入/退出/继续输入/Undo）、cell 公式块几何/高亮、表格插入/行列命令/导航入口、编辑态主题化虚线辅助线与 native 严格快照契约均已落地；50×8 布局基线 8.97–9.33 ms。
 
 ## 性能基线与验证记录
@@ -103,8 +104,8 @@
 
 ### 最终验证记录（2026-11-22）
 
-- `cargo fmt --all -- --check`、`cargo clippy --locked --offline --workspace --all-targets -- -D warnings`、`cargo test --locked --offline --workspace`（36 suites，engine 969/app 359/layout 160/structure 15）、`cargo test -p caret-tests --test native`（CTest 20/20）、`cargo lint --check`（9/9）通过；50×8 bench 复跑 8.63–8.67 ms（~46 Kcell/s）。
-- 独立 final review：待修复表格后正文分页基址、cell padding 命中、dark 边框可读性、Shift+方向键 cell 守卫后复验。
+- `cargo fmt --all -- --check`、`cargo clippy --locked --offline --workspace --all-targets -- -D warnings`、`cargo test --locked --offline --workspace`（engine 968/app 357/layout 160/structure 15，累计 2067 项）、`cargo test -p caret-tests --test native`（CTest 20/20）、`cargo lint --check`（9/9）通过；50×8 bench 复跑 8.63–8.67 ms（~46 Kcell/s）。
+- 独立 final review 修复项：表格后正文分页按段落 ID→全局索引映射；cell padding/边框命中使用独立 hit clip（caret/选区仍用内容盒）；cell 内 Shift+方向键改为 no-op；dark 可读边框与 v1 限制同步文档；复验通过后进入 PR。
 
 ## 当前状态与后续切片
 

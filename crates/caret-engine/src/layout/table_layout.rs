@@ -386,15 +386,16 @@ pub(super) fn expand_table_fragments(
                         content_x_pt + grid_cell.content_width_pt,
                         origin_y_pt + grid_row.top_pt + grid_row.height_pt,
                     ];
-                    // 命中/光标裁剪使用包含边框与内边距的单元格矩形；
-                    // 段落片段自身仍使用内容盒裁剪绘图与选区。
+                    // 命中裁剪使用包含边框与内边距的网格单元格矩形；caret/选区仍用内容盒。
+                    // grid.columns 记录内容轨道，向外扩出水平内缩得到单元格框。
+                    let horizontal_inset_pt = shaped.grid.columns.first().map_or(0.0, |(x, _)| *x);
                     let hit_clip = shaped.grid.columns.get(cell_index).map_or(
                         clip,
                         |(column_x, column_width)| {
                             [
-                                origin_x_pt + column_x,
+                                origin_x_pt + column_x - horizontal_inset_pt,
                                 origin_y_pt + grid_row.top_pt,
-                                origin_x_pt + column_x + column_width,
+                                origin_x_pt + column_x + column_width + horizontal_inset_pt,
                                 origin_y_pt + grid_row.top_pt + grid_row.height_pt,
                             ]
                         },
@@ -433,7 +434,8 @@ pub(super) fn expand_table_fragments(
                                             page_index,
                                             x0_pt: content_x_pt,
                                             y0_pt,
-                                            clip: Some(super::PageClip::from_array(hit_clip)),
+                                            clip: Some(super::PageClip::from_array(clip)),
+                                            hit_clip: Some(super::PageClip::from_array(hit_clip)),
                                         });
                                     }
                                     y0_pt += f64::from(line.metrics.height_pt);
