@@ -78,7 +78,7 @@
 | 2026-11-22 | `cargo test -p caret-tests --test native` | native CTest、辅助线替换、边框像素厚度 | 通过：CTest 20/20，新 C++ 用例验证旧矩形清除与亚像素轴线厚度一致 |
 | 2026-11-22 | PR #169 后续截图反馈 | 整表高亮、块进出、QML 错误、边框粗细 | 修复并补测试；待复评/CI |
 | 2026-11-22 | `cargo fmt --all -- --check`、`cargo format --check`、`cargo clippy --locked --offline --workspace --all-targets -- -D warnings` | 格式与静态检查 | 通过 |
-| 2026-11-22 | `cargo test --locked --offline --workspace` | 全量 Rust/native/QML 回归 | 通过：2085 passed / 1 ignored（34 个测试 target，含 native 聚合；engine 973/app 369/layout 160/structure 15） |
+| 2026-11-22 | `cargo test --locked --offline --workspace` | 全量 Rust/native/QML 回归 | 通过：2083 passed / 1 ignored（34 个测试 target，合计 2084 项，含 native 聚合；engine 973/app 369/layout 160/structure 15） |
 | 2026-11-22 | `cargo lint --check` | Rust/C++/QML/CMake/依赖 9 阶段 | 通过：9/9 |
 | 2026-11-22 | PR [#169](https://github.com/VibeSTEM/caret/pull/169) CI | 适用作业通过 | 通过：12/12 作业成功 |
 | — | 真实窗口人工视觉：焦点高亮、虚线对齐、缩放/翻页/前后台 | 桌面可观察 | 未执行：本环境只有 headless app/native 与 CTest；与 046 先例一致，作为外部验收限制记录 |
