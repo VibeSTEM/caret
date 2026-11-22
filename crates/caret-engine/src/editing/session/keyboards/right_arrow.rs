@@ -91,6 +91,14 @@ impl Session {
             return self.collapse_structure_selection(Direction::Forward);
         }
         if !extend
+            && let Some(effect) = self.table_arrow_step(
+                super::super::table::TableArrowAxis::Horizontal,
+                Direction::Forward,
+            )?
+        {
+            return Ok(effect);
+        }
+        if !extend
             && self.empty_inline_boundary_candidate_matches(candidate.as_ref())?
             && let Some(effect) = self.move_empty_inline_host_boundary(Direction::Forward)?
         {
@@ -135,5 +143,15 @@ impl Session {
             ) => Err(EditError::InvalidPosition),
             None => self.complete_horizontal_document_edge(Direction::Forward, extend),
         }
+    }
+}
+
+impl Session {
+    /// Alt+Right：在单元格右侧插入列。
+    pub(super) fn handle_right_arrow_table_insert_column(&mut self) -> Result<Effect, EditError> {
+        if !super::helpers::table::table_keyboard_context_available(self) {
+            return Ok(Effect::default());
+        }
+        self.insert_table_column(Direction::Forward)
     }
 }

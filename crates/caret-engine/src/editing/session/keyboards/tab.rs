@@ -32,3 +32,16 @@ impl Session {
         self.run(Command::InsertTwoCharacterWidthSpace)
     }
 }
+
+impl Session {
+    /// Shift+Tab 是 Tab 的修饰变体：表格内移到上一格，其他上下文让位。
+    pub(super) fn handle_shift_tab(&mut self) -> Result<Effect, EditError> {
+        if !super::helpers::table::table_keyboard_context_available(self) {
+            return Ok(Effect::default());
+        }
+        if let Some(effect) = self.table_tab_backward()? {
+            return Ok(effect);
+        }
+        Ok(Effect::default())
+    }
+}

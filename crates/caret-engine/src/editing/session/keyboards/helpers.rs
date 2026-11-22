@@ -4,5 +4,6 @@
 // 署名：Yuki Lu
 
 mod navigation;
+pub(super) mod table;
 mod text_input;
 mod vertical_navigation;

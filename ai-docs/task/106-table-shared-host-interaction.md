@@ -81,3 +81,5 @@
 ## 决策与工作记录
 
 - 2026-11-22：根据真实窗口测试与维护者反馈创建；确认按 080 共享宿主协议、076 键盘架构收敛，不继续扩大 table_keys.rs。
+- 2026-11-22：键盘结构收敛：删除 `table_keys.rs`；Shift+Tab 进 `tab.rs`，Alt+T 新建 `alt_t.rs`，Alt+↑/↓ 行列插入进 `up_arrow.rs`/`down_arrow.rs`/`left_arrow.rs`/`right_arrow.rs`，Alt(+Shift)+Backspace/Delete 行列删除进 `backspace.rs`/`delete.rs`；每类 EditorKey 按具体按键一行分派，`helpers/table.rs` 只保留共享上下文判定。
+- 2026-11-22：方向键单元格边界移动：单元格首/末文本边界按行优先进入相邻 cell（上下同列），表格边缘消费为 no-op；新增 2×2 行为测试。

@@ -39,22 +39,22 @@ Qt QKeyEvent → 平台键映射 → 编辑器意图
 | --- | --- | --- |
 | `escape.rs` | Escape；已有处理器 | 命令输入、IME、数学编辑、选区、结构退出顺序 |
 | `enter.rs` | Enter、Shift+Enter；已有处理器 | 命令候选、Align 换行、数学退出/拒绝、正文换段或软换行 |
-| `tab.rs` | Tab；已有处理器 | 命令补全、数学上下文保留焦点、正文空格 |
+| `tab.rs` | Tab、Shift+Tab；已有处理器 | 命令补全、数学上下文保留焦点、正文空格；Shift+Tab 表格前一格 |
 | `backslash.rs` | `\` 命令前缀；已接入 | 正文启动命令输入；命令输入/公式焦点由 Session 保持对应输入语义 |
 | `dollar.rs` | `$`；已接入 | 正文创建并聚焦空行内公式；公式中作为数学输入，命令查询中作为查询文本。按输入字符识别；`、`、`¥` 和 `￥` 保持普通文本 |
-| `backspace.rs` | Backspace；已接入 | 正文删除、命令输入删除、公式内部删除和边界行为 |
+| `backspace.rs` | Backspace、Alt+Backspace、Alt+Shift+Backspace；已接入 | 正文删除、命令输入删除、公式内部删除和边界行为；表格列/行删除变体也归本按键 |
 | `mod_backspace.rs` | Mod+Backspace；已接入 | IME/命令行、数学编辑、行内环境、块环境顺序 |
-| `delete.rs` | Delete；已接入 | 正文及公式上下文中的前向删除；表格单元格行为待 045/046 接入后实现 |
-| `left_arrow.rs` / `right_arrow.rs` | Left / Right 与 Shift 变体；已接入 | 命令行光标、数学内部移动、正文视觉候选、公式宿主进入和边界行为；修饰变体随对应实体键管理 |
-| `up_arrow.rs` / `down_arrow.rs` | Up / Down、Shift 与结构移动变体；已接入 | 各自 handler 明确选择 composition、命令行、公式和正文分支；结构移动受高优先级状态约束，布局候选提交委托 `keyboards/helpers/vertical_navigation.rs` |
+| `delete.rs` | Delete、Alt+Delete、Alt+Shift+Delete；已接入 | 正文及公式上下文中的前向删除；表格列/行删除变体归本按键 |
+| `left_arrow.rs` / `right_arrow.rs` | Left / Right、Shift 变体、Alt+Left/Right；已接入 | 命令行光标、数学内部移动、正文视觉候选、公式宿主进入和边界行为；表格插入列变体随对应实体键；单元格文本边界换格 |
+| `up_arrow.rs` / `down_arrow.rs` | Up / Down、Shift 与结构移动变体、Alt+Up/Down；已接入 | 各自 handler 明确选择 composition、命令行、公式和正文分支；表格插入行变体随对应实体键；单元格文本边界换格 |
 | `home.rs` / `end.rs` | Home / End 与 Shift 变体；已接入 | 命令行/数学文本/正文视觉行边界；修饰变体随对应实体键管理 |
 | `page_up.rs` / `page_down.rs` | PageUp / PageDown；后续结构任务 | 同类结构导航，按对应结构任务接入时再实现 |
 | `mod_space.rs` | Mod+Space；已接入 | 扩大结构选区；普通 Space 是文本输入，不是编辑器快捷键 |
-| `table_keys.rs` | Shift+Tab、Alt+T、行列插入/删除；组合输入/命令输入/公式编辑优先 | 表格内移动/插入/删除；仅普通文档焦点执行 |
+| `alt_t.rs` | Alt+T；已接入 | 插入表格；组合输入/命令输入/公式编辑优先 |
 | `mod_c.rs` / `mod_v.rs` | Mod+C / Mod+V；已接入 | 复制/粘贴的会话语义与作用域；系统剪贴板读写由 app 适配层提供 |
 | `mod_z.rs` | Mod+Z / Mod+Shift+Z；已接入 | 画布焦点下的 Undo/Redo Session 优先级、公式源码草稿本地历史与文档历史；工具栏仍使用 undo()/redo() 命令 API |
 
-当前逐键入口覆盖[唯一键位清单](keyboard-shortcuts.md)中所有已支持的画布编辑器快捷键；表格结构键集中在 `table_keys.rs`，统一让位组合输入、命令输入和公式编辑。未来新增编辑器快捷键也按具体快捷键或独立语义家族加入同一目录，不在 app、QML 或领域模块另建仲裁入口。目标结构是 `keyboards.rs` 只做模块注册和 `run_editor_key` 分派；本键状态优先级与具体动作由逐键 handler 负责。只有同一候选校验/提交确实被多个键以相同不变量调用时，才放进 `keyboards/helpers.rs` 与 `keyboards/helpers/`，辅助模块不得重新决定上下文优先级。app 保有并计算页面布局模型和视觉几何，engine 不复制或重算这些数据。候选无效时必须在任何焦点/文档迁移前拒绝，保证失败原子性。
+当前逐键入口覆盖[唯一键位清单](keyboard-shortcuts.md)中所有已支持的画布编辑器快捷键；表格修饰键按基础实体键归入 `tab.rs`/`up_arrow.rs`/`down_arrow.rs`/`left_arrow.rs`/`right_arrow.rs`/`backspace.rs`/`delete.rs`，`helpers/table.rs` 只放共享上下文判定与单元格边界动作，不另行决定优先级。未来新增编辑器快捷键也按具体快捷键或独立语义家族加入同一目录，不在 app、QML 或领域模块另建仲裁入口。目标结构是 `keyboards.rs` 只做模块注册和 `run_editor_key` 分派；本键状态优先级与具体动作由逐键 handler 负责。只有同一候选校验/提交确实被多个键以相同不变量调用时，才放进 `keyboards/helpers.rs` 与 `keyboards/helpers/`，辅助模块不得重新决定上下文优先级。app 保有并计算页面布局模型和视觉几何，engine 不复制或重算这些数据。候选无效时必须在任何焦点/文档迁移前拒绝，保证失败原子性。
 
 只改变扩选/修饰状态的变体（如 Shift+方向键）随基础键处理；形成独立语义动作的修饰快捷键（如 Mod+Backspace、Mod+Z）可有独立文件，仍由单一 Session 键盘入口分派。Qt 负责物理键和平台修饰映射；IME 预编辑仍由 Qt 输入适配先处理。
 

@@ -42,6 +42,16 @@ impl Session {
         if self.math_edit.is_some() {
             return self.commit_math_vertical_navigation_candidate(candidate, extend, direction);
         }
+        if !extend
+            && !self.has_structure_selection()
+            && candidate.is_none()
+            && let Some(effect) = self.table_arrow_step(
+                super::super::super::table::TableArrowAxis::Vertical,
+                direction,
+            )?
+        {
+            return Ok(effect);
+        }
         if candidate.is_none() {
             return self.complete_vertical_document_edge(direction, extend);
         }

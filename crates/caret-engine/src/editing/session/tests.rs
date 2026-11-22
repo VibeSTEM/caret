@@ -2547,6 +2547,121 @@ fn table_cell_enter_splits_inside_the_cell_transaction() {
     assert_eq!(cell_blocks.len(), 1);
 }
 
+fn two_by_two_table_session() -> (Session, NodeId, NodeId, NodeId, NodeId) {
+    let value = serde_json::json!({
+        "type": "table",
+        "id": "table-2x2",
+        "rows": [
+            {"id": "row-a", "cells": [
+                {"id": "cell-a0", "blocks": [{"type": "paragraph", "id": "p-a0", "inlines": [{"type": "text", "runs": [{"text": "ab", "props": {}}]}]}]},
+                {"id": "cell-a1", "blocks": [{"type": "paragraph", "id": "p-a1", "inlines": [{"type": "text", "runs": [{"text": "cd", "props": {}}]}]}]}
+            ]},
+            {"id": "row-b", "cells": [
+                {"id": "cell-b0", "blocks": [{"type": "paragraph", "id": "p-b0", "inlines": [{"type": "text", "runs": [{"text": "ef", "props": {}}]}]}]},
+                {"id": "cell-b1", "blocks": [{"type": "paragraph", "id": "p-b1", "inlines": [{"type": "text", "runs": [{"text": "gh", "props": {}}]}]}]}
+            ]}
+        ]
+    });
+    let table: Block = serde_json::from_value(value)
+        .unwrap_or_else(|error| panic!("2x2 table fixture must parse: {error}"));
+    let mut document = Document::blank();
+    document.body.push(table);
+    let mut session =
+        Session::new(document).unwrap_or_else(|error| panic!("table document must open: {error}"));
+    let table_id = NodeId::parse("table-2x2").unwrap_or_else(|error| panic!("table id: {error}"));
+    let row_id = NodeId::parse("row-a").unwrap_or_else(|error| panic!("row id: {error}"));
+    let cell_id = NodeId::parse("cell-a0").unwrap_or_else(|error| panic!("cell id: {error}"));
+    let paragraph_id =
+        NodeId::parse("p-a0").unwrap_or_else(|error| panic!("paragraph id: {error}"));
+    session
+        .set_selection(Some(Selection {
+            anchor: Pos {
+                story: StoryId::TableCell {
+                    table_id: table_id.clone(),
+                    row_id: row_id.clone(),
+                    cell_id: cell_id.clone(),
+                },
+                paragraph_id: paragraph_id.clone(),
+                offset: 2,
+                affinity: Affinity::Downstream,
+            },
+            focus: Pos {
+                story: StoryId::TableCell {
+                    table_id: table_id.clone(),
+                    row_id: row_id.clone(),
+                    cell_id: cell_id.clone(),
+                },
+                paragraph_id: paragraph_id.clone(),
+                offset: 2,
+                affinity: Affinity::Downstream,
+            },
+        }))
+        .unwrap_or_else(|error| panic!("cell selection must work: {error}"));
+    (session, table_id, row_id, cell_id, paragraph_id)
+}
+
+#[test]
+fn arrow_keys_move_between_cells_at_content_boundaries() {
+    let (mut session, table_id, row_a, cell_a0, paragraph_a0) = two_by_two_table_session();
+    let generation = session.document_generation();
+    run_ok(
+        &mut session,
+        Command::EditorKey(EditorKey::RightArrow {
+            candidate: None,
+            extend: false,
+        }),
+    );
+    let focus = &session.selection.focus;
+    assert_eq!(session.document_generation(), generation);
+    assert!(
+        matches!(&focus.story, StoryId::TableCell { cell_id, .. } if cell_id.to_string() == "cell-a1")
+    );
+
+    // 回到首格开头，Left 应进入上一格（表格边缘则保持）。
+    let start = Pos {
+        story: StoryId::TableCell {
+            table_id: table_id.clone(),
+            row_id: row_a.clone(),
+            cell_id: cell_a0.clone(),
+        },
+        paragraph_id: paragraph_a0.clone(),
+        offset: 0,
+        affinity: Affinity::Upstream,
+    };
+    session
+        .set_selection(Some(Selection {
+            anchor: start.clone(),
+            focus: start,
+        }))
+        .unwrap_or_else(|error| panic!("cell start selection must work: {error}"));
+    run_ok(
+        &mut session,
+        Command::EditorKey(EditorKey::LeftArrow {
+            candidate: None,
+            extend: false,
+        }),
+    );
+    assert!(matches!(
+        &session.selection.focus.story,
+        StoryId::TableCell { cell_id, .. } if cell_id.to_string() == "cell-a0"
+    ));
+
+    // 首格首段开头 Down 应进入同一列下一行。
+    run_ok(
+        &mut session,
+        Command::EditorKey(EditorKey::DownArrow {
+            candidate: None,
+            extend: false,
+            structure: false,
+        }),
+    );
+    assert!(matches!(
+        &session.selection.focus.story,
+        StoryId::TableCell { row_id, cell_id, .. }
+            if row_id.to_string() == "row-b" && cell_id.to_string() == "cell-b0"
+    ));
+}
+
 #[test]
 fn cell_display_math_backspace_deletes_only_the_cell_object() {
     let (document, table_id, row_id, cell_id, paragraph_id) = table_document_for_session();

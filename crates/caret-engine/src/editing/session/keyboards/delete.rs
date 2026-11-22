@@ -15,3 +15,19 @@ impl Session {
         self.run(Command::Delete(Direction::Forward))
     }
 }
+
+impl Session {
+    pub(super) fn handle_delete_table_delete_row(&mut self) -> Result<Effect, EditError> {
+        if !super::helpers::table::table_keyboard_context_available(self) {
+            return Ok(Effect::default());
+        }
+        self.delete_table_row()
+    }
+
+    pub(super) fn handle_delete_table_delete_column(&mut self) -> Result<Effect, EditError> {
+        if !super::helpers::table::table_keyboard_context_available(self) {
+            return Ok(Effect::default());
+        }
+        self.delete_table_column()
+    }
+}

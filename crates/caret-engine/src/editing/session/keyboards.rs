@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
+mod alt_t;
 mod backslash;
 mod backspace;
 mod delete;
@@ -21,11 +22,10 @@ mod mod_v;
 mod mod_z;
 mod right_arrow;
 mod tab;
-mod table_keys;
 mod up_arrow;
 
 use super::Session;
-use crate::editing::{EditError, EditorKey, Effect};
+use crate::editing::{Direction, EditError, EditorKey, Effect, TableDeleteBase};
 
 impl Session {
     /// 编辑器键的应用入口；需要字体候选的键仍由对应 handler 决定何时取字体目录。
@@ -64,22 +64,34 @@ impl Session {
             EditorKey::Escape => self.handle_escape(),
             EditorKey::Enter => self.handle_enter(false),
             EditorKey::Tab => self.handle_tab(),
-            EditorKey::ShiftTab
-            | EditorKey::InsertTable
-            | EditorKey::TableInsertRow(_)
-            | EditorKey::TableDeleteRow
-            | EditorKey::TableInsertColumn(_)
-            | EditorKey::TableDeleteColumn => self.handle_table_key(key),
-            EditorKey::ShiftEnter => self.handle_enter(true),
+            EditorKey::ShiftTab => self.handle_shift_tab(),
+            EditorKey::InsertTable => self.handle_insert_table(),
+            EditorKey::TableInsertRow(Direction::Backward) => {
+                self.handle_up_arrow_table_insert_row()
+            }
+            EditorKey::TableInsertRow(Direction::Forward) => {
+                self.handle_down_arrow_table_insert_row()
+            }
+            EditorKey::TableInsertColumn(Direction::Backward) => {
+                self.handle_left_arrow_table_insert_column()
+            }
+            EditorKey::TableInsertColumn(Direction::Forward) => {
+                self.handle_right_arrow_table_insert_column()
+            }
+            EditorKey::TableDeleteRow(TableDeleteBase::Backspace) => {
+                self.handle_backspace_table_delete_row()
+            }
+            EditorKey::TableDeleteRow(TableDeleteBase::Delete) => {
+                self.handle_delete_table_delete_row()
+            }
+            EditorKey::TableDeleteColumn(TableDeleteBase::Backspace) => {
+                self.handle_backspace_table_delete_column()
+            }
+            EditorKey::TableDeleteColumn(TableDeleteBase::Delete) => {
+                self.handle_delete_table_delete_column()
+            }
             EditorKey::Backspace => self.handle_backspace(),
             EditorKey::Delete => self.handle_delete(),
-            EditorKey::Backslash => self.handle_backslash(),
-            EditorKey::Dollar => self.handle_dollar(),
-            EditorKey::ModC => self.handle_mod_c(),
-            EditorKey::ModV => self.handle_mod_v(),
-            EditorKey::ModZ { redo } => self.handle_mod_z(redo),
-            EditorKey::ModSpace => self.handle_mod_space(),
-            EditorKey::ModBackspace => self.handle_mod_backspace(),
             EditorKey::LeftArrow { candidate, extend } => self.handle_left_arrow(candidate, extend),
             EditorKey::RightArrow { candidate, extend } => {
                 self.handle_right_arrow(candidate, extend)
@@ -94,6 +106,14 @@ impl Session {
                 extend,
                 structure,
             } => self.handle_down_arrow(candidate, extend, structure),
+            EditorKey::ShiftEnter => self.handle_enter(true),
+            EditorKey::Backslash => self.handle_backslash(),
+            EditorKey::Dollar => self.handle_dollar(),
+            EditorKey::ModC => self.handle_mod_c(),
+            EditorKey::ModV => self.handle_mod_v(),
+            EditorKey::ModZ { redo } => self.handle_mod_z(redo),
+            EditorKey::ModSpace => self.handle_mod_space(),
+            EditorKey::ModBackspace => self.handle_mod_backspace(),
             EditorKey::Home { candidate, extend } => self.handle_home(candidate, extend),
             EditorKey::End { candidate, extend } => self.handle_end(candidate, extend),
         }

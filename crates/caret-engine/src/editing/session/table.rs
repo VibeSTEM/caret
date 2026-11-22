@@ -10,6 +10,13 @@ use crate::editing::paragraph_ops::{
 };
 use caret_doc::{Block, NodeId, Paragraph, Table, TableCell, TableRow};
 
+/// 方向键在单元格边界的移动轴。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TableArrowAxis {
+    Horizontal,
+    Vertical,
+}
+
 /// 当前段落所在的表格单元格上下文。
 pub(super) struct TableContext {
     /// 表格块所在容器（单元格之前的容器路径）。
@@ -262,6 +269,126 @@ impl Session {
             context.cell_index,
             true,
         )?))
+    }
+
+    /// 方向键在单元格首/末内容边界进入相邻单元格；返回 `None` 表示不在边界、交给文本/外层导航。
+    /// 表格边缘仍消费按键（`Some(default)`），不让普通方向键把光标带出表格。
+    pub(super) fn table_arrow_step(
+        &mut self,
+        axis: TableArrowAxis,
+        direction: Direction,
+    ) -> Result<Option<Effect>, EditError> {
+        let Some(context) = self.table_context() else {
+            return Ok(None);
+        };
+        let Some(location) = self
+            .paragraph_index
+            .get(&self.selection.focus.paragraph_id)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        if location.container.environment_depth() != 0 {
+            eprintln!(
+                "DEBUG table_arrow_step: env depth {} loc={:?}",
+                location.container.environment_depth(),
+                location
+            );
+            return Ok(None);
+        }
+        let Some(block_index) = location.block_path.last().copied() else {
+            return Ok(None);
+        };
+        let table = self.current_table(&context)?;
+        let Some(row) = table.rows.get(context.row_index) else {
+            return Ok(None);
+        };
+        let Some(cell) = row.cells.get(context.cell_index) else {
+            return Ok(None);
+        };
+        let Some(Block::Paragraph(paragraph)) = cell.blocks.get(block_index) else {
+            return Ok(None);
+        };
+        if paragraph.id != self.selection.focus.paragraph_id {
+            return Ok(None);
+        }
+        let text_len = crate::editing::text_map::TextMap::new(paragraph)
+            .map_err(|error| EditError::InvalidDocument(error.to_string()))?
+            .text
+            .len();
+        let at_boundary = match axis {
+            // 横向前提是真正到达单元格内文本边界，避免在单元格中间跳格。
+            TableArrowAxis::Horizontal => match direction {
+                Direction::Backward => block_index == 0 && self.selection.focus.offset == 0,
+                Direction::Forward => {
+                    block_index + 1 == cell.blocks.len() && self.selection.focus.offset == text_len
+                }
+            },
+            // 纵向由调用方确认没有同段落视觉行候选，只需确认处于 cell 首/末块。
+            TableArrowAxis::Vertical => match direction {
+                Direction::Backward => block_index == 0,
+                Direction::Forward => block_index + 1 == cell.blocks.len(),
+            },
+        };
+        if !at_boundary {
+            return Ok(None);
+        }
+        let columns = table.rows.first().map_or(0, |row| row.cells.len());
+        let (target_row, target_cell) = match axis {
+            TableArrowAxis::Horizontal => {
+                let index = context.row_index * columns + context.cell_index;
+                if direction == Direction::Backward {
+                    if index == 0 {
+                        return Ok(Some(Effect::default()));
+                    }
+                    let previous = index - 1;
+                    (previous / columns, previous % columns)
+                } else {
+                    let next = index + 1;
+                    if next >= table.rows.len() * columns {
+                        return Ok(Some(Effect::default()));
+                    }
+                    (next / columns, next % columns)
+                }
+            }
+            TableArrowAxis::Vertical => {
+                let target_row = match direction {
+                    Direction::Backward => {
+                        let Some(row) = context.row_index.checked_sub(1) else {
+                            return Ok(Some(Effect::default()));
+                        };
+                        row
+                    }
+                    Direction::Forward => {
+                        let row = context.row_index + 1;
+                        if row >= table.rows.len() {
+                            return Ok(Some(Effect::default()));
+                        }
+                        row
+                    }
+                };
+                (target_row, context.cell_index)
+            }
+        };
+        let Some(target) = table_target(
+            &table,
+            target_row,
+            target_cell,
+            direction == Direction::Forward,
+        ) else {
+            return Ok(Some(Effect::default()));
+        };
+        if !self.paragraph_index.contains_key(&target.paragraph_id) {
+            return Ok(Some(Effect::default()));
+        }
+        self.selection = Selection {
+            anchor: target.clone(),
+            focus: target,
+        };
+        Ok(Some(Effect {
+            selection_changed: true,
+            ..Effect::default()
+        }))
     }
 
     /// 纯单元格移动只改变选区，不产生文档补丁、generation 或历史步。

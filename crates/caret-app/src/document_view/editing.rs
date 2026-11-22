@@ -4,7 +4,9 @@
 // 署名：Yuki Lu
 
 use super::DocumentViewRuntime;
-use caret_engine::{Command, Direction, DocumentLayoutDeltaView, EditorKey, Effect};
+use caret_engine::{
+    Command, Direction, DocumentLayoutDeltaView, EditorKey, Effect, TableDeleteBase,
+};
 
 impl DocumentViewRuntime {
     /// 按 Session 效果统一更新交互状态并选择布局或交互快照。
@@ -47,10 +49,14 @@ impl DocumentViewRuntime {
             "insert-table" => EditorKey::InsertTable,
             "table-insert-row-before" => EditorKey::TableInsertRow(Direction::Backward),
             "table-insert-row-after" => EditorKey::TableInsertRow(Direction::Forward),
-            "table-delete-row" => EditorKey::TableDeleteRow,
+            "table-delete-row-backspace" => EditorKey::TableDeleteRow(TableDeleteBase::Backspace),
+            "table-delete-row-delete" => EditorKey::TableDeleteRow(TableDeleteBase::Delete),
             "table-insert-col-before" => EditorKey::TableInsertColumn(Direction::Backward),
             "table-insert-col-after" => EditorKey::TableInsertColumn(Direction::Forward),
-            "table-delete-column" => EditorKey::TableDeleteColumn,
+            "table-delete-column-backspace" => {
+                EditorKey::TableDeleteColumn(TableDeleteBase::Backspace)
+            }
+            "table-delete-column-delete" => EditorKey::TableDeleteColumn(TableDeleteBase::Delete),
             "shift-enter" => EditorKey::ShiftEnter,
             "backspace" => EditorKey::Backspace,
             "delete" => EditorKey::Delete,

@@ -79,12 +79,16 @@ void DocumentCanvas::keyPressEvent(QKeyEvent* event) {
         return;
     }
     if (keyboard::isDeleteTableRow(semantic_modifiers, event->key())) {
-        emit editorKeyRequested(QStringLiteral("table-delete-row"));
+        emit editorKeyRequested(event->key() == Qt::Key_Backspace
+                                    ? QStringLiteral("table-delete-row-backspace")
+                                    : QStringLiteral("table-delete-row-delete"));
         event->accept();
         return;
     }
     if (keyboard::isDeleteTableColumn(semantic_modifiers, event->key())) {
-        emit editorKeyRequested(QStringLiteral("table-delete-column"));
+        emit editorKeyRequested(event->key() == Qt::Key_Backspace
+                                    ? QStringLiteral("table-delete-column-backspace")
+                                    : QStringLiteral("table-delete-column-delete"));
         event->accept();
         return;
     }
