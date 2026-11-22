@@ -385,12 +385,12 @@ impl Session {
         else {
             return Ok(Effect::default());
         };
-        let Some((parent_environment_ids, block_index)) =
-            super::math_edit::find_block_path(&self.document.body, &block_id)
+        let Some((container, block_index)) =
+            super::math_edit::find_block_container_path(&self.document.body, &block_id)
         else {
             return Err(EditError::InvalidPosition);
         };
-        let inline_depth = parent_environment_ids.len() + 1;
+        let inline_depth = container.environment_depth() + 1;
         for paragraph in &mut paragraphs {
             let text_len = TextMap::new(paragraph)?.text.len();
             self.apply_pending_style_to_paragraph(paragraph, 0, text_len, inline_depth)?;
@@ -405,7 +405,7 @@ impl Session {
         let final_offset = TextMap::new(last_paragraph)?.text.len();
         let final_paragraph_id = last_paragraph.id.clone();
         let Some(siblings) =
-            block_list_by_parent_ids_mut(&mut self.document.body, &parent_environment_ids)
+            caret_structure::block_list_by_container_mut(&mut self.document.body, &container)
         else {
             return Err(EditError::InvalidPosition);
         };
@@ -418,7 +418,7 @@ impl Session {
         );
         if let Err(error) = self.document.validate() {
             if let Some(siblings) =
-                block_list_by_parent_ids_mut(&mut self.document.body, &parent_environment_ids)
+                caret_structure::block_list_by_container_mut(&mut self.document.body, &container)
             {
                 siblings.drain(sibling_index..sibling_index + paragraphs.len());
             }
@@ -431,7 +431,7 @@ impl Session {
         let before_state_id = self.history_state_id;
         let before_block_boundary_exit = self.host_caret_position.clone();
         let position = Pos {
-            story: StoryId::Body,
+            story: crate::editing::paragraph_ops::story_for_container(&container),
             paragraph_id: final_paragraph_id.clone(),
             offset: final_offset,
             affinity: Affinity::Upstream,
@@ -450,7 +450,7 @@ impl Session {
         self.finalize_structure_edit_with_boundary(
             super::super::paragraph_ops::build_paragraph_index(&self.document.body),
             DocumentPatch::BlockBoundaryParagraphs {
-                parent_environment_ids,
+                container,
                 sibling_index,
                 paragraphs,
                 paragraphs_estimated_bytes,

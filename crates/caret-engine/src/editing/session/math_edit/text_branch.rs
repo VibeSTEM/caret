@@ -16,7 +16,6 @@ use super::{
     MathTextPosition, MathTreePosition, first_placeholder_position, history_position,
     math_position_affinity_to_affinity, math_text_selection_range,
 };
-use crate::editing::paragraph_ops::BlockContainerPath;
 use caret_doc::Block;
 
 pub(super) mod format_tree_edit;
@@ -75,11 +74,14 @@ pub(in crate::editing::session) fn math_text_split_is_available(session: &Sessio
             math.math_tree = tree;
         }
         MathEditTarget::Block { block_id, .. } => {
-            let Some((parents, sibling_index)) = super::find_block_path(&document.body, &block_id)
+            let Some((container, sibling_index)) =
+                super::find_block_container_path(&document.body, &block_id)
             else {
                 return false;
             };
-            let Ok(blocks) = super::block_list(&mut document.body, &parents) else {
+            let Some(blocks) =
+                caret_structure::block_list_by_container_mut(&mut document.body, &container)
+            else {
                 return false;
             };
             let Some(block) = blocks.get_mut(sibling_index) else {
@@ -352,10 +354,14 @@ impl Session {
             }
             MathEditTarget::Block { block_id, .. } => {
                 let document_before = self.document.clone();
-                let (parent_environment_ids, sibling_index) =
-                    super::find_block_path(&self.document.body, block_id)
+                let (container, sibling_index) =
+                    super::find_block_container_path(&self.document.body, block_id)
                         .ok_or(EditError::InvalidPosition)?;
-                let blocks = super::block_list(&mut self.document.body, &parent_environment_ids)?;
+                let blocks = caret_structure::block_list_by_container_mut(
+                    &mut self.document.body,
+                    &container,
+                )
+                .ok_or(EditError::InvalidPosition)?;
                 let slot = blocks
                     .get_mut(sibling_index)
                     .ok_or(EditError::InvalidPosition)?;
@@ -384,9 +390,7 @@ impl Session {
                 }
                 self.record_math_history_with_pending_style(
                     DocumentPatch::BlockRange {
-                        container: BlockContainerPath::from_environment_ids(
-                            &parent_environment_ids,
-                        ),
+                        container,
                         sibling_index,
                         before: vec![before],
                         after: vec![after],

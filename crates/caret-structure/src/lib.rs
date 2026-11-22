@@ -4,9 +4,14 @@
 // 署名：Yuki Lu
 
 mod atoms;
+mod container;
 mod index;
 mod physical;
 
+pub use container::{
+    BlockContainerPath, ContainerStep, TableCellPath, block_list_by_container,
+    block_list_by_container_mut,
+};
 pub use index::{
     IndexedStructure, StructureClass, StructureIndex, StructureKind, StructurePosition,
     StructureRange,

@@ -5,7 +5,6 @@
 
 use super::super::history::DocumentEditSnapshot;
 use super::*;
-use crate::editing::paragraph_ops::BlockContainerPath;
 
 impl Session {
     /// 空公式中退格：删除整个公式对象并退出编辑。
@@ -112,18 +111,49 @@ impl Session {
                             .paragraph_beside_math_chain(&block_id, Direction::Forward)?
                             .ok_or(EditError::InvalidPosition)?,
                     };
-                let (parent_ids, index) = find_block_path(&self.document.body, &block_id)
+                let (container, index) = find_block_container_path(&self.document.body, &block_id)
                     .ok_or(EditError::InvalidPosition)?;
                 let before_selection = self.selection.clone();
                 let before_visual_affinity = self.selection_visual_affinity;
                 let before_state_id = self.history_state_id;
-                let blocks = block_list(&mut self.document.body, &parent_ids)?;
+                let blocks = caret_structure::block_list_by_container_mut(
+                    &mut self.document.body,
+                    &container,
+                )
+                .ok_or(EditError::InvalidPosition)?;
                 let removed = blocks.remove(index);
+                let mut after = Vec::new();
+                if blocks.is_empty()
+                    && let Some(cell) = container.innermost_cell()
+                {
+                    // 单元格不能为空：删除唯一的公式对象时补一个空段落，避免发布空单元格。
+                    let fallback = Paragraph::empty(NodeId::generate());
+                    let fallback_id = fallback.id.clone();
+                    blocks.push(Block::Paragraph(fallback.clone()));
+                    after.push(Block::Paragraph(fallback));
+                    let story = StoryId::TableCell {
+                        table_id: cell.table_id.clone(),
+                        row_id: cell.row_id.clone(),
+                        cell_id: cell.cell_id.clone(),
+                    };
+                    let position = Pos {
+                        story,
+                        paragraph_id: fallback_id,
+                        offset: 0,
+                        affinity: Affinity::Upstream,
+                    };
+                    self.selection = Selection {
+                        anchor: position.clone(),
+                        focus: position,
+                    };
+                }
                 self.clear_math_edit();
-                self.selection = Selection {
-                    anchor: target.clone(),
-                    focus: target,
-                };
+                if after.is_empty() {
+                    self.selection = Selection {
+                        anchor: target.clone(),
+                        focus: target,
+                    };
+                }
                 self.selection_visual_affinity = match self.selection.focus.affinity {
                     Affinity::Upstream => VisualAffinity::Upstream,
                     Affinity::Downstream => VisualAffinity::Downstream,
@@ -148,10 +178,10 @@ impl Session {
                 );
                 self.commit_document_edit(
                     DocumentPatch::BlockRange {
-                        container: BlockContainerPath::from_environment_ids(&parent_ids),
+                        container,
                         sibling_index: index,
                         before: vec![removed],
-                        after: Vec::new(),
+                        after,
                     },
                     before_state,
                     DocumentEditSnapshot::Explicit(Box::new(after_state)),
@@ -619,12 +649,10 @@ impl Session {
                 );
             }
             MathEditTarget::Block { block_id, align } => {
-                let original = find_block_path(&self.document.body, block_id).and_then(
-                    |(parent_ids, index)| {
-                        block_list_ref(&self.document.body, &parent_ids)
-                            .ok()?
-                            .get(index)
-                            .cloned()
+                let original = find_block_container_path(&self.document.body, block_id).and_then(
+                    |(container, index)| {
+                        caret_structure::block_list_by_container(&self.document.body, &container)
+                            .and_then(|blocks| blocks.get(index).cloned())
                     },
                 );
                 let (content, mut source_projection) = source_projection_candidate
@@ -741,16 +769,20 @@ impl Session {
                     ));
                 }
                 next_edit.replace_source_projection(Some(Arc::new(source_projection)));
-                let (parent_ids, index) = find_block_path(&self.document.body, block_id)
+                let (container, index) = find_block_container_path(&self.document.body, block_id)
                     .ok_or(EditError::InvalidPosition)?;
-                let blocks = block_list(&mut self.document.body, &parent_ids)?;
+                let blocks = caret_structure::block_list_by_container_mut(
+                    &mut self.document.body,
+                    &container,
+                )
+                .ok_or(EditError::InvalidPosition)?;
                 let slot = blocks.get_mut(index).ok_or(EditError::InvalidPosition)?;
                 let before = std::mem::replace(slot, block.clone());
                 self.text_map_cache.clear();
                 self.advance_history_merge_epoch();
                 self.record_math_history(
                     DocumentPatch::BlockRange {
-                        container: BlockContainerPath::from_environment_ids(&parent_ids),
+                        container,
                         sibling_index: index,
                         before: vec![before],
                         after: vec![block],
@@ -894,11 +926,10 @@ impl Session {
                 (tree, projection.tree()?)
             }
             MathEditTarget::Block { block_id, align } => {
-                let block = find_block_path(&self.document.body, block_id).and_then(
-                    |(parents, index)| {
-                        block_list_ref(&self.document.body, &parents)
-                            .ok()?
-                            .get(index)
+                let block = find_block_container_path(&self.document.body, block_id).and_then(
+                    |(container, index)| {
+                        caret_structure::block_list_by_container(&self.document.body, &container)
+                            .and_then(|blocks| blocks.get(index))
                     },
                 )?;
                 if *align {

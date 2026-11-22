@@ -183,9 +183,11 @@ impl DocumentLayoutSnapshot {
             crate::editing::Direction::Forward => projections.last()?,
         };
         let page = self.pages.get(projection.page_index)?;
-        let x_pt = match direction {
-            crate::editing::Direction::Backward => page.margin_left_pt,
-            crate::editing::Direction::Forward => page.width_pt - page.margin_right_pt,
+        let x_pt = match (direction, projection.clip_x_pt) {
+            (crate::editing::Direction::Backward, Some([x0, _])) => x0,
+            (crate::editing::Direction::Forward, Some([_, x1])) => x1,
+            (crate::editing::Direction::Backward, None) => page.margin_left_pt,
+            (crate::editing::Direction::Forward, None) => page.width_pt - page.margin_right_pt,
         };
         let row_baseline = match direction {
             crate::editing::Direction::Backward => projection.row_baselines.first(),
@@ -221,22 +223,23 @@ impl DocumentLayoutSnapshot {
         if environment_edge.is_some() {
             return environment_edge;
         }
-        let has_projection = self
+        let projection = self
             .math_projection_index
             .by_id
             .get(block_id)?
             .iter()
             .filter_map(|index| self.math_projection_index.projections.get(*index))
-            .any(|projection| {
+            .find(|projection| {
                 projection.page_index == page_index && projection.inline_index.is_none()
-            });
-        if !has_projection {
-            return None;
-        }
+            })?;
         let page = self.pages.get(page_index)?;
-        match direction {
-            crate::editing::Direction::Backward => Some(page.margin_left_pt),
-            crate::editing::Direction::Forward => Some(page.width_pt - page.margin_right_pt),
+        match (direction, projection.clip_x_pt) {
+            (crate::editing::Direction::Backward, Some([x0, _])) => Some(x0),
+            (crate::editing::Direction::Forward, Some([_, x1])) => Some(x1),
+            (crate::editing::Direction::Backward, None) => Some(page.margin_left_pt),
+            (crate::editing::Direction::Forward, None) => {
+                Some(page.width_pt - page.margin_right_pt)
+            }
         }
     }
 
@@ -663,12 +666,79 @@ impl DocumentLayoutSnapshot {
         let (bounds, line_index) = paragraph.layout.cursor_geometry_with_line(cursor, 0.0)?;
         let line = paragraph.layout.paragraph.lines.get(line_index)?;
         let location = paragraph.line_locations.get(line_index)?.as_ref()?;
-        Some(PageCaretGeometry {
+        let page = self.pages.get(location.page_index)?;
+        let mut geometry = PageCaretGeometry {
             page_index: location.page_index,
-            x_pt: self.pages.get(location.page_index)?.margin_left_pt + bounds.x0,
+            x_pt: location.x0_pt + bounds.x0,
             y0_pt: location.y0_pt,
             y1_pt: location.y0_pt + f64::from(line.metrics.height_pt),
-        })
+        };
+        if let Some(clip) = location.clip
+            && (!clip.clamp_caret(&mut geometry) || geometry.y0_pt > page.height_pt)
+        {
+            return None;
+        }
+        Some(geometry)
+    }
+
+    /// 当前焦点所在单元格的编辑辅助线矩形；焦点不在表格内时为空。
+    ///
+    /// 辅助线只表达编辑焦点，不进入 `.cdoc`，也不参与命中。
+    pub fn table_guidelines(&self, position: &Pos) -> Vec<PageSelectionRect> {
+        let Some(paragraph) = self.paragraph_by_id(&position.paragraph_id) else {
+            return Vec::new();
+        };
+        if paragraph.story != position.story {
+            return Vec::new();
+        }
+        let Some(cell) = paragraph.container.innermost_cell() else {
+            return Vec::new();
+        };
+        let Some(grid) = self.table_layouts.get(&cell.table_id) else {
+            return Vec::new();
+        };
+        let Some(row) = grid.rows.get(cell.row_index) else {
+            return Vec::new();
+        };
+        let Some(cell_geometry) = row.cells.get(cell.cell_index) else {
+            return Vec::new();
+        };
+        for (page_index, page) in self.pages.iter().enumerate() {
+            for fragment in &page.layout.table_fragments {
+                if fragment.table_id != cell.table_id
+                    || !fragment.row_range.contains(&cell.row_index)
+                {
+                    continue;
+                }
+                let x0_pt = page.margin_left_pt
+                    + f64::from(fragment.x_offset_pt)
+                    + cell_geometry.content_x_pt;
+                let y0_pt = page.margin_top_pt + f64::from(fragment.y_offset_pt) + row.top_pt;
+                let x1_pt = x0_pt + cell_geometry.content_width_pt;
+                let y1_pt = y0_pt + row.height_pt;
+                let x0_pt = x0_pt.clamp(0.0, page.width_pt);
+                let x1_pt = x1_pt.clamp(0.0, page.width_pt);
+                let y0_pt = y0_pt.clamp(0.0, page.height_pt);
+                let y1_pt = y1_pt.clamp(0.0, page.height_pt);
+                if !x0_pt.is_finite()
+                    || !y0_pt.is_finite()
+                    || !x1_pt.is_finite()
+                    || !y1_pt.is_finite()
+                    || x1_pt <= x0_pt
+                    || y1_pt <= y0_pt
+                {
+                    continue;
+                }
+                return vec![PageSelectionRect {
+                    page_index,
+                    x0_pt,
+                    y0_pt,
+                    x1_pt,
+                    y1_pt,
+                }];
+            }
+        }
+        Vec::new()
     }
 
     /// 返回裁切到可见分页片段内的选区矩形。
@@ -716,6 +786,24 @@ impl DocumentLayoutSnapshot {
             None,
             selected_environment_ids,
         )
+    }
+
+    /// 块级公式属于表格单元格但被版心裁剪到不可见区域时返回 `true`；
+    /// 这类目标没有可见光标/高亮投影，交互层应降级而非报过期错误。
+    pub fn is_hidden_table_math(&self, block_id: &NodeId) -> bool {
+        if !self.table_math_ids.contains(block_id) {
+            return false;
+        }
+        !self
+            .math_projection_index
+            .by_id
+            .get(block_id)
+            .is_some_and(|indices| {
+                indices
+                    .iter()
+                    .filter_map(|index| self.math_projection_index.projections.get(*index))
+                    .any(|projection| projection.inline_index.is_none())
+            })
     }
 
     /// 返回选中块级公式在同一代布局中的整栏矩形。
@@ -767,6 +855,43 @@ impl DocumentLayoutSnapshot {
                     x1_pt,
                     y1_pt,
                 });
+            }
+            for placement in &page.table_math_placements {
+                let Some(index) = block_ids
+                    .iter()
+                    .position(|block_id| block_id == &placement.math_id)
+                else {
+                    continue;
+                };
+                let x0_pt = placement.object_x_pt.clamp(0.0, page.width_pt);
+                let x1_pt =
+                    (placement.object_x_pt + placement.width_pt).clamp(x0_pt, page.width_pt);
+                let mut y0_pt =
+                    (placement.baseline_y_pt - placement.ascent_pt).clamp(0.0, page.height_pt);
+                let mut y1_pt =
+                    (placement.baseline_y_pt + placement.descent_pt).clamp(0.0, page.height_pt);
+                if let Some([clip_y0, clip_y1]) = placement.clip_y_pt {
+                    y0_pt = y0_pt.max(clip_y0);
+                    y1_pt = y1_pt.min(clip_y1);
+                }
+                if y1_pt <= y0_pt || x1_pt <= x0_pt {
+                    continue;
+                }
+                found[index] = true;
+                rectangles.push(PageSelectionRect {
+                    page_index,
+                    x0_pt,
+                    y0_pt,
+                    x1_pt,
+                    y1_pt,
+                });
+            }
+        }
+        // 表格单元格内被版心裁剪掉（不可见/不可导航）的公式：降级为空高亮，
+        // 让编辑继续发布快照，而不是把所有 table math 误判为过期投影。
+        for (index, block_id) in block_ids.iter().enumerate() {
+            if !found[index] && self.table_math_ids.contains(block_id) {
+                found[index] = true;
             }
         }
         found.iter().all(|found| *found).then_some(rectangles)
@@ -872,7 +997,8 @@ impl DocumentLayoutSnapshot {
             let paragraph = self.paragraphs.get(paragraph_index)?;
             if story.is_some_and(|story| &paragraph.story != story)
                 || paragraph
-                    .environment_ids
+                    .container
+                    .environment_ids()
                     .iter()
                     .any(|id| excluded_environment_ids.contains(id))
             {
@@ -915,19 +1041,23 @@ impl DocumentLayoutSnapshot {
                         location.y0_pt + f64::from(line.metrics.height_pt),
                     )
                 };
-                let x0_pt = bounds.x0 + page.margin_left_pt;
-                let x1_pt = bounds.x1 + page.margin_left_pt;
-                // Qt 快照校验拒绝零宽几何；退化行内对象不应让整份选区投影失败。
-                if x1_pt <= x0_pt || y1 <= y0 {
+                let mut rectangle = PageSelectionRect {
+                    page_index: location.page_index,
+                    x0_pt: bounds.x0 + location.x0_pt,
+                    y0_pt: y0,
+                    x1_pt: bounds.x1 + location.x0_pt,
+                    y1_pt: y1,
+                };
+                if let Some(clip) = location.clip
+                    && !clip.clamp_rect(&mut rectangle)
+                {
                     continue;
                 }
-                rectangles.push(PageSelectionRect {
-                    page_index: location.page_index,
-                    x0_pt,
-                    y0_pt: y0,
-                    x1_pt,
-                    y1_pt: y1,
-                });
+                // Qt 快照校验拒绝零宽几何；退化行内对象不应让整份选区投影失败。
+                if rectangle.x1_pt <= rectangle.x0_pt || rectangle.y1_pt <= rectangle.y0_pt {
+                    continue;
+                }
+                rectangles.push(rectangle);
             }
         }
         Some(rectangles)

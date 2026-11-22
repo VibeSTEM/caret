@@ -689,10 +689,16 @@ fn math_caret_geometry(
             .ok_or_else(|| "layout.invalid_math_caret_geometry".to_owned());
     }
     if let Some((target, position)) = math_tree_context {
-        return snapshot
-            .math_tree_caret(target, position)
-            .map(Some)
-            .ok_or_else(|| "layout.invalid_math_tree_caret_geometry".to_owned());
+        if let Some(caret) = snapshot.math_tree_caret(target, position) {
+            return Ok(Some(caret));
+        }
+        if let caret_engine::MathEditTarget::Block { block_id, .. } = target
+            && snapshot.is_hidden_table_math(block_id)
+        {
+            // 被版心裁剪的 cell 公式没有可见光标；降级为空光标，不阻塞编辑快照。
+            return Ok(None);
+        }
+        return Err("layout.invalid_math_tree_caret_geometry".to_owned());
     }
     Ok(None)
 }
@@ -869,6 +875,12 @@ impl DocumentViewRuntime {
             .insert(
                 "currentStructure".to_owned(),
                 current_structure_state(&self.session),
+            );
+        view.as_object_mut()
+            .ok_or_else(|| "layout.invalid_view_object".to_owned())?
+            .insert(
+                "tableGuidelines".to_owned(),
+                rectangle_values(snapshot.table_guidelines(&selection.focus)),
             );
         let highlight_rectangles = highlight.rectangles(snapshot)?;
         view.as_object_mut()
@@ -1172,10 +1184,12 @@ impl DocumentViewRuntime {
                     .ok_or_else(|| "layout.invalid_caret_font_size".to_owned())?;
                 (caret, font_size_centipoints)
             };
+        let table_guidelines = rectangle_values(snapshot.table_guidelines(&selection.focus));
         let serialized = serde_json::to_string(&serde_json::json!({
             "documentGeneration": snapshot.document_generation.to_string(),
             "fontGeneration": snapshot.font_generation.to_string(),
             "selectionRects": rectangles,
+            "tableGuidelines": table_guidelines,
             "inputMethodContext": input_method_context,
             (Field::CommandLine.wire_name()): command_line,
             "currentStructure": current_structure,

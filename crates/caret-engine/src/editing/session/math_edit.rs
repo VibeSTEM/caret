@@ -35,7 +35,6 @@ mod text_run_property;
 mod text_run_split;
 mod tree_edit;
 mod tree_position;
-use super::super::paragraph_ops::paragraph_parent_path;
 use super::super::text_map::{OBJECT_REPLACEMENT, TextMap, inline_length, split_inline_nodes};
 use super::super::{
     Affinity, Command, CommandLine, Direction, EditError, Effect, HostCaretKind, HostCaretPosition,
@@ -1060,13 +1059,18 @@ fn find_inline_math_in_blocks<'a>(
             .filter(|title| &title.id == paragraph_id)
             .and_then(|title| find_inline_math(&title.inlines, math_id))
             .or_else(|| find_inline_math_in_blocks(&environment.children, paragraph_id, math_id)),
+        Block::Table(table) => table.rows.iter().find_map(|row| {
+            row.cells
+                .iter()
+                .find_map(|cell| find_inline_math_in_blocks(&cell.blocks, paragraph_id, math_id))
+        }),
         _ => None,
     })
 }
 
 pub(super) fn find_block_by_id<'a>(blocks: &'a [Block], id: &NodeId) -> Option<&'a Block> {
-    let (parents, index) = find_block_path(blocks, id)?;
-    block_list_ref(blocks, &parents).ok()?.get(index)
+    let (container, index) = find_block_container_path(blocks, id)?;
+    caret_structure::block_list_by_container(blocks, &container)?.get(index)
 }
 
 fn parked_position_for_math_target(
@@ -1430,31 +1434,24 @@ pub(super) fn find_inline_math_mut<'a>(
     })
 }
 
-/// 在块树中查找块 ID，返回父环境 ID 路径与同级下标。
-pub(crate) fn find_block_path(blocks: &[Block], id: &NodeId) -> Option<(Vec<NodeId>, usize)> {
+/// 在块树中查找块 ID，返回真实容器路径与同级下标；环境与表格单元格统一寻址。
+pub(crate) fn find_block_container_path(
+    blocks: &[Block],
+    id: &NodeId,
+) -> Option<(BlockContainerPath, usize)> {
     let location = caret_structure::find_block_node(blocks, id)?;
     if location.kind != caret_structure::DocumentNodeKind::Paragraph
         && !location.kind.is_range_block()
     {
         return None;
     }
-    Some((location.parent_environment_ids, location.sibling_index?))
+    Some((location.container, location.sibling_index?))
 }
 
-fn block_list<'a>(
-    blocks: &'a mut Vec<Block>,
-    parent_ids: &[NodeId],
-) -> Result<&'a mut Vec<Block>, EditError> {
-    caret_structure::block_list_by_environment_ids_mut(blocks, parent_ids)
-        .ok_or(EditError::InvalidPosition)
-}
-
-fn block_list_ref<'a>(
-    blocks: &'a [Block],
-    parent_ids: &[NodeId],
-) -> Result<&'a [Block], EditError> {
-    caret_structure::block_list_by_environment_ids(blocks, parent_ids)
-        .ok_or(EditError::InvalidPosition)
+/// 兼容投影：只返回父环境 ID 链；新代码应使用 [`find_block_container_path`]。
+pub(crate) fn find_block_path(blocks: &[Block], id: &NodeId) -> Option<(Vec<NodeId>, usize)> {
+    find_block_container_path(blocks, id)
+        .map(|(container, index)| (container.environment_ids(), index))
 }
 
 #[cfg(test)]

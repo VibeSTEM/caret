@@ -127,9 +127,10 @@ impl Session {
         block_id: &NodeId,
         direction: Direction,
     ) -> Result<Option<Pos>, EditError> {
-        let (parent_ids, mut index) =
-            find_block_path(&self.document.body, block_id).ok_or(EditError::InvalidPosition)?;
-        let siblings = block_list_ref(&self.document.body, &parent_ids)?;
+        let (container, mut index) = find_block_container_path(&self.document.body, block_id)
+            .ok_or(EditError::InvalidPosition)?;
+        let siblings = caret_structure::block_list_by_container(&self.document.body, &container)
+            .ok_or(EditError::InvalidPosition)?;
         loop {
             let Some(next_index) = (match direction {
                 Direction::Forward => index.checked_add(1),
@@ -148,7 +149,7 @@ impl Session {
                         Direction::Backward => TextMap::new(paragraph)?.text.len(),
                     };
                     return Ok(Some(Pos {
-                        story: StoryId::Body,
+                        story: paragraph_ops::story_for_container(&container),
                         paragraph_id: paragraph.id.clone(),
                         offset,
                         affinity: match direction {
@@ -169,7 +170,8 @@ impl Session {
         block_id: &NodeId,
         direction: Direction,
     ) -> Result<Option<MathEdit>, EditError> {
-        let Some((parent_ids, index)) = find_block_path(&self.document.body, block_id) else {
+        let Some((container, index)) = find_block_container_path(&self.document.body, block_id)
+        else {
             return Err(EditError::InvalidPosition);
         };
         let neighbour = match direction {
@@ -179,7 +181,10 @@ impl Session {
         let Some(neighbour) = neighbour else {
             return Ok(None);
         };
-        let Some(block) = block_list_ref(&self.document.body, &parent_ids)?.get(neighbour) else {
+        let Some(block) = caret_structure::block_list_by_container(&self.document.body, &container)
+            .ok_or(EditError::InvalidPosition)?
+            .get(neighbour)
+        else {
             return Ok(None);
         };
         self.math_edit_for_block(block, direction)
@@ -190,10 +195,14 @@ impl Session {
         block_id: &NodeId,
         entry_direction: Direction,
     ) -> Result<Option<MathEdit>, EditError> {
-        let Some((parent_ids, index)) = find_block_path(&self.document.body, block_id) else {
+        let Some((container, index)) = find_block_container_path(&self.document.body, block_id)
+        else {
             return Err(EditError::InvalidPosition);
         };
-        let Some(block) = block_list_ref(&self.document.body, &parent_ids)?.get(index) else {
+        let Some(block) = caret_structure::block_list_by_container(&self.document.body, &container)
+            .ok_or(EditError::InvalidPosition)?
+            .get(index)
+        else {
             return Err(EditError::InvalidPosition);
         };
         self.math_edit_for_block(block, entry_direction)
@@ -300,9 +309,10 @@ impl Session {
         block_id: &NodeId,
         direction: Direction,
     ) -> Result<Option<Pos>, EditError> {
-        let (parent_environment_ids, sibling_index) =
-            find_block_path(&self.document.body, block_id).ok_or(EditError::InvalidPosition)?;
-        let siblings = block_list_ref(&self.document.body, &parent_environment_ids)?;
+        let (container, sibling_index) = find_block_container_path(&self.document.body, block_id)
+            .ok_or(EditError::InvalidPosition)?;
+        let siblings = caret_structure::block_list_by_container(&self.document.body, &container)
+            .ok_or(EditError::InvalidPosition)?;
         let neighbour = match direction {
             Direction::Forward => sibling_index.checked_add(1),
             Direction::Backward => sibling_index.checked_sub(1),
@@ -348,12 +358,14 @@ impl Session {
                 Ok(true)
             }
             AdjacentComplexUnit::Environment { environment_id } => {
-                let Some((parent_ids, index)) =
-                    find_block_path(&self.document.body, environment_id)
+                let Some((container, index)) =
+                    find_block_container_path(&self.document.body, environment_id)
                 else {
                     return Ok(false);
                 };
-                let siblings = block_list_ref(&self.document.body, &parent_ids)?;
+                let siblings =
+                    caret_structure::block_list_by_container(&self.document.body, &container)
+                        .ok_or(EditError::InvalidPosition)?;
                 let Some(Block::Environment(environment)) = siblings.get(index) else {
                     return Ok(false);
                 };
@@ -437,9 +449,10 @@ impl Session {
         block_id: &NodeId,
         direction: Direction,
     ) -> Result<Option<Pos>, EditError> {
-        let (parent_ids, index) =
-            find_block_path(&self.document.body, block_id).ok_or(EditError::InvalidPosition)?;
-        let siblings = block_list_ref(&self.document.body, &parent_ids)?;
+        let (container, index) = find_block_container_path(&self.document.body, block_id)
+            .ok_or(EditError::InvalidPosition)?;
+        let siblings = caret_structure::block_list_by_container(&self.document.body, &container)
+            .ok_or(EditError::InvalidPosition)?;
         let neighbour = match direction {
             Direction::Forward => index.checked_add(1),
             Direction::Backward => index.checked_sub(1),
@@ -453,7 +466,7 @@ impl Session {
             Direction::Backward => TextMap::new(paragraph)?.text.len(),
         };
         Ok(Some(Pos {
-            story: StoryId::Body,
+            story: paragraph_ops::story_for_container(&container),
             paragraph_id: paragraph.id.clone(),
             offset,
             affinity: match direction {
@@ -731,10 +744,7 @@ impl Session {
             return Err(EditError::CompositionPending);
         }
         let focus = self.selection.focus.clone();
-        if matches!(focus.story, StoryId::TableCell { .. }) {
-            return Err(EditError::UnsupportedTableCellMath);
-        }
-        if focus.story != StoryId::Body || self.selection.anchor != focus {
+        if self.selection.anchor != focus {
             return Err(EditError::InvalidPosition);
         }
         let location = self
@@ -742,7 +752,7 @@ impl Session {
             .get(&focus.paragraph_id)
             .cloned()
             .ok_or_else(|| EditError::UnknownParagraph(focus.paragraph_id.to_string()))?;
-        if location.is_title {
+        if location.is_title || location.story != focus.story {
             return Err(EditError::InvalidPosition);
         }
         let container = location.container.clone();
@@ -877,17 +887,17 @@ impl Session {
         let Some(target_location) = self.paragraph_index.get(&target.paragraph_id) else {
             return Ok(None);
         };
-        let Some((current_parents, current_index)) =
-            paragraph_parent_path(&self.document.body, current_location)
+        let Some((current_container, current_index)) =
+            paragraph_ops::paragraph_parent_container_path(&self.document.body, current_location)
         else {
             return Ok(None);
         };
-        let Some((target_parents, target_index)) =
-            paragraph_parent_path(&self.document.body, target_location)
+        let Some((target_container, target_index)) =
+            paragraph_ops::paragraph_parent_container_path(&self.document.body, target_location)
         else {
             return Ok(None);
         };
-        if current_parents != target_parents {
+        if current_container != target_container {
             return Ok(None);
         }
         let (math_index, direction) = if target_index == current_index.saturating_add(2) {
@@ -897,7 +907,9 @@ impl Session {
         } else {
             return Ok(None);
         };
-        let blocks = block_list_ref(&self.document.body, &current_parents)?;
+        let blocks =
+            caret_structure::block_list_by_container(&self.document.body, &current_container)
+                .ok_or(EditError::InvalidPosition)?;
         if !matches!(
             blocks.get(math_index),
             Some(Block::Equation(_) | Block::Align(_))
@@ -923,11 +935,9 @@ impl Session {
             return None;
         }
         let (block_id, direction) = position.as_outside()?;
-        let (parent_ids, index) = find_block_path(&self.document.body, block_id)?;
+        let (container, index) = find_block_container_path(&self.document.body, block_id)?;
         matches!(
-            block_list_ref(&self.document.body, &parent_ids)
-                .ok()?
-                .get(index),
+            caret_structure::block_list_by_container(&self.document.body, &container)?.get(index),
             Some(Block::Equation(_) | Block::Align(_))
         )
         .then(|| (block_id.clone(), direction))
@@ -993,8 +1003,8 @@ impl Session {
         if location.is_title {
             return Ok(false);
         }
-        let Some((parent_ids, sibling_index)) =
-            paragraph_parent_path(&self.document.body, location)
+        let Some((container, sibling_index)) =
+            paragraph_ops::paragraph_parent_container_path(&self.document.body, location)
         else {
             return Ok(false);
         };
@@ -1005,7 +1015,8 @@ impl Session {
         let Some(neighbour) = neighbour else {
             return Ok(false);
         };
-        let blocks = block_list_ref(&self.document.body, &parent_ids)?;
+        let blocks = caret_structure::block_list_by_container(&self.document.body, &container)
+            .ok_or(EditError::InvalidPosition)?;
         if !matches!(
             blocks.get(neighbour),
             Some(Block::Equation(_) | Block::Align(_))
@@ -1081,9 +1092,6 @@ impl Session {
         &mut self,
         direction: Direction,
     ) -> Result<Effect, EditError> {
-        if self.table_context().is_some() {
-            return Err(EditError::UnsupportedTableCellMath);
-        }
         if let Some(position) = self.host_caret_position.clone()
             && position.kind() == HostCaretKind::Block
             && let Some((block_id, _)) = position.as_outside()
@@ -1112,9 +1120,6 @@ impl Session {
         include_inline: bool,
         require_text_edge: bool,
     ) -> Result<Effect, EditError> {
-        if self.table_context().is_some() {
-            return Err(EditError::UnsupportedTableCellMath);
-        }
         let focus = self.selection.focus.clone();
         if self.selection.anchor != focus
             || self.has_structure_selection()
@@ -1202,8 +1207,8 @@ impl Session {
         if location.is_title {
             return Ok(Effect::default());
         }
-        let Some((parent_ids, sibling_index)) =
-            paragraph_parent_path(&self.document.body, &location)
+        let Some((container, sibling_index)) =
+            paragraph_ops::paragraph_parent_container_path(&self.document.body, &location)
         else {
             return Ok(Effect::default());
         };
@@ -1214,61 +1219,64 @@ impl Session {
         let Some(neighbour) = neighbour else {
             return Ok(Effect::default());
         };
-        let (block_id, align, cursor, branch) =
-            {
-                let block = block_list(&mut self.document.body, &parent_ids)?
+        let (block_id, align, cursor, branch) = {
+            let block =
+                caret_structure::block_list_by_container_mut(&mut self.document.body, &container)
+                    .ok_or(EditError::InvalidPosition)?
                     .get_mut(neighbour)
                     .ok_or(EditError::InvalidPosition)?;
-                match block {
-                    Block::Equation(equation) => {
-                        let (cursor, branch) = math_tree_edge_position(
-                            &equation.math_tree,
-                            MathPositionHost::Equation {
-                                owner_id: equation.id.clone(),
-                            },
-                            direction,
-                            None,
-                        )?;
-                        (equation.id.clone(), false, cursor, branch)
-                    }
-                    Block::Align(value) => {
-                        let cell =
-                            match direction {
-                                Direction::Forward => {
-                                    value.rows.iter().enumerate().find_map(|(row_index, row)| {
-                                        row.cells.first().map(|cell| (row_index, 0, &row.id, cell))
-                                    })
-                                }
-                                Direction::Backward => {
-                                    value.rows.iter().enumerate().rev().find_map(
-                                        |(row_index, row)| {
-                                            let cell_index = row.cells.len().checked_sub(1)?;
-                                            Some((
-                                                row_index,
-                                                cell_index,
-                                                &row.id,
-                                                row.cells.get(cell_index)?,
-                                            ))
-                                        },
-                                    )
-                                }
-                            };
-                        let (row_index, cell_index, row_id, cell) =
-                            cell.ok_or(EditError::InvalidPosition)?;
-                        let (cursor, branch) = math_tree_edge_position(
-                            cell,
-                            MathPositionHost::AlignCell {
-                                row_id: row_id.clone(),
-                                cell_id: cell.root.id.clone(),
-                            },
-                            direction,
-                            Some((row_index, cell_index)),
-                        )?;
-                        (value.id.clone(), true, cursor, branch)
-                    }
-                    _ => return Ok(Effect::default()),
+            match block {
+                Block::Equation(equation) => {
+                    let (cursor, branch) = math_tree_edge_position(
+                        &equation.math_tree,
+                        MathPositionHost::Equation {
+                            owner_id: equation.id.clone(),
+                        },
+                        direction,
+                        None,
+                    )?;
+                    (equation.id.clone(), false, cursor, branch)
                 }
-            };
+                Block::Align(value) => {
+                    let cell = match direction {
+                        Direction::Forward => {
+                            value.rows.iter().enumerate().find_map(|(row_index, row)| {
+                                row.cells.first().map(|cell| (row_index, 0, &row.id, cell))
+                            })
+                        }
+                        Direction::Backward => {
+                            value
+                                .rows
+                                .iter()
+                                .enumerate()
+                                .rev()
+                                .find_map(|(row_index, row)| {
+                                    let cell_index = row.cells.len().checked_sub(1)?;
+                                    Some((
+                                        row_index,
+                                        cell_index,
+                                        &row.id,
+                                        row.cells.get(cell_index)?,
+                                    ))
+                                })
+                        }
+                    };
+                    let (row_index, cell_index, row_id, cell) =
+                        cell.ok_or(EditError::InvalidPosition)?;
+                    let (cursor, branch) = math_tree_edge_position(
+                        cell,
+                        MathPositionHost::AlignCell {
+                            row_id: row_id.clone(),
+                            cell_id: cell.root.id.clone(),
+                        },
+                        direction,
+                        Some((row_index, cell_index)),
+                    )?;
+                    (value.id.clone(), true, cursor, branch)
+                }
+                _ => return Ok(Effect::default()),
+            }
+        };
         let target = MathEditTarget::Block { block_id, align };
         self.set_math_edit(Some(MathEdit::entering(
             target.clone(),

@@ -3306,3 +3306,136 @@ fn paragraph_text_into(paragraph: &Paragraph, out: &mut String) {
         }
     }
 }
+
+#[test]
+fn tall_cell_layout_snapshot_stays_inside_page_bounds() -> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.handle_editor_key_json("insert-table")?;
+    for _ in 0..40 {
+        runtime.handle_editor_key_json("enter")?;
+    }
+    let json = runtime.layout_snapshot_json()?;
+    let snapshot: Value = serde_json::from_str(&json)?;
+    let pages = snapshot["pages"]
+        .as_array()
+        .ok_or("layout snapshot must publish pages")?;
+    assert!(!pages.is_empty());
+    let page_height = pages[0]["heightPt"].as_f64().ok_or("page height")?;
+    for fragment in pages[0]["fragments"].as_array().ok_or("page fragments")? {
+        let y_offset = fragment["yOffsetPt"].as_f64().ok_or("fragment offset")?;
+        assert!(y_offset <= page_height);
+    }
+    Ok(())
+}
+
+#[test]
+fn body_before_table_keeps_cell_caret_and_fragment_identity()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.insert_text_json("BODYTEXT".to_owned())?;
+    runtime.handle_editor_key_json("insert-table")?;
+    runtime.insert_text_json("CELLTEXT".to_owned())?;
+    let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+    assert!(
+        interaction["caretGeometry"].is_object(),
+        "cell caret geometry must publish when body precedes the table"
+    );
+    let json = runtime.layout_snapshot_json()?;
+    let snapshot: Value = serde_json::from_str(&json)?;
+    let paragraphs = snapshot["paragraphs"]
+        .as_array()
+        .ok_or("paragraph layout array")?;
+    let body_id = paragraphs[0]["paragraphId"]
+        .as_str()
+        .ok_or("body paragraph id")?;
+    let cell_id = paragraphs
+        .iter()
+        .find_map(|paragraph| {
+            (paragraph["text"].as_str() == Some("CELLTEXT"))
+                .then(|| paragraph["paragraphId"].as_str())
+                .flatten()
+        })
+        .ok_or("cell paragraph id")?;
+    let pages = snapshot["pages"].as_array().ok_or("pages")?;
+    let fragment_ids: Vec<&str> = pages
+        .iter()
+        .flat_map(|page| page["fragments"].as_array().into_iter().flatten())
+        .filter_map(|fragment| fragment["paragraphId"].as_str())
+        .collect();
+    assert_eq!(
+        fragment_ids.iter().filter(|id| **id == body_id).count(),
+        1,
+        "body paragraph must appear exactly once"
+    );
+    assert_eq!(
+        fragment_ids.iter().filter(|id| **id == cell_id).count(),
+        1,
+        "cell paragraph must appear exactly once"
+    );
+    // 单元格左边缘内边距区域也应命中单元格；内容起点约 76.5，点 73.5 仍应在 cell。
+    let hit: Value = serde_json::from_str(&runtime.hit_test_json(0, 73.5, 105.0)?)?;
+    assert_eq!(
+        hit["position"]["paragraphId"].as_str(),
+        Some(cell_id),
+        "click inside cell padding must hit the cell paragraph"
+    );
+    Ok(())
+}
+
+#[test]
+fn cell_display_equation_publishes_layout_and_accepts_typing()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.handle_editor_key_json("insert-table")?;
+    runtime.command_line_command_json("begin", String::new())?;
+    runtime.command_line_command_json("type", "equation".to_owned())?;
+    runtime.command_line_command_json("select", "0".to_owned())?;
+    let accepted: Value = serde_json::from_str(&runtime.handle_editor_key_json("enter")?)?;
+    assert!(
+        !accepted["pages"].as_array().is_none_or(Vec::is_empty),
+        "cell equation insertion must publish pages"
+    );
+    let typed: Value = serde_json::from_str(&runtime.insert_text_json("x".to_owned())?)?;
+    assert!(!typed["pages"].as_array().is_none_or(Vec::is_empty));
+    runtime
+        .handle_editor_key_json("escape")
+        .unwrap_or_else(|error| panic!("cell equation exit must publish layout: {error}"));
+    Ok(())
+}
+
+#[test]
+fn inserted_table_renders_cell_paragraphs_and_navigates() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    let json = runtime.handle_editor_key_json("insert-table")?;
+    let snapshot: Value = serde_json::from_str(&json)?;
+    assert_eq!(snapshot["pages"].as_array().map(Vec::len), Some(1));
+    assert_eq!(snapshot["paragraphs"].as_array().map(Vec::len), Some(5));
+    assert_eq!(
+        snapshot["pages"][0]["fragments"].as_array().map(Vec::len),
+        Some(5)
+    );
+    let _first_paragraph = snapshot["paragraphs"][1]["paragraphId"]
+        .as_str()
+        .ok_or("cell paragraph id must serialize")?;
+    assert_eq!(
+        snapshot["tableGuidelines"].as_array().map(Vec::len),
+        Some(1),
+        "focused cell must publish one table guideline"
+    );
+    assert_eq!(
+        snapshot["tableGuidelines"][0]["pageIndex"],
+        serde_json::json!(0)
+    );
+
+    let interaction: Value = serde_json::from_str(&runtime.handle_editor_key_json("tab")?)?;
+    assert_eq!(
+        interaction["tableGuidelines"].as_array().map(Vec::len),
+        Some(1),
+        "selection-only navigation must refresh table guidelines"
+    );
+    let json = runtime.layout_snapshot_json()?;
+    let snapshot: Value = serde_json::from_str(&json)?;
+    assert_eq!(snapshot["pages"].as_array().map(Vec::len), Some(1));
+    Ok(())
+}

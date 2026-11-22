@@ -138,7 +138,7 @@ pub(super) enum DocumentPatch {
         environment_estimated_bytes: usize,
     },
     BlockBoundaryParagraphs {
-        parent_environment_ids: Vec<NodeId>,
+        container: BlockContainerPath,
         sibling_index: usize,
         paragraphs: Vec<Paragraph>,
         paragraphs_estimated_bytes: usize,
@@ -661,15 +661,12 @@ impl DocumentPatch {
                     + environment_estimated_bytes
             }
             Self::BlockBoundaryParagraphs {
-                parent_environment_ids,
+                container,
                 paragraphs,
                 paragraphs_estimated_bytes,
                 ..
             } => {
-                parent_environment_ids
-                    .iter()
-                    .map(node_id_bytes)
-                    .sum::<usize>()
+                container.estimated_bytes()
                     + paragraphs_estimated_bytes
                     + paragraphs.len() * size_of::<Paragraph>()
             }
@@ -829,13 +826,13 @@ impl DocumentPatch {
                 false,
             ),
             Self::BlockBoundaryParagraphs {
-                parent_environment_ids,
+                container,
                 sibling_index,
                 paragraphs,
                 ..
             } => apply_environment_boundary_paragraphs(
                 document,
-                parent_environment_ids,
+                container,
                 *sibling_index,
                 paragraphs,
                 false,
@@ -931,13 +928,13 @@ impl DocumentPatch {
                 true,
             ),
             Self::BlockBoundaryParagraphs {
-                parent_environment_ids,
+                container,
                 sibling_index,
                 paragraphs,
                 ..
             } => apply_environment_boundary_paragraphs(
                 document,
-                parent_environment_ids,
+                container,
                 *sibling_index,
                 paragraphs,
                 true,
@@ -1295,12 +1292,13 @@ fn apply_body(document: &mut Document, current: &[Block], replacement: &[Block])
 
 fn apply_environment_boundary_paragraphs(
     document: &mut Document,
-    parent_environment_ids: &[NodeId],
+    container: &BlockContainerPath,
     sibling_index: usize,
     paragraphs: &[Paragraph],
     insert: bool,
 ) -> bool {
-    let Some(blocks) = block_list_mut(&mut document.body, parent_environment_ids) else {
+    let Some(blocks) = caret_structure::block_list_by_container_mut(&mut document.body, container)
+    else {
         return false;
     };
     if insert {
@@ -2179,7 +2177,7 @@ mod tests {
     fn history_removals_reject_same_id_changed_snapshots() {
         let paragraph = Paragraph::empty(NodeId::generate());
         let boundary_patch = DocumentPatch::BlockBoundaryParagraphs {
-            parent_environment_ids: Vec::new(),
+            container: BlockContainerPath::default(),
             sibling_index: 1,
             paragraphs: vec![paragraph.clone()],
             paragraphs_estimated_bytes: paragraph_estimated_bytes(&paragraph),

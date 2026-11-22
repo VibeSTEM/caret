@@ -17,6 +17,7 @@ values:
   color-selected: string = "#e8f3fd"
   color-command-prompt: string = "#e8eaff"
   color-block-environment-highlight: string = "#fff2cc"
+  color-table-guideline: string = "#6f6f6f"
   color-inline-environment-highlight: string = "#FCE4EC"
   color-focus: string = "#2e7ce0"
   color-error: string = "#c62828"

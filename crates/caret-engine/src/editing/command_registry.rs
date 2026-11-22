@@ -99,13 +99,12 @@ const CANDIDATES: &[RegisteredCandidate] = &[
         label: "Multiline equation",
         available: true,
     },
-    // 046 布局完成前不暴露表格入口：命令本身在 Session 已可用，但 \table
-    // 候选与 native 键位保持禁用，避免插入不可见/不可排版的表格。
+    // 046 已接入表格布局；命令面板入口随之启用，native 物理键位另行接入。
     RegisteredCandidate {
         alias: "\\table",
         command_id: command_ids::INSERT_TABLE,
         label: "Table",
-        available: false,
+        available: true,
     },
     RegisteredCandidate {
         alias: "\\newline",
@@ -304,7 +303,7 @@ mod tests {
     }
 
     #[test]
-    fn table_command_is_registered_but_disabled_until_046() {
+    fn table_command_is_registered_and_enabled_with_layout() {
         let table = candidates()
             .into_iter()
             .find(|candidate| candidate.alias == "\\table")
@@ -314,8 +313,8 @@ mod tests {
             super::super::command::command_ids::INSERT_TABLE
         );
         assert!(
-            !table.available,
-            "table candidate stays disabled until 046 connects the canvas"
+            table.available,
+            "table candidate is enabled once table layout is connected"
         );
     }
 

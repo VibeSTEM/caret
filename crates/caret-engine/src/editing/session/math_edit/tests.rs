@@ -994,3 +994,49 @@ mod source_edit;
 mod symbol_input;
 #[path = "tests/tree_ops.rs"]
 mod tree_ops;
+
+#[test]
+fn math_locators_resolve_blocks_and_inline_math_inside_table_cells() {
+    use caret_doc::{InlineMath, ParagraphContent, Table, TableCell, TableRow};
+    let inline = InlineMath {
+        id: NodeId::generate(),
+        math_tree: MathTree {
+            schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+            root: caret_doc::MathFlow {
+                id: NodeId::generate(),
+                content: Vec::new(),
+                extra: Default::default(),
+            },
+            extra: Default::default(),
+        },
+        extra: Default::default(),
+    };
+    let inline_id = inline.id.clone();
+    let mut paragraph = Paragraph::empty(NodeId::generate());
+    paragraph.inlines = vec![ParagraphContent::Math(inline)];
+    let para_id = paragraph.id.clone();
+    let table = Table {
+        id: NodeId::generate(),
+        rows: vec![TableRow {
+            id: NodeId::generate(),
+            cells: vec![TableCell {
+                id: NodeId::generate(),
+                blocks: vec![Block::Paragraph(paragraph)],
+            }],
+        }],
+    };
+    let table_id = table.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![Block::Table(table)];
+
+    let (container, index) = find_block_container_path(&document.body, &para_id)
+        .unwrap_or_else(|| panic!("cell paragraph must resolve"));
+    assert_eq!(index, 0);
+    let cell = container
+        .innermost_cell()
+        .unwrap_or_else(|| panic!("paragraph container must be a table cell"));
+    assert_eq!(cell.table_id, table_id);
+    let found = find_inline_math_in_blocks(&document.body, &para_id, &inline_id)
+        .unwrap_or_else(|| panic!("cell inline math must resolve"));
+    assert_eq!(found.id, inline_id);
+}

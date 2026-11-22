@@ -76,6 +76,30 @@ void DocumentCanvas::setInlineHighlightRects(const QVariantList& rectangles) {
 
 QColor DocumentCanvas::blockHighlightColor() const { return m_block_highlight_color; }
 
+QVariantList DocumentCanvas::tableGuidelines() const { return m_table_guidelines; }
+
+void DocumentCanvas::setTableGuidelines(const QVariantList& guidelines) {
+    if (!valid_highlight_rectangles(guidelines,
+                                    [this](int page_index) { return pageSizePt(page_index); }) ||
+        m_table_guidelines == guidelines) {
+        return;
+    }
+    m_table_guidelines = guidelines;
+    emit tableGuidelinesChanged();
+    update();
+}
+
+QColor DocumentCanvas::tableGuidelineColor() const { return m_table_guideline_color; }
+
+void DocumentCanvas::setTableGuidelineColor(const QColor& color) {
+    if (m_table_guideline_color == color) {
+        return;
+    }
+    m_table_guideline_color = color;
+    emit appearanceChanged();
+    update();
+}
+
 void DocumentCanvas::setBlockHighlightColor(const QColor& color) {
     if (m_block_highlight_color == color) {
         return;

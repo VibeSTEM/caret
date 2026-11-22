@@ -12,7 +12,7 @@ use caret_doc::{
     Align, Block, BlockEnvironment, BlockEnvironmentKind, Document, Equation, ExplicitBreak,
     InlineEnvironment, InlineEnvironmentKind, InlineMath, MathAlignRow, NodeId, OpaqueNode,
     Orientation, PageGeometry, PageMargins, PaperSize, Paragraph, ParagraphContent, Run, SoftBreak,
-    TextFlow,
+    Table, TableCell, TableRow, TextFlow,
 };
 use caret_layout::{FontCatalog, FontCatalogError, HitAffinity, ShapingStyle, VisualAffinity};
 use std::collections::BTreeMap;
@@ -52,27 +52,6 @@ fn paragraph(text: &str) -> Paragraph {
         extra: BTreeMap::new(),
     })];
     paragraph
-}
-
-/// 只包含一个文本片段的公式树，用于公式块几何测试。
-fn text_math_tree(text: &str) -> caret_doc::MathTree {
-    caret_doc::MathTree {
-        schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
-        root: caret_doc::MathFlow {
-            id: NodeId::generate(),
-            content: vec![caret_doc::MathContent::Text(TextFlow {
-                runs: vec![Run {
-                    text: text.to_owned(),
-                    language: None,
-                    props: BTreeMap::new(),
-                    extra: BTreeMap::new(),
-                }],
-                extra: BTreeMap::new(),
-            })],
-            extra: BTreeMap::new(),
-        },
-        extra: BTreeMap::new(),
-    }
 }
 
 /// 内容为空的公式树，用于验证退化公式宿主仍产出正高度宿主行框。
@@ -2907,7 +2886,10 @@ fn cloning_laid_out_paragraph_shares_immutable_shaping_data() {
         .layout(&document, 0, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("document layout failed: {error}"));
     let paragraph = &snapshot.paragraphs[0];
-    let reused = paragraph.reused_for_layout(StoryId::Body, &[]);
+    let reused = paragraph.reused_for_layout(
+        StoryId::Body,
+        &caret_structure::BlockContainerPath::default(),
+    );
 
     assert!(std::sync::Arc::ptr_eq(&paragraph.text, &reused.text));
     assert!(std::sync::Arc::ptr_eq(&paragraph.layout, &reused.layout));
@@ -3225,24 +3207,6 @@ fn layout_errors_reject_the_entire_document_and_leave_the_service_reusable() {
     opaque_block.body.push(Block::Opaque(OpaqueNode {
         raw: serde_json::json!({"type": "future_block", "content": "preserved"}),
     }));
-    let mut table_block = Document::blank();
-    let table: Block = serde_json::from_value(serde_json::json!({
-        "type": "table",
-        "id": "table-1",
-        "rows": [{
-            "id": "row-1",
-            "cells": [
-                {"id": "cell-1", "blocks": [
-                    {"type": "paragraph", "id": "paragraph-1", "inlines": []}
-                ]},
-                {"id": "cell-2", "blocks": [
-                    {"type": "paragraph", "id": "paragraph-2", "inlines": []}
-                ]}
-            ]
-        }]
-    }))
-    .unwrap_or_else(|error| panic!("table test block must parse: {error}"));
-    table_block.body.push(table);
     let mut unknown_empty_mark = Document::blank();
     let Block::Paragraph(empty) = &mut unknown_empty_mark.body[0] else {
         unreachable!();
@@ -3257,7 +3221,6 @@ fn layout_errors_reject_the_entire_document_and_leave_the_service_reusable() {
         (invalid_model, "layout.invalid_document:"),
         (unknown_break, "layout.unknown_break_kind: column"),
         (opaque_block, "layout.unsupported_content"),
-        (table_block, "layout.unsupported_content"),
         (
             unknown_empty_mark,
             "layout.unsupported_paragraph_mark_style",
@@ -3313,8 +3276,8 @@ fn block_environment_titles_and_children_share_document_layout_and_hit_testing()
     assert_eq!(
         snapshot
             .paragraph_by_id(&child_id)
-            .map(|p| p.environment_ids.as_ref()),
-        Some([environment_id.clone()].as_slice())
+            .map(|p| p.container.environment_ids()),
+        Some(vec![environment_id.clone()])
     );
     assert_eq!(snapshot.environment_ranges.len(), 1);
     assert_eq!(
@@ -3422,7 +3385,7 @@ fn structural_selection_geometry_combines_text_environment_and_math_hosts() {
         Block::Paragraph(before),
         Block::Equation(Equation {
             id: math_id.clone(),
-            math_tree: text_math_tree("x"),
+            math_tree: empty_math_tree(),
             extra: BTreeMap::new(),
         }),
         Block::Paragraph(after),
@@ -3580,7 +3543,7 @@ fn math_block_geometry_uses_the_same_full_width_page_rect_for_selection_and_high
     let mut document = Document::blank();
     document.body.push(Block::Equation(Equation {
         id: math_id.clone(),
-        math_tree: text_math_tree("x"),
+        math_tree: empty_math_tree(),
         extra: BTreeMap::new(),
     }));
     let snapshot = layout_document(&document);
@@ -5513,4 +5476,590 @@ fn empty_optional_slots_keep_structural_depth() {
         (caret_height(index_caret) - 1.0).abs() < 1e-9,
         "empty root index caret keeps the minimum visible height"
     );
+}
+
+#[test]
+fn basic_table_layout_places_cells_and_shared_caret_geometry() {
+    let make_cell = |text: &str| TableCell {
+        id: NodeId::generate(),
+        blocks: vec![Block::Paragraph(paragraph(text))],
+    };
+    let first = make_cell("a");
+    let second = make_cell("b");
+    let third = make_cell("c");
+    let fourth = make_cell("d");
+    let first_paragraph = match &first.blocks[0] {
+        Block::Paragraph(paragraph) => paragraph.id.clone(),
+        _ => panic!("cell must hold a paragraph"),
+    };
+    let first_cell_id = first.id.clone();
+    let row0 = TableRow {
+        id: NodeId::generate(),
+        cells: vec![first, second],
+    };
+    let row1 = TableRow {
+        id: NodeId::generate(),
+        cells: vec![third, fourth],
+    };
+    let row0_id = row0.id.clone();
+    let table = Table {
+        id: NodeId::generate(),
+        rows: vec![row0, row1],
+    };
+    let table_id = table.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![Block::Table(table)];
+
+    let snapshot = layout_document(&document);
+    assert_eq!(snapshot.pages.len(), 1);
+    let page = &snapshot.pages[0];
+    assert_eq!(page.layout.table_fragments.len(), 1);
+    assert_eq!(page.layout.fragments.len(), 4);
+    assert!(
+        page.layout
+            .fragments
+            .iter()
+            .all(|fragment| matches!(fragment.host, caret_layout::FragmentHost::TableCell { .. }))
+    );
+    let glyphs = snapshot
+        .page_glyphs(0)
+        .unwrap_or_else(|error| panic!("table glyphs must resolve: {error}"));
+    let first_glyph_x = glyphs
+        .runs
+        .iter()
+        .find(|run| run.paragraph_id == first_paragraph)
+        .and_then(|run| run.glyphs.first())
+        .map(|glyph| glyph.x_pt)
+        .unwrap_or_else(|| panic!("first cell must render a glyph"));
+    let laid_out = snapshot
+        .paragraph_by_id(&first_paragraph)
+        .unwrap_or_else(|| panic!("cell paragraph must be laid out"));
+    let cell = laid_out
+        .container
+        .innermost_cell()
+        .unwrap_or_else(|| panic!("cell paragraph container must record the table cell"));
+    assert_eq!(cell.table_id, table_id);
+    assert!(page.layout.table_fragments[0].row_range == (0..2));
+
+    let first_pos = Pos {
+        story: StoryId::TableCell {
+            table_id: table_id.clone(),
+            row_id: row0_id,
+            cell_id: first_cell_id,
+        },
+        paragraph_id: first_paragraph,
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
+    let first_caret = snapshot
+        .caret_geometry(&first_pos, VisualAffinity::Downstream)
+        .unwrap_or_else(|| panic!("cell caret geometry must resolve"));
+    assert!(first_caret.x_pt >= page.margin_left_pt);
+    assert!(first_caret.y0_pt >= page.margin_top_pt);
+    assert!(first_caret.y1_pt > first_caret.y0_pt);
+    let guidelines = snapshot.table_guidelines(&first_pos);
+    assert_eq!(
+        guidelines.len(),
+        1,
+        "focused cell must publish one guideline rect"
+    );
+    assert_eq!(guidelines[0].page_index, first_caret.page_index);
+    assert!(guidelines[0].x1_pt > guidelines[0].x0_pt);
+    assert!(guidelines[0].y1_pt > guidelines[0].y0_pt);
+    assert!(
+        (first_glyph_x - first_caret.x_pt).abs() < 0.01,
+        "cell glyph and caret must share the same x origin: {first_glyph_x} vs {}",
+        first_caret.x_pt
+    );
+    let hit = snapshot
+        .hit_test(
+            first_caret.page_index,
+            (first_caret.x_pt + 1.0).min(page.width_pt - 1.0),
+            (first_caret.y0_pt + first_caret.y1_pt) / 2.0,
+        )
+        .unwrap_or_else(|| panic!("cell hit must resolve"));
+    assert_eq!(hit.position.paragraph_id, first_pos.paragraph_id);
+    assert_eq!(hit.position.story, first_pos.story);
+}
+
+#[test]
+fn table_cell_inline_math_is_measured_and_projected() {
+    let inline_math = caret_doc::InlineMath {
+        id: NodeId::generate(),
+        math_tree: empty_math_tree(),
+        extra: BTreeMap::new(),
+    };
+    let inline_id = inline_math.id.clone();
+    let mut paragraph = Paragraph::empty(NodeId::generate());
+    paragraph.inlines = vec![ParagraphContent::Math(inline_math)];
+    let cell = TableCell {
+        id: NodeId::generate(),
+        blocks: vec![Block::Paragraph(paragraph)],
+    };
+    let table = Table {
+        id: NodeId::generate(),
+        rows: vec![TableRow {
+            id: NodeId::generate(),
+            cells: vec![cell],
+        }],
+    };
+    let mut document = Document::blank();
+    document.body = vec![Block::Table(table)];
+    let snapshot = layout_document(&document);
+    let page = &snapshot.pages[0];
+    let projection = snapshot
+        .math_projection(0, &inline_id)
+        .unwrap_or_else(|| panic!("cell inline math must have a page projection"));
+    assert!(projection.object_x_pt >= page.margin_left_pt);
+    assert!(projection.object_x_pt > page.margin_left_pt);
+    snapshot
+        .page_glyphs(0)
+        .unwrap_or_else(|error| panic!("cell inline math glyphs must extract: {error}"));
+}
+
+#[test]
+fn table_cell_block_measurements_place_multiple_paragraphs() {
+    let cell = TableCell {
+        id: NodeId::generate(),
+        blocks: vec![
+            Block::Paragraph(paragraph("first")),
+            Block::Paragraph(paragraph("second")),
+        ],
+    };
+    let table = Table {
+        id: NodeId::generate(),
+        rows: vec![TableRow {
+            id: NodeId::generate(),
+            cells: vec![cell],
+        }],
+    };
+    let mut document = Document::blank();
+    document.body = vec![Block::Table(table)];
+    let snapshot = layout_document(&document);
+    let grid = snapshot
+        .table_layouts
+        .values()
+        .next()
+        .unwrap_or_else(|| panic!("table grid must be registered"));
+    let cell_geometry = &grid.rows[0].cells[0];
+    assert_eq!(cell_geometry.blocks.len(), 2);
+    assert!(cell_geometry.blocks[1].top_pt > cell_geometry.blocks[0].top_pt);
+    assert!(
+        cell_geometry.blocks[1].first_baseline_y_pt > cell_geometry.blocks[0].first_baseline_y_pt
+    );
+    let page = &snapshot.pages[0];
+    let cell_fragments = page
+        .layout
+        .fragments
+        .iter()
+        .filter(|fragment| matches!(fragment.host, caret_layout::FragmentHost::TableCell { .. }))
+        .collect::<Vec<_>>();
+    assert_eq!(cell_fragments.len(), 2);
+}
+
+#[test]
+fn table_cell_display_equation_is_measured_projected_and_drawn() {
+    let equation = Equation {
+        id: NodeId::generate(),
+        math_tree: empty_math_tree(),
+        extra: BTreeMap::new(),
+    };
+    let equation_id = equation.id.clone();
+    let table = Table {
+        id: NodeId::generate(),
+        rows: vec![TableRow {
+            id: NodeId::generate(),
+            cells: vec![TableCell {
+                id: NodeId::generate(),
+                blocks: vec![Block::Equation(equation)],
+            }],
+        }],
+    };
+    let mut document = Document::blank();
+    document.body = vec![Block::Table(table)];
+    let snapshot = layout_document(&document);
+    assert!(snapshot.math_blocks.contains_key(&equation_id));
+    let page = &snapshot.pages[0];
+    assert_eq!(page.table_math_placements.len(), 1);
+    let placement = &page.table_math_placements[0];
+    assert_eq!(placement.math_id, equation_id);
+    assert!(placement.object_x_pt >= page.margin_left_pt);
+    assert!(placement.baseline_y_pt > page.margin_top_pt);
+    let geometry = snapshot
+        .math_block_geometry(std::slice::from_ref(&equation_id))
+        .unwrap_or_else(|| panic!("cell equation must publish block geometry"));
+    assert_eq!(geometry.len(), 1);
+    assert!(geometry[0].x1_pt > geometry[0].x0_pt);
+    assert!(geometry[0].y1_pt > geometry[0].y0_pt);
+    assert!(geometry[0].x1_pt <= page.width_pt);
+    let glyphs = snapshot
+        .page_glyphs(0)
+        .unwrap_or_else(|error| panic!("cell equation glyphs must extract: {error}"));
+    assert!(glyphs.shapes.len() >= 4, "table borders must still render");
+}
+
+#[test]
+fn table_cell_align_is_measured_and_projected() {
+    let align = Align {
+        id: NodeId::generate(),
+        rows: vec![MathAlignRow {
+            id: NodeId::generate(),
+            cells: vec![empty_math_tree()],
+            extra: BTreeMap::new(),
+        }],
+        extra: BTreeMap::new(),
+    };
+    let align_id = align.id.clone();
+    let table = Table {
+        id: NodeId::generate(),
+        rows: vec![TableRow {
+            id: NodeId::generate(),
+            cells: vec![TableCell {
+                id: NodeId::generate(),
+                blocks: vec![Block::Align(align)],
+            }],
+        }],
+    };
+    let mut document = Document::blank();
+    document.body = vec![Block::Table(table)];
+    let snapshot = layout_document(&document);
+    assert!(snapshot.math_blocks.contains_key(&align_id));
+    let page = &snapshot.pages[0];
+    assert_eq!(page.table_math_placements.len(), 1);
+    assert_eq!(page.table_math_placements[0].math_id, align_id);
+    assert!(
+        snapshot
+            .math_block_geometry(std::slice::from_ref(&align_id))
+            .is_some(),
+        "cell align must publish block geometry"
+    );
+    snapshot
+        .page_glyphs(0)
+        .unwrap_or_else(|error| panic!("cell align glyphs must extract: {error}"));
+}
+
+#[test]
+fn table_cell_environment_title_and_body_are_laid_out() {
+    let environment = BlockEnvironment {
+        id: NodeId::generate(),
+        kind: BlockEnvironmentKind::Section,
+        definition_id: None,
+        props: BTreeMap::new(),
+        title: Some(paragraph("title")),
+        children: vec![Block::Paragraph(paragraph("body"))],
+        extra: BTreeMap::new(),
+    };
+    let environment_id = environment.id.clone();
+    let title_id = environment
+        .title
+        .as_ref()
+        .map(|title| title.id.clone())
+        .unwrap_or_else(|| panic!("environment must have a title"));
+    let table = Table {
+        id: NodeId::generate(),
+        rows: vec![TableRow {
+            id: NodeId::generate(),
+            cells: vec![TableCell {
+                id: NodeId::generate(),
+                blocks: vec![Block::Environment(environment)],
+            }],
+        }],
+    };
+    let mut document = Document::blank();
+    document.body = vec![Block::Table(table)];
+    let snapshot = layout_document(&document);
+    let title = snapshot
+        .paragraph_by_id(&title_id)
+        .unwrap_or_else(|| panic!("cell environment title must be laid out"));
+    assert_eq!(
+        title.story,
+        StoryId::EnvironmentTitle(environment_id.clone())
+    );
+    let page = &snapshot.pages[0];
+    assert!(
+        page.layout
+            .fragments
+            .iter()
+            .filter(|fragment| matches!(
+                fragment.host,
+                caret_layout::FragmentHost::TableCell { .. }
+            ))
+            .count()
+            >= 2
+    );
+    assert!(snapshot.page_glyphs(0).is_ok());
+}
+
+#[test]
+fn hidden_tall_cell_math_degrades_to_empty_highlight_instead_of_stale_error() {
+    let equation = Equation {
+        id: NodeId::generate(),
+        math_tree: empty_math_tree(),
+        extra: BTreeMap::new(),
+    };
+    let equation_id = equation.id.clone();
+    let mut blocks: Vec<Block> = (0..40)
+        .map(|index| Block::Paragraph(paragraph(&format!("line {index}"))))
+        .collect();
+    blocks.push(Block::Equation(equation));
+    let table = Table {
+        id: NodeId::generate(),
+        rows: vec![TableRow {
+            id: NodeId::generate(),
+            cells: vec![TableCell {
+                id: NodeId::generate(),
+                blocks,
+            }],
+        }],
+    };
+    let mut document = Document::blank();
+    document.body = vec![Block::Table(table)];
+    let snapshot = layout_document(&document);
+    assert!(snapshot.is_hidden_table_math(&equation_id));
+    assert_eq!(
+        snapshot.math_block_geometry(std::slice::from_ref(&equation_id)),
+        Some(Vec::new()),
+        "hidden table math must degrade to empty highlight, not stale error"
+    );
+}
+
+#[test]
+fn tall_cell_only_publishes_fragments_inside_the_page_content_box() {
+    let table = Table {
+        id: NodeId::generate(),
+        rows: vec![TableRow {
+            id: NodeId::generate(),
+            cells: vec![TableCell {
+                id: NodeId::generate(),
+                blocks: (0..60)
+                    .map(|index| Block::Paragraph(paragraph(&format!("line {index}"))))
+                    .collect(),
+            }],
+        }],
+    };
+    let mut document = Document::blank();
+    document.body = vec![Block::Table(table)];
+    let snapshot = layout_document(&document);
+    assert_eq!(snapshot.pages.len(), 1);
+    let page = &snapshot.pages[0];
+    let content_height_pt = page.height_pt - page.margin_top_pt - page.margin_bottom_pt;
+    assert!(!page.layout.fragments.is_empty());
+    assert!(page.layout.fragments.len() < 60);
+    for fragment in &page.layout.fragments {
+        assert!(
+            f64::from(fragment.y_offset_pt) <= content_height_pt,
+            "cell paragraph fragment must stay inside page content"
+        );
+    }
+    snapshot
+        .page_glyphs(0)
+        .unwrap_or_else(|error| panic!("clipped tall cell glyphs must extract: {error}"));
+}
+
+#[test]
+fn body_before_table_keeps_cell_paragraph_indices_and_hit_geometry_consistent() {
+    let body_paragraph = paragraph("BODYTEXT");
+    let body_id = body_paragraph.id.clone();
+    let cell_paragraph = paragraph("CELLTEXT");
+    let cell_id = cell_paragraph.id.clone();
+    let table = Table {
+        id: NodeId::generate(),
+        rows: vec![TableRow {
+            id: NodeId::generate(),
+            cells: vec![TableCell {
+                id: NodeId::generate(),
+                blocks: vec![Block::Paragraph(cell_paragraph)],
+            }],
+        }],
+    };
+    let table_id = table.id.clone();
+    let table_row_id = table.rows[0].id.clone();
+    let table_cell_id = table.rows[0].cells[0].id.clone();
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(body_paragraph), Block::Table(table)];
+    let snapshot = layout_document(&document);
+    assert_eq!(snapshot.paragraphs.len(), 2);
+
+    let body = snapshot
+        .paragraph_by_id(&body_id)
+        .unwrap_or_else(|| panic!("body paragraph must be laid out"));
+    let cell = snapshot
+        .paragraph_by_id(&cell_id)
+        .unwrap_or_else(|| panic!("cell paragraph must be laid out"));
+    assert_eq!(body.story, StoryId::Body);
+    assert_eq!(
+        cell.story,
+        StoryId::TableCell {
+            table_id: table_id.clone(),
+            row_id: table_row_id.clone(),
+            cell_id: table_cell_id.clone(),
+        }
+    );
+
+    let page = &snapshot.pages[0];
+    let body_fragments = page
+        .layout
+        .fragments
+        .iter()
+        .filter(|fragment| fragment.paragraph_id == body_id)
+        .count();
+    let cell_fragments = page
+        .layout
+        .fragments
+        .iter()
+        .filter(|fragment| fragment.paragraph_id == cell_id)
+        .count();
+    assert_eq!(body_fragments, 1, "body paragraph must have one fragment");
+    assert_eq!(cell_fragments, 1, "cell paragraph must have one fragment");
+
+    let cell_position = Pos {
+        story: cell.story.clone(),
+        paragraph_id: cell_id.clone(),
+        offset: 0,
+        affinity: Affinity::Upstream,
+    };
+    let caret = snapshot
+        .caret_geometry(&cell_position, VisualAffinity::Upstream)
+        .unwrap_or_else(|| panic!("cell caret geometry must exist"));
+    let grid = snapshot
+        .table_layouts
+        .get(&table_id)
+        .unwrap_or_else(|| panic!("table grid must be laid out"));
+    let grid_cell = &grid.rows[0].cells[0];
+    assert!(caret.x_pt >= page.margin_left_pt + grid_cell.content_x_pt - 0.01);
+    assert!(
+        caret.x_pt
+            <= page.margin_left_pt + grid_cell.content_x_pt + grid_cell.content_width_pt + 0.01
+    );
+
+    let body_hit = snapshot
+        .hit_test(
+            0,
+            page.margin_left_pt + 5.0,
+            page.margin_top_pt + f64::from(body.layout.paragraph.lines[0].metrics.height_pt),
+        )
+        .unwrap_or_else(|| panic!("body hit must resolve"));
+    assert_eq!(body_hit.position.paragraph_id, body_id);
+    let cell_clip = cell.line_locations[0]
+        .as_ref()
+        .and_then(|location| location.clip)
+        .unwrap_or_else(|| panic!("cell line must publish its clip"));
+    let cell_hit = snapshot
+        .hit_test(0, cell_clip.x0_pt + 2.0, cell_clip.y0_pt + 2.0)
+        .unwrap_or_else(|| panic!("cell hit must resolve"));
+    assert_eq!(cell_hit.position.paragraph_id, cell_id);
+    assert_eq!(cell_hit.position.story, cell.story);
+
+    // 点在单元格边框/内边距区域也必须命中该单元格，而不是落到表前正文。
+    let cell_location = cell.line_locations[0]
+        .as_ref()
+        .unwrap_or_else(|| panic!("cell line location must exist"));
+    let hit_clip = cell_location
+        .hit_clip
+        .unwrap_or_else(|| panic!("cell line must publish hit clip"));
+    assert!(
+        hit_clip.x0_pt < cell_clip.x0_pt,
+        "hit clip must include horizontal inset"
+    );
+    for x_pt in [
+        hit_clip.x0_pt + 0.5,
+        cell_clip.x0_pt - 1.5,
+        cell_clip.x1_pt + 1.5,
+    ] {
+        let padding_hit = snapshot
+            .hit_test(0, x_pt, hit_clip.y0_pt + 0.5)
+            .unwrap_or_else(|| panic!("cell padding hit must resolve at {x_pt}"));
+        assert_eq!(padding_hit.position.paragraph_id, cell_id);
+    }
+
+    let glyphs = snapshot
+        .page_glyphs(0)
+        .unwrap_or_else(|error| panic!("glyphs must extract: {error}"));
+    assert!(!glyphs.runs.is_empty());
+}
+
+#[test]
+fn paragraph_after_table_keeps_its_page_fragment_and_caret() {
+    let body_paragraph = paragraph("BODYTEXT");
+    let body_id = body_paragraph.id.clone();
+    let cell_paragraph = paragraph("CELLTEXT");
+    let cell_id = cell_paragraph.id.clone();
+    let after_paragraph = paragraph("AFTERTEXT");
+    let after_id = after_paragraph.id.clone();
+    let table = Table {
+        id: NodeId::generate(),
+        rows: vec![TableRow {
+            id: NodeId::generate(),
+            cells: vec![TableCell {
+                id: NodeId::generate(),
+                blocks: vec![Block::Paragraph(cell_paragraph)],
+            }],
+        }],
+    };
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(body_paragraph),
+        Block::Table(table),
+        Block::Paragraph(after_paragraph),
+    ];
+    let snapshot = layout_document(&document);
+    assert_eq!(snapshot.paragraphs.len(), 3);
+    let page = &snapshot.pages[0];
+    assert_eq!(
+        page.layout
+            .fragments
+            .iter()
+            .filter(|fragment| fragment.paragraph_id == body_id)
+            .count(),
+        1,
+        "body paragraph must have exactly one fragment"
+    );
+    assert_eq!(
+        page.layout
+            .fragments
+            .iter()
+            .filter(|fragment| fragment.paragraph_id == cell_id)
+            .count(),
+        1,
+        "cell paragraph must have exactly one fragment"
+    );
+    assert_eq!(
+        page.layout
+            .fragments
+            .iter()
+            .filter(|fragment| fragment.paragraph_id == after_id)
+            .count(),
+        1,
+        "paragraph after the table must keep its own fragment"
+    );
+    let after = snapshot
+        .paragraph_by_id(&after_id)
+        .unwrap_or_else(|| panic!("paragraph after table must be laid out"));
+    assert_eq!(after.story, StoryId::Body);
+    let caret = snapshot
+        .caret_geometry(
+            &Pos {
+                story: StoryId::Body,
+                paragraph_id: after_id.clone(),
+                offset: 0,
+                affinity: Affinity::Upstream,
+            },
+            VisualAffinity::Upstream,
+        )
+        .unwrap_or_else(|| panic!("caret after table must exist"));
+    assert!((caret.x_pt - page.margin_left_pt).abs() < 0.01);
+    let after_fragment = page
+        .layout
+        .fragments
+        .iter()
+        .find(|fragment| fragment.paragraph_id == after_id)
+        .unwrap_or_else(|| panic!("fragment after table must exist"));
+    let hit = snapshot
+        .hit_test(
+            0,
+            page.margin_left_pt + 5.0,
+            page.margin_top_pt + f64::from(after_fragment.y_offset_pt) + 5.0,
+        )
+        .unwrap_or_else(|| panic!("hit after table must resolve"));
+    assert_eq!(hit.position.paragraph_id, after_id);
 }

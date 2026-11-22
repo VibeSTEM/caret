@@ -20,7 +20,12 @@ use caret_layout::{
     VisualAffinity, calculate_content_line_metrics_with_grid, calculate_line_metrics_with_grid,
     paginate_paragraphs, paragraph_has_empty_line, resolve_paragraph_style,
 };
-use std::{collections::HashMap, ops::Range, sync::Arc};
+use caret_structure::BlockContainerPath;
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Range,
+    sync::Arc,
+};
 
 mod block_navigation;
 mod geometry;
@@ -30,6 +35,8 @@ mod math_navigation;
 mod math_text;
 mod produce;
 mod query;
+mod table_layout;
+pub use caret_layout::FragmentHost;
 pub(crate) use produce::math_flow_is_empty_host;
 mod shared;
 use shared::*;
@@ -85,9 +92,10 @@ impl From<FontCatalogError> for DocumentLayoutError {
 pub struct LaidOutParagraph {
     pub id: NodeId,
     pub story: StoryId,
-    pub environment_ids: Arc<[NodeId]>,
+    pub container: BlockContainerPath,
     source_paragraph: Arc<Paragraph>,
     resolved_style: ResolvedParagraphStyle,
+    layout_width_pt: f32,
     math_caret_height_pt: f32,
     math_caret_baseline_pt: f32,
     pub text: Arc<str>,
@@ -101,13 +109,62 @@ pub struct LaidOutParagraph {
     /// 行内公式 token 到同一布局代际 Parley 文本岛 sidecar 的映射。
     inline_math_text_layouts: Arc<[HashMap<u64, MathTextSidecar>]>,
     utf16_checkpoints: Arc<[(usize, usize)]>,
-    line_locations: Vec<Option<CaretLineLocation>>,
+    pub(crate) line_locations: Vec<Option<CaretLineLocation>>,
 }
 
 #[derive(Debug, Clone, Copy)]
-struct CaretLineLocation {
-    page_index: usize,
-    y0_pt: f64,
+pub(crate) struct CaretLineLocation {
+    pub(crate) page_index: usize,
+    /// 行左边缘的页面局部 x 坐标（已含页边距与单元格位置），单位为 pt。
+    pub(crate) x0_pt: f64,
+    /// 行顶边的页面局部 y 坐标，单位为 pt。
+    pub(crate) y0_pt: f64,
+    /// 页面局部的矩形裁剪框；正文行为 None。
+    pub(crate) clip: Option<PageClip>,
+    /// 命中回退框：包含单元格边框/内边距；caret 与选区仍使用 `clip`。
+    pub(crate) hit_clip: Option<PageClip>,
+}
+
+/// 页面局部矩形裁剪框；caret/选区/命中/绘制共用同一判断。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct PageClip {
+    pub(crate) x0_pt: f64,
+    pub(crate) y0_pt: f64,
+    pub(crate) x1_pt: f64,
+    pub(crate) y1_pt: f64,
+}
+
+impl PageClip {
+    pub(crate) fn from_array(values: [f64; 4]) -> Self {
+        Self {
+            x0_pt: values[0],
+            y0_pt: values[1],
+            x1_pt: values[2],
+            y1_pt: values[3],
+        }
+    }
+
+    /// 点是否落在裁剪框内（包含边界）。
+    pub(crate) fn contains(&self, x_pt: f64, y_pt: f64) -> bool {
+        x_pt >= self.x0_pt && x_pt <= self.x1_pt && y_pt >= self.y0_pt && y_pt <= self.y1_pt
+    }
+
+    /// 将插入点几何裁剪进可见区域；完全不可见时返回 false。
+    pub(crate) fn clamp_caret(&self, caret: &mut PageCaretGeometry) -> bool {
+        caret.x_pt = caret.x_pt.clamp(self.x0_pt, self.x1_pt);
+        caret.y0_pt = caret.y0_pt.clamp(self.y0_pt, self.y1_pt);
+        caret.y1_pt = caret.y1_pt.clamp(self.y0_pt, self.y1_pt);
+        caret.y1_pt > caret.y0_pt
+    }
+
+    /// 将选区矩形裁剪进可见区域；裁剪后为空时返回 false。
+    pub(crate) fn clamp_rect(&self, rect: &mut PageSelectionRect) -> bool {
+        rect.x0_pt = rect.x0_pt.clamp(self.x0_pt, self.x1_pt);
+        rect.x1_pt = rect.x1_pt.clamp(self.x0_pt, self.x1_pt);
+        rect.y0_pt = rect.y0_pt.clamp(self.y0_pt, self.y1_pt);
+        rect.y1_pt = rect.y1_pt.clamp(self.y0_pt, self.y1_pt);
+        rect.x1_pt > rect.x0_pt && rect.y1_pt > rect.y0_pt
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -133,8 +190,9 @@ struct MathTextSourceSpan {
 struct LaidOutParagraphInput {
     source_paragraph: Paragraph,
     story: StoryId,
-    environment_ids: Vec<NodeId>,
+    container: BlockContainerPath,
     resolved_style: ResolvedParagraphStyle,
+    layout_width_pt: f32,
     math_caret_height_pt: f32,
     math_caret_baseline_pt: f32,
     text: String,
@@ -143,6 +201,25 @@ struct LaidOutParagraphInput {
     inline_math_ids: Vec<NodeId>,
     inline_math_source_ranges: Vec<Range<usize>>,
     inline_math_text_layouts: Vec<HashMap<u64, MathTextSidecar>>,
+}
+
+/// 单元格内显示公式在页面上的放置；与正文公式投影共用同一坐标约定。
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TableMathPlacement {
+    pub(crate) math_id: NodeId,
+    /// 公式盒左边缘的页面局部 x 坐标。
+    pub(crate) object_x_pt: f64,
+    pub(crate) width_pt: f64,
+    pub(crate) ascent_pt: f64,
+    pub(crate) descent_pt: f64,
+    /// 单元格内容盒的页面局部 x 范围，供块边界停靠使用。
+    pub(crate) clip_x_pt: Option<[f64; 2]>,
+    /// 公式基线的页面局部 y 坐标。
+    pub(crate) baseline_y_pt: f64,
+    pub(crate) caret_line_top_pt: f64,
+    pub(crate) caret_baseline_y_pt: f64,
+    pub(crate) caret_height_pt: f64,
+    pub(crate) clip_y_pt: Option<[f64; 2]>,
 }
 
 /// 一页的文档坐标和段落行片段。
@@ -155,6 +232,8 @@ pub struct PageLayoutSnapshot {
     pub margin_right_pt: f64,
     pub margin_bottom_pt: f64,
     pub layout: PageLayout,
+    /// 本页单元格内显示公式的放置；不回写 PageLayout 的分页片段。
+    pub(crate) table_math_placements: Vec<TableMathPlacement>,
 }
 
 /// 块级环境在单页上的内容范围，由其标题、段落和显示公式的实际分页片段合并得到。
@@ -195,6 +274,10 @@ pub struct DocumentLayoutSnapshot {
     pub environment_ranges: Vec<PageEnvironmentRange>,
     /// 已排版的块级公式，页面片段通过 ID 引用同一份 MathBox。
     pub math_blocks: HashMap<NodeId, Arc<caret_math::layout::MathLayout>>,
+    /// 已测量的表格网格几何；页面片段只保存放置引用，几何由快照单点持有。
+    pub(crate) table_layouts: HashMap<NodeId, Arc<caret_layout::TableGridLayout>>,
+    /// 表格单元格内的公式 ID；用于把被裁剪/隐藏的 cell 公式降级为空高亮而非过期错误。
+    pub(crate) table_math_ids: HashSet<NodeId>,
     /// 块级公式 token 与正文 Parley sidecar 成对保存，避免布局缓存脱离字体数据。
     math_block_text_layouts: HashMap<NodeId, HashMap<u64, MathTextSidecar>>,
     math_block_sources: HashMap<NodeId, MathBlockSource>,
@@ -244,6 +327,7 @@ pub(crate) struct MathPageProjection {
     pub(crate) caret_baseline_y_pt: f64,
     pub(crate) caret_height_pt: f64,
     pub(crate) clip_y_pt: Option<[f64; 2]>,
+    pub(crate) clip_x_pt: Option<[f64; 2]>,
     pub(crate) row_clips: Vec<MathPageRowClip>,
     pub(crate) row_baselines: Vec<MathPageRowBaseline>,
     inline_index: Option<usize>,

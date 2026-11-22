@@ -1948,8 +1948,8 @@ fn public_command_ids_and_error_codes_remain_stable() {
             "edit.table_content_unsupported",
         ),
         (
-            EditError::UnsupportedTableCellMath,
-            "edit.table_cell_math_unsupported",
+            EditError::TableInsertionUnsupported,
+            "edit.table_insertion_unsupported",
         ),
     ];
     for (error, expected) in errors {

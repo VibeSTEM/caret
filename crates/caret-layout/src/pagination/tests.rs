@@ -562,3 +562,105 @@ fn malformed_paragraph_lines_do_not_produce_partial_pages() {
         assert_eq!(error.to_string(), "layout.invalid_line_height");
     }
 }
+
+fn table_layout(row_heights: &[f64]) -> crate::TableGridLayout {
+    let options = crate::TableLayoutOptions {
+        available_width_pt: 100.0,
+        column_count: 1,
+        cell_padding_pt: 0.0,
+        border_width_pt: 0.0,
+        column_gap_pt: 0.0,
+        minimum_column_width_pt: 1.0,
+        minimum_row_ascent_pt: 0.0,
+        minimum_row_descent_pt: 0.0,
+    };
+    let rows = row_heights
+        .iter()
+        .map(|height| crate::TableRowMeasurement {
+            cells: vec![crate::TableCellMeasurement {
+                blocks: vec![crate::MeasuredCellBlock {
+                    height_pt: *height,
+                    first_baseline_pt: 0.0,
+                    space_before_pt: 0.0,
+                    space_after_pt: 0.0,
+                }],
+            }],
+        })
+        .collect::<Vec<_>>();
+    crate::layout_table_grid(&rows, options)
+        .unwrap_or_else(|error| panic!("table layout must build: {error}"))
+}
+
+fn table_item<'a>(
+    id: &'a NodeId,
+    layout: &'a crate::TableGridLayout,
+    before: f32,
+    after: f32,
+) -> PaginationItem<'a> {
+    PaginationItem::Table(super::TablePaginationInput {
+        table_id: id,
+        x_offset_pt: 0.0,
+        layout,
+        space_before_pt: before,
+        space_after_pt: after,
+    })
+}
+
+#[test]
+fn table_rows_split_at_page_boundaries_and_keep_origin_offsets() {
+    let id = NodeId::generate();
+    let paragraph_layout = paragraph(&[10.0]);
+    let layout = table_layout(&[20.0, 20.0, 20.0]);
+    let pages = paginate_paragraphs(
+        &[
+            input(&id, &paragraph_layout, 0.0, 0.0),
+            table_item(&id, &layout, 0.0, 0.0),
+        ],
+        45.0,
+    )
+    .unwrap_or_else(|error| panic!("pagination must succeed: {error}"));
+
+    assert_eq!(pages.len(), 2);
+    let first_table = &pages[0].table_fragments[0];
+    assert_eq!(first_table.row_range, 0..1);
+    assert!((first_table.y_offset_pt - 10.0).abs() < 1e-6);
+    let second_table = &pages[1].table_fragments[0];
+    assert_eq!(second_table.row_range, 1..3);
+    // 第二页从表格第 2 行开始，表格原点位于页顶上方 20pt。
+    assert!((second_table.y_offset_pt + 20.0).abs() < 1e-6);
+    assert!((pages[1].used_height_pt - 40.0).abs() < 1e-6);
+}
+
+#[test]
+fn table_rows_larger_than_page_overflow_without_extra_blank_pages() {
+    let id = NodeId::generate();
+    let layout = table_layout(&[30.0, 30.0]);
+    let pages = paginate_paragraphs(&[table_item(&id, &layout, 4.0, 6.0)], 40.0)
+        .unwrap_or_else(|error| panic!("pagination must succeed: {error}"));
+    assert_eq!(pages.len(), 2);
+    assert_eq!(pages[0].table_fragments[0].row_range, 0..1);
+    assert_eq!(pages[1].table_fragments[0].row_range, 1..2);
+
+    let oversized = table_layout(&[50.0]);
+    let pages = paginate_paragraphs(&[table_item(&id, &oversized, 0.0, 0.0)], 40.0)
+        .unwrap_or_else(|error| panic!("pagination must succeed: {error}"));
+    assert_eq!(pages.len(), 1);
+    assert!((pages[0].used_height_pt - 50.0).abs() < 1e-6);
+}
+
+#[test]
+fn table_spacing_merges_with_previous_paragraph() {
+    let id = NodeId::generate();
+    let paragraph_layout = paragraph(&[20.0]);
+    let layout = table_layout(&[10.0]);
+    let pages = paginate_paragraphs(
+        &[
+            input(&id, &paragraph_layout, 0.0, 8.0),
+            table_item(&id, &layout, 5.0, 0.0),
+        ],
+        100.0,
+    )
+    .unwrap_or_else(|error| panic!("pagination must succeed: {error}"));
+    assert_eq!(pages.len(), 1);
+    assert!((pages[0].table_fragments[0].y_offset_pt - 28.0).abs() < 1e-6);
+}

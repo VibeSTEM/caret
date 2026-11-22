@@ -26,6 +26,11 @@ criterion.workspace = true
 serde_json.workspace = true
 
 [[bench]]
+name = "table_layout_criterion"
+harness = false
+path = "../../tests/performance/rust/cpu/table_layout_criterion.rs"
+
+[[bench]]
 name = "novel_document_criterion"
 path = "../../tests/performance/rust/cpu/novel_document_criterion.rs"
 harness = false

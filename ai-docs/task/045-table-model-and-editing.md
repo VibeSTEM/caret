@@ -41,7 +41,7 @@
 - [x] 表格、行、单元格在 `.cdoc` 保存重开后 ID、顺序和内容一致（`caret-doc` 模型/存储用例 + `tests/rust/document.rs` 黑盒往返，含单元格内 InlineMath/Equation）。
 - [x] 插入默认 2×2；插入行、插入列、删除行、删除列各有专用命令；无合并单元格。快捷键意图（Tab/Shift+Tab、结构方向键、删除行 Alt+Shift+Backspace/Delete）已在 Rust 实现并先更新唯一快捷键权威文档；native 物理键位与命令面板入口按决策随 046 接线。
 - [x] Enter、Tab、Shift+Tab 和表格边界移动符合可观察行为；删除/插入失败不留下半更新状态（候选文档克隆校验后才替换，失败保留文档、选区、generation 与历史）。单元格移动只改选区，不推进 generation/历史。
-- [x] 单元格接受通用块、行内公式、显示公式与 Align 的模型与持久化；表格模块不直接依赖 `caret-math`，不复制公式模型。**限制**：单元格内公式的编辑目标/进入/导航依赖 046 单元格画布与容器感知公式定位器，当前明确返回 `edit.table_cell_math_unsupported`，不会进入半坏状态。
+- [x] 单元格接受通用块、行内公式、显示公式与 Align 的模型与持久化；表格模块不直接依赖 `caret-math`，不复制公式模型。046 已完成容器感知公式定位器与单元格公式布局：cell 内 Equation/Align/InlineMath 的插入、继续输入、退出、删除与 Undo，以及 cell Align 行结构编辑已在 046 分支接通；整表复制/结构范围与跨 cell 选择按 046 限制移交后续切片。
 - [x] 命令/模型行为测试、格式与 lint 通过；领域评审与独立 final review 通过；PR CI 全绿（PR #167）。
 
 ## 验证计划与结果

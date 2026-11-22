@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
+use super::table_layout::{ShapedParagraphs, ShapedTable, expand_table_fragments};
 use super::*;
+use caret_structure::{BlockContainerPath, ContainerStep};
 
 impl LaidOutParagraph {
     fn new(input: LaidOutParagraphInput) -> Self {
@@ -21,9 +23,10 @@ impl LaidOutParagraph {
         Self {
             id: input.source_paragraph.id.clone(),
             story: input.story,
-            environment_ids: Arc::from(input.environment_ids),
+            container: input.container,
             source_paragraph: Arc::new(input.source_paragraph),
             resolved_style: input.resolved_style,
+            layout_width_pt: input.layout_width_pt,
             math_caret_height_pt: input.math_caret_height_pt,
             math_caret_baseline_pt: input.math_caret_baseline_pt,
             text: Arc::from(input.text),
@@ -40,23 +43,26 @@ impl LaidOutParagraph {
     fn can_reuse(
         &self,
         story: &StoryId,
-        environment_ids: &[NodeId],
+        container: &BlockContainerPath,
         paragraph: &Paragraph,
         resolved_style: ResolvedParagraphStyle,
+        layout_width_pt: f32,
     ) -> bool {
         self.story == *story
-            && self.environment_ids.as_ref() == environment_ids
+            && &self.container == container
             && self.source_paragraph.as_ref() == paragraph
             && self.resolved_style == resolved_style
+            && self.layout_width_pt == layout_width_pt
     }
 
-    pub(super) fn reused_for_layout(&self, story: StoryId, environment_ids: &[NodeId]) -> Self {
+    pub(super) fn reused_for_layout(&self, story: StoryId, container: &BlockContainerPath) -> Self {
         Self {
             id: self.id.clone(),
             story,
-            environment_ids: Arc::from(environment_ids),
+            container: container.clone(),
             source_paragraph: Arc::clone(&self.source_paragraph),
             resolved_style: self.resolved_style,
+            layout_width_pt: self.layout_width_pt,
             math_caret_height_pt: self.math_caret_height_pt,
             math_caret_baseline_pt: self.math_caret_baseline_pt,
             text: Arc::clone(&self.text),
@@ -94,9 +100,9 @@ const EMPTY_INLINE_MATH_CARET_ADVANCE_PT: f32 = 1.5;
 /// 可复用塑形器；调用方跨文档代际复用字体目录，避免按段落扫描系统字体。
 #[derive(Default)]
 pub struct DocumentLayoutService {
-    layouter: ParagraphLayouter,
+    pub(super) layouter: ParagraphLayouter,
     line_grid_metrics_cache: Option<LineGridMetricsCache>,
-    math_layout_engine: Option<caret_math::layout::MathLayoutEngine>,
+    pub(super) math_layout_engine: Option<caret_math::layout::MathLayoutEngine>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -107,10 +113,21 @@ struct LineGridMetricsCache {
     metrics: caret_layout::FontLineMetrics,
 }
 
-struct ParagraphShapingSettings<'a> {
-    base_style: &'a ShapingStyle,
-    text_settings: &'a ResolvedDocumentTextSettings,
-    content_width_pt: f32,
+pub(super) struct ParagraphShapingSettings<'a> {
+    pub(super) base_style: &'a ShapingStyle,
+    pub(super) text_settings: &'a ResolvedDocumentTextSettings,
+    pub(super) content_width_pt: f32,
+}
+
+/// 单个段落的塑形请求；把可选复用、文档与样式设置收束成一条稳定入口。
+pub(super) struct ParagraphShapingRequest<'a> {
+    pub(super) document: &'a Document,
+    pub(super) paragraph: &'a Paragraph,
+    pub(super) story: StoryId,
+    pub(super) container: &'a BlockContainerPath,
+    pub(super) width_pt: f32,
+    pub(super) reuse: Option<(&'a DocumentLayoutSnapshot, Option<&'a NodeId>)>,
+    pub(super) settings: &'a ParagraphShapingSettings<'a>,
 }
 
 impl DocumentLayoutService {
@@ -118,7 +135,7 @@ impl DocumentLayoutService {
         Self::default()
     }
 
-    fn resolve_line_grid_metrics(
+    pub(super) fn resolve_line_grid_metrics(
         &mut self,
         catalog: &mut FontCatalog,
         settings: &ResolvedDocumentTextSettings,
@@ -264,109 +281,178 @@ impl DocumentLayoutService {
         reuse: Option<(&DocumentLayoutSnapshot, Option<&NodeId>)>,
         catalog: &mut FontCatalog,
         settings: ParagraphShapingSettings<'_>,
-    ) -> Result<(Vec<LaidOutParagraph>, Vec<ResolvedParagraphStyle>), DocumentLayoutError> {
-        let ParagraphShapingSettings {
-            base_style,
-            text_settings,
-            content_width_pt,
-        } = settings;
+    ) -> Result<ShapedParagraphs, DocumentLayoutError> {
         let paragraph_count = ordered_inputs
             .iter()
             .filter(|item| matches!(item, LayoutInput::Paragraph { .. }))
             .count();
         let mut paragraphs = Vec::with_capacity(paragraph_count);
         let mut resolved_styles = Vec::with_capacity(paragraph_count);
+        let mut shaped_tables = Vec::new();
         for item in ordered_inputs {
-            let LayoutInput::Paragraph {
-                paragraph,
-                story,
-                environment_ids,
-            } = item
-            else {
-                continue;
-            };
-            let style =
-                resolve_paragraph_style(&document.global_settings, paragraph.layout.as_ref())
-                    .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))?;
-            if let Some((previous, changed_paragraph_id)) = reuse
-                && changed_paragraph_id.is_none_or(|changed_id| &paragraph.id != changed_id)
-                && let Some(previous_paragraph) = previous.paragraph_by_id(&paragraph.id)
-                && previous_paragraph.can_reuse(story, environment_ids.as_slice(), paragraph, style)
-            {
-                paragraphs.push(
-                    previous_paragraph.reused_for_layout(story.clone(), environment_ids.as_slice()),
-                );
-                resolved_styles.push(style);
-                continue;
+            match item {
+                LayoutInput::Paragraph {
+                    paragraph,
+                    story,
+                    container,
+                    width_pt,
+                } => {
+                    let (laid_out, style) = self.shape_paragraph(
+                        catalog,
+                        ParagraphShapingRequest {
+                            document,
+                            paragraph,
+                            story: story.clone(),
+                            container,
+                            width_pt: *width_pt,
+                            reuse,
+                            settings: &settings,
+                        },
+                    )?;
+                    paragraphs.push(laid_out);
+                    resolved_styles.push(style);
+                }
+                LayoutInput::Table {
+                    table,
+                    container,
+                    space_before_pt,
+                    space_after_pt,
+                } => {
+                    let paragraph_base = paragraphs.len();
+                    let (laid_out, styles, mut shaped) = self.shape_table(
+                        catalog,
+                        super::table_layout::TableShapingRequest {
+                            document,
+                            table,
+                            container,
+                            space_before_pt: *space_before_pt,
+                            space_after_pt: *space_after_pt,
+                            reuse,
+                            settings: &settings,
+                        },
+                    )?;
+                    for (paragraph, style) in laid_out.into_iter().zip(styles) {
+                        paragraphs.push(paragraph);
+                        resolved_styles.push(style);
+                    }
+                    // shape_table 内部使用表内局部段落下标；并入全局段落序列时统一加基址，
+                    // 避免表格前有正文段落时 cell 片段索引指向错误段落。
+                    for table in &mut shaped {
+                        for row in &mut table.rows {
+                            for cell in &mut row.cells {
+                                cell.shift_paragraph_indices(paragraph_base);
+                            }
+                        }
+                    }
+                    shaped_tables.extend(shaped);
+                }
+                LayoutInput::ExplicitBreak | LayoutInput::MathBlock { .. } => {}
             }
-            let line_grid_metrics = self.resolve_line_grid_metrics(
+        }
+
+        Ok((paragraphs, resolved_styles, shaped_tables))
+    }
+
+    pub(super) fn shape_paragraph(
+        &mut self,
+        catalog: &mut FontCatalog,
+        request: ParagraphShapingRequest<'_>,
+    ) -> Result<(LaidOutParagraph, ResolvedParagraphStyle), DocumentLayoutError> {
+        let ParagraphShapingRequest {
+            document,
+            paragraph,
+            story,
+            container,
+            width_pt,
+            reuse,
+            settings,
+        } = request;
+        let ParagraphShapingSettings {
+            base_style,
+            text_settings,
+            ..
+        } = settings;
+        let style = resolve_paragraph_style(&document.global_settings, paragraph.layout.as_ref())
+            .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))?;
+        if let Some((previous, changed_paragraph_id)) = reuse
+            && changed_paragraph_id.is_none_or(|changed_id| &paragraph.id != changed_id)
+            && let Some(previous_paragraph) = previous.paragraph_by_id(&paragraph.id)
+            && previous_paragraph.can_reuse(&story, container, paragraph, style, width_pt)
+        {
+            return Ok((
+                previous_paragraph.reused_for_layout(story, container),
+                style,
+            ));
+        }
+        let line_grid_metrics = self.resolve_line_grid_metrics(
+            catalog,
+            text_settings,
+            base_style,
+            text_settings.default_language(),
+        )?;
+        let paragraph_caret_metrics =
+            calculate_line_metrics_with_grid(line_grid_metrics, &[], &[], style.line_spacing)
+                .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))?;
+        let needs_mark_metrics = paragraph_has_empty_line(paragraph);
+        if needs_mark_metrics && !paragraph.mark_style.is_empty() {
+            return Err(DocumentLayoutError::UnsupportedParagraphMarkStyle);
+        }
+        let inline_layouts = if let Some(engine) = self.math_layout_engine.as_ref() {
+            let mut inline_context = MathLayoutContext {
+                engine: Some(engine),
                 catalog,
+                settings: text_settings,
+                base_style,
+                text_layouter: &mut self.layouter,
+                font_size_centipoints: base_style.font_size_centipoints,
+                content_width_pt: width_pt,
+                line_grid_metrics,
+                line_spacing: style.line_spacing,
+                space_before_pt: style.space_before_pt,
+                space_after_pt: style.space_after_pt,
+                caret_metrics: paragraph_caret_metrics,
+            };
+            let previous_paragraph =
+                reuse.and_then(|(previous, _)| previous.paragraph_by_id(&paragraph.id));
+            collect_inline_math_layouts(paragraph, &mut inline_context, previous_paragraph)?
+        } else {
+            InlineMathLayouts {
+                objects: Vec::new(),
+                layouts: Vec::new(),
+                ids: Vec::new(),
+                text_layouts: Vec::new(),
+            }
+        };
+        let InlineMathLayouts {
+            objects: inline_object_layouts,
+            layouts: inline_math_layouts,
+            ids: inline_math_ids,
+            text_layouts: inline_math_text_layouts,
+        } = inline_layouts;
+        let (text, layout) = self
+            .layouter
+            .layout_with_inline_objects(
+                catalog,
+                paragraph,
                 text_settings,
                 base_style,
-                text_settings.default_language(),
-            )?;
-            let paragraph_caret_metrics =
-                calculate_line_metrics_with_grid(line_grid_metrics, &[], &[], style.line_spacing)
-                    .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))?;
-            let needs_mark_metrics = paragraph_has_empty_line(paragraph);
-            if needs_mark_metrics && !paragraph.mark_style.is_empty() {
-                return Err(DocumentLayoutError::UnsupportedParagraphMarkStyle);
-            }
-            let inline_layouts = if let Some(engine) = self.math_layout_engine.as_ref() {
-                let mut inline_context = MathLayoutContext {
-                    engine: Some(engine),
-                    catalog,
-                    settings: text_settings,
-                    base_style,
-                    text_layouter: &mut self.layouter,
-                    font_size_centipoints: base_style.font_size_centipoints,
-                    content_width_pt,
+                ParagraphLayoutOptions {
+                    width_pt,
+                    spacing: style.line_spacing,
                     line_grid_metrics,
-                    line_spacing: style.line_spacing,
-                    space_before_pt: style.space_before_pt,
-                    space_after_pt: style.space_after_pt,
-                    caret_metrics: paragraph_caret_metrics,
-                };
-                let previous_paragraph =
-                    reuse.and_then(|(previous, _)| previous.paragraph_by_id(&paragraph.id));
-                collect_inline_math_layouts(paragraph, &mut inline_context, previous_paragraph)?
-            } else {
-                InlineMathLayouts {
-                    objects: Vec::new(),
-                    layouts: Vec::new(),
-                    ids: Vec::new(),
-                    text_layouts: Vec::new(),
-                }
-            };
-            let InlineMathLayouts {
-                objects: inline_object_layouts,
-                layouts: inline_math_layouts,
-                ids: inline_math_ids,
-                text_layouts: inline_math_text_layouts,
-            } = inline_layouts;
-            let (text, layout) = self
-                .layouter
-                .layout_with_inline_objects(
-                    catalog,
-                    paragraph,
-                    text_settings,
-                    base_style,
-                    ParagraphLayoutOptions {
-                        width_pt: content_width_pt,
-                        spacing: style.line_spacing,
-                        line_grid_metrics,
-                        line_grid_font_size_centipoints: base_style.font_size_centipoints,
-                        first_line_indent_chars: style.first_line_indent_chars,
-                    },
-                    &inline_object_layouts,
-                )
-                .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))?;
-            resolved_styles.push(style);
-            paragraphs.push(LaidOutParagraph::new(LaidOutParagraphInput {
-                source_paragraph: (*paragraph).clone(),
-                story: story.clone(),
-                environment_ids: environment_ids.clone(),
+                    line_grid_font_size_centipoints: base_style.font_size_centipoints,
+                    first_line_indent_chars: style.first_line_indent_chars,
+                },
+                &inline_object_layouts,
+            )
+            .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))?;
+        Ok((
+            LaidOutParagraph::new(LaidOutParagraphInput {
+                source_paragraph: paragraph.clone(),
+                story,
+                container: container.clone(),
                 resolved_style: style,
+                layout_width_pt: width_pt,
                 math_caret_height_pt: paragraph_caret_metrics.height_pt,
                 math_caret_baseline_pt: paragraph_caret_metrics.baseline_pt,
                 text,
@@ -378,12 +464,12 @@ impl DocumentLayoutService {
                     .map(|object| object.source_bytes.clone())
                     .collect(),
                 inline_math_text_layouts,
-            }));
-        }
-
-        Ok((paragraphs, resolved_styles))
+            }),
+            style,
+        ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn layout_with_reuse(
         &mut self,
         document: &Document,
@@ -468,13 +554,13 @@ impl DocumentLayoutService {
             collect_blocks(
                 &document.body,
                 &mut ordered_inputs,
-                &mut Vec::new(),
+                &mut BlockContainerPath::default(),
                 &mut math_context,
                 reuse.map(|(previous, _)| previous),
             )?;
         }
 
-        let (mut paragraphs, resolved_styles) = self.shape_paragraphs(
+        let (mut paragraphs, resolved_styles, shaped_tables) = self.shape_paragraphs(
             document,
             &ordered_inputs,
             reuse,
@@ -488,17 +574,20 @@ impl DocumentLayoutService {
 
         let page_geometries = PageGeometries::paginate_and_index(
             &ordered_inputs,
+            &shaped_tables,
             &mut paragraphs,
             &resolved_styles,
-            page_width_pt,
-            page_height_pt,
-            [
-                geometry.margins.left,
-                geometry.margins.top,
-                geometry.margins.right,
-                geometry.margins.bottom,
-            ],
-            content_height_pt,
+            PaginationGeometry {
+                page_width_pt,
+                page_height_pt,
+                margins_pt: [
+                    geometry.margins.left,
+                    geometry.margins.top,
+                    geometry.margins.right,
+                    geometry.margins.bottom,
+                ],
+                content_height_pt,
+            },
         )?;
         // 消费布局输入，单次派生全部块级公式映射；值字段直接移动，只有三张映射的键
         // 需要克隆两次。
@@ -520,6 +609,23 @@ impl DocumentLayoutService {
             math_block_text_layouts.insert(math_id.clone(), text_layouts);
             math_block_sources.insert(math_id, *source);
         }
+        for table in &shaped_tables {
+            for row in &table.rows {
+                for cell in &row.cells {
+                    for math in &cell.math_blocks {
+                        math_blocks
+                            .entry(math.math_id.clone())
+                            .or_insert_with(|| std::sync::Arc::clone(&math.layout));
+                        math_block_text_layouts
+                            .entry(math.math_id.clone())
+                            .or_insert_with(|| math.text_layouts.clone());
+                        math_block_sources
+                            .entry(math.math_id.clone())
+                            .or_insert_with(|| math.source.clone());
+                    }
+                }
+            }
+        }
         let mut math_hosts = HashMap::new();
         collect_math_hosts(&document.body, &mut math_hosts);
         let math_projections = collect_math_projections(
@@ -530,6 +636,17 @@ impl DocumentLayoutService {
         );
         let math_projection_index = MathProjectionIndex::new(math_projections);
         let text_diagnostics = collect_text_layout_diagnostics(&paragraphs, &math_blocks);
+        let table_layouts = shaped_tables
+            .iter()
+            .map(|table| (table.table_id.clone(), std::sync::Arc::clone(&table.grid)))
+            .collect();
+        let table_math_ids = shaped_tables
+            .iter()
+            .flat_map(|table| &table.rows)
+            .flat_map(|row| &row.cells)
+            .flat_map(|cell| &cell.math_blocks)
+            .map(|math| math.math_id.clone())
+            .collect();
         Ok(DocumentLayoutSnapshot {
             session_id: None,
             document_generation,
@@ -545,6 +662,8 @@ impl DocumentLayoutService {
             pages: page_geometries.pages,
             environment_ranges: page_geometries.environment_ranges,
             math_blocks,
+            table_layouts,
+            table_math_ids,
             math_block_text_layouts,
             math_block_sources,
             math_hosts,
@@ -553,26 +672,68 @@ impl DocumentLayoutService {
     }
 }
 
+struct PaginationGeometry {
+    page_width_pt: f64,
+    page_height_pt: f64,
+    margins_pt: [f64; 4],
+    content_height_pt: f64,
+}
+
 impl PageGeometries {
     fn paginate_and_index(
         ordered_inputs: &[LayoutInput<'_>],
+        shaped_tables: &[ShapedTable],
         paragraphs: &mut [LaidOutParagraph],
         resolved_styles: &[ResolvedParagraphStyle],
-        page_width_pt: f64,
-        page_height_pt: f64,
-        margins_pt: [f64; 4],
-        content_height_pt: f64,
+        geometry: PaginationGeometry,
     ) -> Result<Self, DocumentLayoutError> {
+        let PaginationGeometry {
+            page_width_pt,
+            page_height_pt,
+            margins_pt,
+            content_height_pt,
+        } = geometry;
+        let content_width_pt = page_width_pt - margins_pt[0] - margins_pt[2];
         let mut math_block_environment_ids = HashMap::new();
+        let paragraph_positions: std::collections::HashMap<NodeId, usize> = paragraphs
+            .iter()
+            .enumerate()
+            .map(|(index, paragraph)| (paragraph.id.clone(), index))
+            .collect();
         let page_layouts = {
             let mut pagination_items = Vec::with_capacity(ordered_inputs.len());
-            let mut paragraph_index = 0;
+            let mut table_index = 0;
             for item in ordered_inputs {
                 match item {
                     LayoutInput::ExplicitBreak => {
                         pagination_items.push(PaginationItem::ExplicitPageBreak);
                     }
-                    LayoutInput::Paragraph { .. } => {
+                    LayoutInput::Table { .. } => {
+                        let shaped = shaped_tables.get(table_index).ok_or_else(|| {
+                            DocumentLayoutError::InvalidDocument("missing laid out table".into())
+                        })?;
+                        table_index += 1;
+                        let width_pt = shaped.grid.width_pt as f32;
+                        let x_offset_pt = ((content_width_pt as f32 - width_pt) / 2.0).max(0.0);
+                        pagination_items.push(PaginationItem::Table(
+                            caret_layout::TablePaginationInput {
+                                table_id: &shaped.table_id,
+                                x_offset_pt,
+                                layout: shaped.grid.as_ref(),
+                                space_before_pt: shaped.space_before_pt,
+                                space_after_pt: shaped.space_after_pt,
+                            },
+                        ));
+                    }
+                    LayoutInput::Paragraph { paragraph, .. } => {
+                        let paragraph_index = paragraph_positions
+                            .get(&paragraph.id)
+                            .copied()
+                            .ok_or_else(|| {
+                                DocumentLayoutError::InvalidDocument(
+                                    "missing laid out paragraph".into(),
+                                )
+                            })?;
                         let paragraph = paragraphs.get(paragraph_index).ok_or_else(|| {
                             DocumentLayoutError::InvalidDocument(
                                 "missing laid out paragraph".into(),
@@ -588,7 +749,6 @@ impl PageGeometries {
                                 *style,
                             ),
                         ));
-                        paragraph_index += 1;
                     }
                     LayoutInput::MathBlock {
                         math_id,
@@ -625,7 +785,7 @@ impl PageGeometries {
             paginate_paragraphs(&pagination_items, content_height_pt as f32)
                 .map_err(|error| DocumentLayoutError::Pagination(error.to_string()))?
         };
-        let pages: Vec<_> = page_layouts
+        let mut pages: Vec<_> = page_layouts
             .into_iter()
             .map(|layout| PageLayoutSnapshot {
                 width_pt: page_width_pt,
@@ -635,6 +795,7 @@ impl PageGeometries {
                 margin_right_pt: margins_pt[2],
                 margin_bottom_pt: margins_pt[3],
                 layout,
+                table_math_placements: Vec::new(),
             })
             .collect();
         let paragraph_lookup: HashMap<_, _> = paragraphs
@@ -651,17 +812,33 @@ impl PageGeometries {
                     continue;
                 };
                 let mut y0_pt = page.margin_top_pt + f64::from(fragment.y_offset_pt);
+                let x0_pt = page.margin_left_pt + f64::from(fragment.x_offset_pt);
+                let clip = fragment.clip.map(|clip| {
+                    PageClip::from_array([
+                        page.margin_left_pt + f64::from(clip.x0_pt),
+                        page.margin_top_pt + f64::from(clip.y0_pt),
+                        page.margin_left_pt + f64::from(clip.x1_pt),
+                        page.margin_top_pt + f64::from(clip.y1_pt),
+                    ])
+                });
                 for line_index in fragment.line_range.clone() {
                     let Some(line) = paragraph.layout.paragraph.lines.get(line_index) else {
                         continue;
                     };
                     if let Some(location) = paragraph.line_locations.get_mut(line_index) {
-                        *location = Some(CaretLineLocation { page_index, y0_pt });
+                        *location = Some(CaretLineLocation {
+                            page_index,
+                            x0_pt,
+                            y0_pt,
+                            clip,
+                            hit_clip: None,
+                        });
                     }
                     y0_pt += f64::from(line.metrics.height_pt);
                 }
             }
         }
+        expand_table_fragments(&mut pages, shaped_tables, paragraphs)?;
         let environment_ranges = collect_environment_ranges(
             &pages,
             paragraphs,
@@ -747,6 +924,13 @@ fn collect_math_hosts(blocks: &[Block], hosts: &mut HashMap<NodeId, MathTextLayo
                     MathTextLayoutHost::align(align.id.clone(), align),
                 );
             }
+            Block::Table(table) => {
+                for row in &table.rows {
+                    for cell in &row.cells {
+                        collect_math_hosts(&cell.blocks, hosts);
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -766,6 +950,7 @@ fn collect_math_projections(
                     math_id: fragment.math_id.clone(),
                     page_index,
                     object_x_pt: page.margin_left_pt + f64::from(fragment.x_offset_pt),
+                    clip_x_pt: None,
                     baseline_y_pt: page.margin_top_pt
                         + f64::from(fragment.y_offset_pt)
                         + f64::from(fragment.baseline_pt),
@@ -813,6 +998,25 @@ fn collect_math_projections(
                 });
             }
         }
+        for placement in &page.table_math_placements {
+            if !math_blocks.contains_key(&placement.math_id) {
+                continue;
+            }
+            projections.push(MathPageProjection {
+                math_id: placement.math_id.clone(),
+                page_index,
+                object_x_pt: placement.object_x_pt,
+                baseline_y_pt: placement.baseline_y_pt,
+                caret_line_top_pt: placement.caret_line_top_pt,
+                caret_baseline_y_pt: placement.caret_baseline_y_pt,
+                caret_height_pt: placement.caret_height_pt,
+                clip_y_pt: placement.clip_y_pt,
+                clip_x_pt: placement.clip_x_pt,
+                row_clips: Vec::new(),
+                row_baselines: Vec::new(),
+                inline_index: None,
+            });
+        }
         for fragment in &page.layout.fragments {
             let Some(paragraph) = paragraph_lookup
                 .get(&fragment.paragraph_id)
@@ -820,11 +1024,19 @@ fn collect_math_projections(
             else {
                 continue;
             };
-            let mut line_top = page.margin_top_pt + f64::from(fragment.y_offset_pt);
             for line_index in fragment.line_range.clone() {
                 let Some(line_box) = paragraph.layout.paragraph.lines.get(line_index) else {
                     continue;
                 };
+                let Some(location) = paragraph
+                    .line_locations
+                    .get(line_index)
+                    .and_then(Option::as_ref)
+                else {
+                    continue;
+                };
+                let line_top = location.y0_pt;
+                let line_x = location.x0_pt;
                 let height = f64::from(line_box.metrics.height_pt);
                 if let Some(line) = paragraph.layout.layout.get(line_index) {
                     for item in line.items() {
@@ -847,7 +1059,8 @@ fn collect_math_projections(
                         projections.push(MathPageProjection {
                             math_id: math_id.clone(),
                             page_index,
-                            object_x_pt: page.margin_left_pt + f64::from(inline_box.x),
+                            object_x_pt: line_x + f64::from(inline_box.x),
+                            clip_x_pt: None,
                             baseline_y_pt,
                             caret_line_top_pt: line_top,
                             caret_baseline_y_pt: line_top
@@ -856,14 +1069,21 @@ fn collect_math_projections(
                             clip_y_pt: line_box
                                 .metrics
                                 .clip_ink_to_line_height
-                                .then_some([line_top, line_top + height]),
+                                .then_some([line_top, line_top + height])
+                                .or_else(|| {
+                                    location.clip.map(|clip| {
+                                        [
+                                            clip.y0_pt.max(line_top),
+                                            clip.y1_pt.min(line_top + height),
+                                        ]
+                                    })
+                                }),
                             row_clips: Vec::new(),
                             row_baselines: Vec::new(),
                             inline_index: Some(index),
                         });
                     }
                 }
-                line_top += height;
             }
         }
     }
@@ -911,7 +1131,7 @@ fn collect_environment_ranges(
             };
             let y0_pt = first_line.y0_pt;
             let y1_pt = last_line.y0_pt + f64::from(line.metrics.height_pt);
-            for environment_id in paragraph.environment_ids.iter() {
+            for environment_id in paragraph.container.environment_ids().iter() {
                 ranges
                     .entry((environment_id.clone(), page_index))
                     .and_modify(|range| {
@@ -1875,26 +2095,34 @@ pub(super) fn resolved_math_base_style(
     style
 }
 
-struct MathLayoutContext<'a> {
-    engine: Option<&'a caret_math::layout::MathLayoutEngine>,
-    catalog: &'a mut FontCatalog,
-    settings: &'a ResolvedDocumentTextSettings,
-    base_style: &'a ShapingStyle,
-    text_layouter: &'a mut ParagraphLayouter,
-    font_size_centipoints: u16,
-    content_width_pt: f32,
-    line_grid_metrics: FontLineMetrics,
-    line_spacing: LineSpacing,
-    space_before_pt: f32,
-    space_after_pt: f32,
-    caret_metrics: LineMetrics,
+pub(super) struct MathLayoutContext<'a> {
+    pub(super) engine: Option<&'a caret_math::layout::MathLayoutEngine>,
+    pub(super) catalog: &'a mut FontCatalog,
+    pub(super) settings: &'a ResolvedDocumentTextSettings,
+    pub(super) base_style: &'a ShapingStyle,
+    pub(super) text_layouter: &'a mut ParagraphLayouter,
+    pub(super) font_size_centipoints: u16,
+    pub(super) content_width_pt: f32,
+    pub(super) line_grid_metrics: FontLineMetrics,
+    pub(super) line_spacing: LineSpacing,
+    pub(super) space_before_pt: f32,
+    pub(super) space_after_pt: f32,
+    pub(super) caret_metrics: LineMetrics,
 }
 
 enum LayoutInput<'a> {
     Paragraph {
         paragraph: &'a Paragraph,
         story: StoryId,
-        environment_ids: Vec<NodeId>,
+        container: BlockContainerPath,
+        /// 该段落可用的版心宽度；正文为全局版心，单元格为列内容宽度。
+        width_pt: f32,
+    },
+    Table {
+        table: &'a caret_doc::Table,
+        container: BlockContainerPath,
+        space_before_pt: f32,
+        space_after_pt: f32,
     },
     ExplicitBreak,
     MathBlock {
@@ -1936,7 +2164,7 @@ fn reuse_math_block(
 fn collect_blocks<'a>(
     blocks: &'a [Block],
     ordered: &mut Vec<LayoutInput<'a>>,
-    environment_ids: &mut Vec<NodeId>,
+    container: &mut BlockContainerPath,
     context: &mut MathLayoutContext<'_>,
     previous: Option<&DocumentLayoutSnapshot>,
 ) -> Result<(), DocumentLayoutError> {
@@ -1945,25 +2173,21 @@ fn collect_blocks<'a>(
             Block::Paragraph(paragraph) => ordered.push(LayoutInput::Paragraph {
                 paragraph,
                 story: StoryId::Body,
-                environment_ids: environment_ids.clone(),
+                container: container.clone(),
+                width_pt: context.content_width_pt,
             }),
             Block::Environment(environment) => {
-                environment_ids.push(environment.id.clone());
+                container.push(ContainerStep::Environment(environment.id.clone()));
                 if let Some(title) = &environment.title {
                     ordered.push(LayoutInput::Paragraph {
                         paragraph: title,
                         story: StoryId::EnvironmentTitle(environment.id.clone()),
-                        environment_ids: environment_ids.clone(),
+                        container: container.clone(),
+                        width_pt: context.content_width_pt,
                     });
                 }
-                collect_blocks(
-                    &environment.children,
-                    ordered,
-                    environment_ids,
-                    context,
-                    previous,
-                )?;
-                environment_ids.pop();
+                collect_blocks(&environment.children, ordered, container, context, previous)?;
+                container.pop();
             }
             Block::ExplicitBreak(page_break) => {
                 if !page_break.kind.is_empty() && page_break.kind != "page" {
@@ -1974,155 +2198,178 @@ fn collect_blocks<'a>(
                 ordered.push(LayoutInput::ExplicitBreak);
             }
             Block::Equation(equation) => {
-                let engine = context
-                    .engine
-                    .ok_or(DocumentLayoutError::UnsupportedContent)?;
                 let source = MathBlockSource::Equation(equation.clone());
-                let reused = reuse_math_block(previous, &equation.id, &source);
-                let (layout, text_layouts) = if let Some(reused) = reused {
-                    reused
-                } else if math_flow_contains_text(&equation.math_tree.root) {
-                    let math_base_style =
-                        resolved_math_base_style(context.base_style, context.settings, None);
-                    let mut shaper = EngineMathTextShaper::new(
-                        context.catalog,
-                        context.settings,
-                        &math_base_style,
-                        context.text_layouter,
-                        MathTextLayoutHost::equation(
-                            equation.id.clone(),
-                            equation.math_tree.root.id.clone(),
-                        ),
-                    );
-                    let layout = engine
-                        .layout_with_text_shaper_and_templates(
+                let (layout, text_layouts) = measure_math_block(&source, context, previous)?;
+                push_math_block(
+                    ordered,
+                    source,
+                    layout,
+                    text_layouts,
+                    container.environment_ids(),
+                    context,
+                )?;
+            }
+            Block::Align(align) => {
+                let source = MathBlockSource::Align(align.clone());
+                let (layout, text_layouts) = measure_math_block(&source, context, previous)?;
+                push_math_block(
+                    ordered,
+                    source,
+                    layout,
+                    text_layouts,
+                    container.environment_ids(),
+                    context,
+                )?;
+            }
+            Block::Table(table) => ordered.push(LayoutInput::Table {
+                table,
+                container: container.clone(),
+                space_before_pt: context.space_before_pt,
+                space_after_pt: context.space_after_pt,
+            }),
+            Block::Opaque(_) => return Err(DocumentLayoutError::UnsupportedContent),
+        }
+    }
+    Ok(())
+}
+
+/// 测量显示公式（Equation/Align）；正文与单元格共用同一塑形/复用路径。
+pub(super) fn measure_math_block(
+    source: &MathBlockSource,
+    context: &mut MathLayoutContext<'_>,
+    previous: Option<&DocumentLayoutSnapshot>,
+) -> Result<
+    (
+        Arc<caret_math::layout::MathLayout>,
+        HashMap<u64, MathTextSidecar>,
+    ),
+    DocumentLayoutError,
+> {
+    let math_id = match source {
+        MathBlockSource::Equation(equation) => &equation.id,
+        MathBlockSource::Align(align) => &align.id,
+    };
+    if let Some(reused) = reuse_math_block(previous, math_id, source) {
+        return Ok(reused);
+    }
+    let engine = context
+        .engine
+        .ok_or(DocumentLayoutError::UnsupportedContent)?;
+    match source {
+        MathBlockSource::Equation(equation) => {
+            if math_flow_contains_text(&equation.math_tree.root) {
+                let math_base_style =
+                    resolved_math_base_style(context.base_style, context.settings, None);
+                let mut shaper = EngineMathTextShaper::new(
+                    context.catalog,
+                    context.settings,
+                    &math_base_style,
+                    context.text_layouter,
+                    MathTextLayoutHost::equation(
+                        equation.id.clone(),
+                        equation.math_tree.root.id.clone(),
+                    ),
+                );
+                let layout = engine
+                    .layout_with_text_shaper_and_templates(
+                        &equation.math_tree.root,
+                        DocumentUnits::centipoints_to_points(u32::from(
+                            context.font_size_centipoints,
+                        )),
+                        caret_math::layout::MathStyle::Display,
+                        context.settings.inline_environment_templates(),
+                        &mut shaper,
+                    )
+                    .map_err(|error| DocumentLayoutError::Math(error.to_string()))?;
+                Ok((layout, shaper.into_sidecars()))
+            } else if !context.settings.inline_environment_templates().is_empty() {
+                Ok((
+                    Arc::new(
+                        caret_math::layout::layout_math_with_templates(
+                            engine.font(),
                             &equation.math_tree.root,
                             DocumentUnits::centipoints_to_points(u32::from(
                                 context.font_size_centipoints,
                             )),
                             caret_math::layout::MathStyle::Display,
                             context.settings.inline_environment_templates(),
-                            &mut shaper,
                         )
-                        .map_err(|error| DocumentLayoutError::Math(error.to_string()))?;
-                    (layout, shaper.into_sidecars())
-                } else if !context.settings.inline_environment_templates().is_empty() {
-                    (
-                        Arc::new(
-                            caret_math::layout::layout_math_with_templates(
-                                engine.font(),
-                                &equation.math_tree.root,
-                                DocumentUnits::centipoints_to_points(u32::from(
-                                    context.font_size_centipoints,
-                                )),
-                                caret_math::layout::MathStyle::Display,
-                                context.settings.inline_environment_templates(),
-                            )
-                            .map_err(|error| DocumentLayoutError::Math(error.to_string()))?,
-                        ),
-                        HashMap::new(),
-                    )
-                } else {
-                    (
-                        engine
-                            .layout(
-                                &equation.math_tree.root,
-                                DocumentUnits::centipoints_to_points(u32::from(
-                                    context.font_size_centipoints,
-                                )),
-                                caret_math::layout::MathStyle::Display,
-                            )
-                            .map_err(|error| DocumentLayoutError::Math(error.to_string()))?,
-                        HashMap::new(),
-                    )
-                };
-                push_math_block(
-                    ordered,
-                    source,
-                    layout,
-                    text_layouts,
-                    environment_ids.clone(),
-                    context,
-                )?;
+                        .map_err(|error| DocumentLayoutError::Math(error.to_string()))?,
+                    ),
+                    HashMap::new(),
+                ))
+            } else {
+                Ok((
+                    engine
+                        .layout(
+                            &equation.math_tree.root,
+                            DocumentUnits::centipoints_to_points(u32::from(
+                                context.font_size_centipoints,
+                            )),
+                            caret_math::layout::MathStyle::Display,
+                        )
+                        .map_err(|error| DocumentLayoutError::Math(error.to_string()))?,
+                    HashMap::new(),
+                ))
             }
-            Block::Align(align) => {
-                let engine = context
-                    .engine
-                    .ok_or(DocumentLayoutError::UnsupportedContent)?;
-                let contains_text = align
-                    .rows
-                    .iter()
-                    .flat_map(|row| &row.cells)
-                    .any(|cell| math_flow_contains_text(&cell.root));
-                let source = MathBlockSource::Align(align.clone());
-                let (layout, text_layouts) = if contains_text {
-                    let math_base_style =
-                        resolved_math_base_style(context.base_style, context.settings, None);
-                    let mut shaper = EngineMathTextShaper::new(
-                        context.catalog,
-                        context.settings,
-                        &math_base_style,
-                        context.text_layouter,
-                        MathTextLayoutHost::align(align.id.clone(), align),
-                    );
-                    (
-                        Arc::new(
-                            caret_math::layout::layout_align_with_host_row_grid(
-                                engine.font(),
-                                align,
-                                DocumentUnits::centipoints_to_points(u32::from(
-                                    context.font_size_centipoints,
-                                )),
-                                context.settings.inline_environment_templates(),
-                                Some(&mut shaper),
-                                math_host_row_grid(
-                                    context.line_grid_metrics,
-                                    context.caret_metrics,
-                                    context.line_spacing,
-                                )?,
-                            )
-                            .map_err(|error| DocumentLayoutError::Math(error.to_string()))?,
-                        ),
-                        shaper.into_sidecars(),
-                    )
-                } else {
-                    (
-                        Arc::new(
-                            caret_math::layout::layout_align_with_host_row_grid(
-                                engine.font(),
-                                align,
-                                DocumentUnits::centipoints_to_points(u32::from(
-                                    context.font_size_centipoints,
-                                )),
-                                context.settings.inline_environment_templates(),
-                                None,
-                                math_host_row_grid(
-                                    context.line_grid_metrics,
-                                    context.caret_metrics,
-                                    context.line_spacing,
-                                )?,
-                            )
-                            .map_err(|error| DocumentLayoutError::Math(error.to_string()))?,
-                        ),
-                        HashMap::new(),
-                    )
-                };
-                push_math_block(
-                    ordered,
-                    source,
-                    layout,
-                    text_layouts,
-                    environment_ids.clone(),
-                    context,
-                )?;
+        }
+        MathBlockSource::Align(align) => {
+            let contains_text = align
+                .rows
+                .iter()
+                .flat_map(|row| &row.cells)
+                .any(|cell| math_flow_contains_text(&cell.root));
+            let host_row_grid = math_host_row_grid(
+                context.line_grid_metrics,
+                context.caret_metrics,
+                context.line_spacing,
+            )?;
+            if contains_text {
+                let math_base_style =
+                    resolved_math_base_style(context.base_style, context.settings, None);
+                let mut shaper = EngineMathTextShaper::new(
+                    context.catalog,
+                    context.settings,
+                    &math_base_style,
+                    context.text_layouter,
+                    MathTextLayoutHost::align(align.id.clone(), align),
+                );
+                Ok((
+                    Arc::new(
+                        caret_math::layout::layout_align_with_host_row_grid(
+                            engine.font(),
+                            align,
+                            DocumentUnits::centipoints_to_points(u32::from(
+                                context.font_size_centipoints,
+                            )),
+                            context.settings.inline_environment_templates(),
+                            Some(&mut shaper),
+                            host_row_grid,
+                        )
+                        .map_err(|error| DocumentLayoutError::Math(error.to_string()))?,
+                    ),
+                    shaper.into_sidecars(),
+                ))
+            } else {
+                Ok((
+                    Arc::new(
+                        caret_math::layout::layout_align_with_host_row_grid(
+                            engine.font(),
+                            align,
+                            DocumentUnits::centipoints_to_points(u32::from(
+                                context.font_size_centipoints,
+                            )),
+                            context.settings.inline_environment_templates(),
+                            None,
+                            host_row_grid,
+                        )
+                        .map_err(|error| DocumentLayoutError::Math(error.to_string()))?,
+                    ),
+                    HashMap::new(),
+                ))
             }
-            // 045 只交付模型与编辑；表格画布/网格布局由 046 承接，在此之前
-            // 含表文档打开时得到明确的“不支持内容”错误而不是半成品快照。
-            Block::Table(_) => return Err(DocumentLayoutError::UnsupportedContent),
-            Block::Opaque(_) => return Err(DocumentLayoutError::UnsupportedContent),
         }
     }
-    Ok(())
 }
 
 fn push_math_block<'a>(
@@ -2138,15 +2385,7 @@ fn push_math_block<'a>(
         MathBlockSource::Align(align) => align.id.clone(),
     };
     let width_pt = layout.width as f32;
-    let host_metrics = match &source {
-        MathBlockSource::Equation(equation)
-            if !math_flow_contains_soft_break(&equation.math_tree.root) =>
-        {
-            calculate_math_host_metrics(&layout, context.line_grid_metrics, context.line_spacing)?
-        }
-        MathBlockSource::Equation(_) => calculate_math_align_host_metrics(&layout)?,
-        MathBlockSource::Align(_) => calculate_math_align_host_metrics(&layout)?,
-    };
+    let host_metrics = math_block_host_metrics(&source, &layout, context)?;
     let height_pt = host_metrics.height_pt;
     if !context.content_width_pt.is_finite()
         || context.content_width_pt <= 0.0
@@ -2178,6 +2417,24 @@ fn push_math_block<'a>(
     Ok(())
 }
 
+/// 显示公式宿主行框度量；Equation 与 Align 共用同一入口。
+pub(super) fn math_block_host_metrics(
+    source: &MathBlockSource,
+    layout: &caret_math::layout::MathLayout,
+    context: &MathLayoutContext<'_>,
+) -> Result<LineMetrics, DocumentLayoutError> {
+    match source {
+        MathBlockSource::Equation(equation)
+            if !math_flow_contains_soft_break(&equation.math_tree.root) =>
+        {
+            calculate_math_host_metrics(layout, context.line_grid_metrics, context.line_spacing)
+        }
+        MathBlockSource::Equation(_) | MathBlockSource::Align(_) => {
+            calculate_math_align_host_metrics(layout)
+        }
+    }
+}
+
 pub(super) fn calculate_math_host_metrics(
     layout: &caret_math::layout::MathLayout,
     line_grid_metrics: FontLineMetrics,
@@ -2196,7 +2453,7 @@ pub(super) fn calculate_math_host_metrics(
         .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))
 }
 
-fn calculate_math_align_host_metrics(
+pub(super) fn calculate_math_align_host_metrics(
     layout: &caret_math::layout::MathLayout,
 ) -> Result<LineMetrics, DocumentLayoutError> {
     let height_pt = (layout.ascent + layout.descent) as f32;
@@ -2216,7 +2473,7 @@ fn calculate_math_align_host_metrics(
     })
 }
 
-fn math_host_row_grid(
+pub(super) fn math_host_row_grid(
     line_grid: FontLineMetrics,
     body_metrics: LineMetrics,
     spacing: LineSpacing,

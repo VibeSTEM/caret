@@ -304,7 +304,12 @@ impl DocumentLayoutSnapshot {
                 return Err(PageGlyphError::InvalidLineRange);
             }
             let mut page_line_top_pt = page.margin_top_pt + f64::from(fragment.y_offset_pt);
-            if !page_line_top_pt.is_finite() || fragment.y_offset_pt < 0.0 {
+            let fragment_x_pt = page.margin_left_pt + f64::from(fragment.x_offset_pt);
+            if !page_line_top_pt.is_finite()
+                || !fragment_x_pt.is_finite()
+                || fragment.y_offset_pt < 0.0
+                || fragment.x_offset_pt < 0.0
+            {
                 return Err(PageGlyphError::InvalidLineGeometry);
             }
             for line_index in line_range.clone() {
@@ -346,7 +351,7 @@ impl DocumentLayoutSnapshot {
                     .get(line_index)
                     .ok_or(PageGlyphError::InvalidGlyphSource)?;
                 for (bounds, color) in paragraph.layout.underline_geometry_for_line(line_index) {
-                    let x_pt = page.margin_left_pt + bounds.x0;
+                    let x_pt = fragment_x_pt + bounds.x0;
                     let y_pt = page_line_top_pt + bounds.y0;
                     let width_pt = bounds.x1 - bounds.x0;
                     let height_pt = bounds.y1 - bounds.y0;
@@ -415,7 +420,7 @@ impl DocumentLayoutSnapshot {
                     if let Some(run) = page_run_from_positioned_glyphs(
                         &item,
                         PageGlyphRunOrigin {
-                            x_pt: page.margin_left_pt,
+                            x_pt: fragment_x_pt,
                             baseline_y_pt: run_baseline_y_pt,
                             paint_order: next_paint_order,
                             paragraph_id: &paragraph.id,
@@ -470,6 +475,45 @@ impl DocumentLayoutSnapshot {
                 &mut next_paint_order,
             )?;
         }
+        for placement in &page.table_math_placements {
+            let layout = self
+                .math_blocks
+                .get(&placement.math_id)
+                .ok_or(PageGlyphError::MissingMathBlock)?;
+            let text_layouts = self
+                .math_text_layouts_for_block(&placement.math_id)
+                .ok_or(PageGlyphError::MissingMathBlock)?;
+            let projection = self
+                .math_projection(page_index, &placement.math_id)
+                .ok_or(PageGlyphError::MissingMathBlock)?;
+            if !placement.object_x_pt.is_finite() || !placement.baseline_y_pt.is_finite() {
+                return Err(PageGlyphError::InvalidLineGeometry);
+            }
+            append_math_items(
+                &layout.items,
+                text_layouts,
+                MathItemHost {
+                    paragraph_id: &placement.math_id,
+                    line_index: 0,
+                    line_clip_y_pt: projection.drawing_clip(),
+                    row_clips: &layout.row_clips,
+                    object_x_pt: placement.object_x_pt,
+                    baseline_y_pt: placement.baseline_y_pt,
+                },
+                MathItemOutput {
+                    runs: &mut runs,
+                    decorations: &mut decorations,
+                    shapes: &mut shapes,
+                },
+                &mut next_paint_order,
+            )?;
+        }
+        append_table_borders(
+            page,
+            &self.table_layouts,
+            &mut shapes,
+            &mut next_paint_order,
+        )?;
         Ok(PageGlyphSnapshot {
             session_id: self.session_id.clone(),
             document_generation: self.document_generation,
@@ -768,6 +812,76 @@ struct PageGlyphRunOrigin<'a> {
 }
 
 /// 将正文或数学文本岛的同类 Parley glyph run 转为页面快照。
+// v1 表格边框使用中性灰，在浅色与深色纸张上都可见；主题化边框属后续切片。
+const TABLE_BORDER_COLOR: [u8; 4] = [112, 112, 112, 255];
+const TABLE_BORDER_WIDTH_PT: f64 = 0.5;
+
+/// 表格边框作为页面形状输出，与字形共享页面局部坐标和绘制顺序。
+///
+/// 规则线坐标只从 `TableGridLayout` 读取；painter 不再自行重建列/行边界。
+fn append_table_borders(
+    page: &super::PageLayoutSnapshot,
+    table_layouts: &HashMap<NodeId, std::sync::Arc<caret_layout::TableGridLayout>>,
+    shapes: &mut Vec<PageMathShape>,
+    next_paint_order: &mut u64,
+) -> Result<(), PageGlyphError> {
+    for fragment in &page.layout.table_fragments {
+        let grid = table_layouts
+            .get(&fragment.table_id)
+            .ok_or(PageGlyphError::InvalidLineGeometry)?;
+        let Some(first_row) = grid.rows.get(fragment.row_range.start) else {
+            return Err(PageGlyphError::InvalidLineGeometry);
+        };
+        let Some(last_row) = grid.rows.get(fragment.row_range.end.saturating_sub(1)) else {
+            return Err(PageGlyphError::InvalidLineGeometry);
+        };
+        if fragment.row_range.start >= fragment.row_range.end {
+            return Err(PageGlyphError::InvalidLineGeometry);
+        }
+        let origin_x_pt = page.margin_left_pt + f64::from(fragment.x_offset_pt);
+        let origin_y_pt = page.margin_top_pt + f64::from(fragment.y_offset_pt);
+        let x0_pt = origin_x_pt;
+        let x1_pt = origin_x_pt + grid.width_pt;
+        let y0_pt = origin_y_pt + first_row.top_pt;
+        let y1_pt = origin_y_pt + last_row.top_pt + last_row.height_pt;
+        if !x0_pt.is_finite()
+            || !x1_pt.is_finite()
+            || !y0_pt.is_finite()
+            || !y1_pt.is_finite()
+            || y1_pt <= y0_pt
+        {
+            return Err(PageGlyphError::InvalidLineGeometry);
+        }
+        let mut push_line = |x_pt: f64, y_pt: f64, dx_pt: f64, dy_pt: f64| {
+            shapes.push(PageMathShape {
+                paint_order: *next_paint_order,
+                kind: PageMathShapeKind::Line,
+                x_pt,
+                y_pt,
+                dx_pt,
+                dy_pt,
+                width_pt: 0.0,
+                height_pt: 0.0,
+                fill: None,
+                stroke: Some(TABLE_BORDER_COLOR),
+                stroke_width_pt: TABLE_BORDER_WIDTH_PT,
+                line_clip_y_pt: None,
+            });
+            *next_paint_order += 1;
+        };
+        for rule_x_pt in &grid.vertical_rule_positions {
+            push_line(origin_x_pt + rule_x_pt, y0_pt, 0.0, y1_pt - y0_pt);
+        }
+        for boundary in fragment.row_range.start..=fragment.row_range.end {
+            let Some(rule_y_pt) = grid.horizontal_rule_positions.get(boundary) else {
+                continue;
+            };
+            push_line(x0_pt, origin_y_pt + rule_y_pt, x1_pt - x0_pt, 0.0);
+        }
+    }
+    Ok(())
+}
+
 fn page_run_from_positioned_glyphs(
     item: &PositionedGlyphLayoutItem<'_, [u8; 4]>,
     origin: PageGlyphRunOrigin<'_>,

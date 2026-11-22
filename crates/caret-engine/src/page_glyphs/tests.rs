@@ -3,7 +3,7 @@
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, Equation, InlineEnvironment,
     InlineEnvironmentKind, InlineMath, NodeId, Paragraph, ParagraphContent, ParagraphLineSpacing,
-    Run, TextFlow,
+    Run, Table, TableCell, TableRow, TextFlow,
 };
 use caret_layout::{FontCatalog, PositionedGlyphLayoutItem, ShapingStyle};
 
@@ -1406,5 +1406,84 @@ fn invalid_fragment_or_glyph_source_rejects_the_page_atomically() {
     assert_eq!(
         snapshot.page_glyphs(0),
         Err(PageGlyphError::InvalidGlyphSource)
+    );
+}
+
+#[test]
+fn table_cell_glyphs_and_borders_use_cell_geometry() {
+    let make_cell = |text: &str| TableCell {
+        id: NodeId::generate(),
+        blocks: vec![Block::Paragraph({
+            let mut paragraph = Paragraph::empty(NodeId::generate());
+            paragraph.inlines = vec![text_run(text, Some("en"))];
+            paragraph
+        })],
+    };
+    let left = make_cell("left");
+    let right = make_cell("right");
+    let left_id = match &left.blocks[0] {
+        Block::Paragraph(paragraph) => paragraph.id.clone(),
+        _ => panic!("cell must hold a paragraph"),
+    };
+    let right_id = match &right.blocks[0] {
+        Block::Paragraph(paragraph) => paragraph.id.clone(),
+        _ => panic!("cell must hold a paragraph"),
+    };
+    let table = Table {
+        id: NodeId::generate(),
+        rows: vec![TableRow {
+            id: NodeId::generate(),
+            cells: vec![left, right],
+        }],
+    };
+    let mut document = Document::blank();
+    document.body = vec![Block::Table(table)];
+    let snapshot = layout(&document);
+    let glyphs = snapshot
+        .page_glyphs(0)
+        .unwrap_or_else(|error| panic!("table glyph extraction must succeed: {error}"));
+    // 1×2 表格：外框左右 + 中间列分隔 = 3 条竖线；外框上下 = 2 条横线。
+    assert_eq!(
+        glyphs.shapes.len(),
+        5,
+        "table borders must emit exact rule lines"
+    );
+    let page = &snapshot.pages[0];
+    let mut vertical_xs = glyphs
+        .shapes
+        .iter()
+        .filter(|shape| {
+            matches!(shape.kind, super::PageMathShapeKind::Line) && shape.dy_pt.abs() > f64::EPSILON
+        })
+        .map(|shape| shape.x_pt)
+        .collect::<Vec<_>>();
+    vertical_xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    assert!((vertical_xs.first().copied().unwrap_or_default() - page.margin_left_pt).abs() < 1e-6);
+    let grid = snapshot
+        .table_layouts
+        .values()
+        .next()
+        .unwrap_or_else(|| panic!("table grid must be registered"));
+    let last_vertical = vertical_xs.last().copied().unwrap_or_default();
+    assert!(
+        (last_vertical - (page.margin_left_pt + grid.width_pt)).abs() < 1e-6,
+        "last vertical {last_vertical} vs margin {} + grid {}; xs={vertical_xs:?}",
+        page.margin_left_pt,
+        grid.width_pt,
+    );
+    let first_x = |paragraph_id: &NodeId| {
+        glyphs
+            .runs
+            .iter()
+            .find(|run| &run.paragraph_id == paragraph_id)
+            .and_then(|run| run.glyphs.first())
+            .map(|glyph| glyph.x_pt)
+            .unwrap_or_else(|| panic!("cell glyph run must exist"))
+    };
+    let left_x = first_x(&left_id);
+    let right_x = first_x(&right_id);
+    assert!(
+        right_x > left_x + 50.0,
+        "second column glyphs must start in the second cell: {left_x} vs {right_x}"
     );
 }

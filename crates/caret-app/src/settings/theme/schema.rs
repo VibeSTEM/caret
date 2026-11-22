@@ -128,6 +128,13 @@ pub(crate) const THEME_TOKEN_SPECS: &[ThemeTokenSpec] = &[
         maximum: 0.0,
     },
     ThemeTokenSpec {
+        dsl_key: "color-table-guideline",
+        qml_name: "colorTableGuideline",
+        kind: ThemeTokenKind::Color,
+        minimum: 0.0,
+        maximum: 0.0,
+    },
+    ThemeTokenSpec {
         dsl_key: "color-inline-environment-highlight",
         qml_name: "colorInlineEnvironmentHighlight",
         kind: ThemeTokenKind::Color,

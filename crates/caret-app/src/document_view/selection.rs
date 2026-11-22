@@ -78,6 +78,10 @@ impl DocumentViewRuntime {
         let mut segments = Vec::new();
         let mut seen = HashSet::new();
         for fragment in &page.layout.fragments {
+            // 单元格片段不属于正文拖选域；跨宿主范围协议接入前保持隔离。
+            if !matches!(fragment.host, caret_engine::FragmentHost::Body) {
+                continue;
+            }
             let Some((paragraph_order, paragraph)) =
                 body_fragment_paragraph(snapshot, &fragment.paragraph_id)
             else {

@@ -251,6 +251,8 @@ Item {
             selectionRects: pointerHandler.selectionDragActive && pointerHandler.previewOnly ? [] : LayoutViewModel.selectionRects
             selectionColor: Theme.colorSelected
             blockHighlightRects: LayoutViewModel.blockHighlightRects
+            tableGuidelines: LayoutViewModel.tableGuidelines
+            tableGuidelineColor: Theme.colorTableGuideline
             inlineHighlightRects: LayoutViewModel.inlineHighlightRects
             blockHighlightColor: Theme.colorBlockEnvironmentHighlight
             inlineHighlightColor: Theme.colorInlineEnvironmentHighlight

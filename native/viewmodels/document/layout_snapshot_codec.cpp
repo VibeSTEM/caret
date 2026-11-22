@@ -316,7 +316,7 @@ bool parse_current_structure_impl(const QJsonValue& value, QVariantList& result,
         const bool known_kind =
             kind == QStringLiteral("paragraph") || heading || kind == QStringLiteral("section") ||
             kind == QStringLiteral("custom") || kind == QStringLiteral("equation") ||
-            kind == QStringLiteral("align");
+            kind == QStringLiteral("align") || kind == QStringLiteral("table");
         const int heading_level = level.toInt(-1);
         const bool valid_level = heading
                                      ? level.isDouble() && heading_level >= 1 &&
@@ -381,6 +381,12 @@ bool parse_inline_environment_highlight_rects(const QJsonValue& value,
 bool parse_math_block_highlight_rects(const QJsonValue& value, const QVariantList& page_sizes,
                                       QVariantList& rectangles, QString& error) {
     return parse_geometry_rectangles(value, page_sizes, QStringLiteral("math_block_highlight"),
+                                     rectangles, error);
+}
+
+bool parse_table_guidelines(const QJsonValue& value, const QVariantList& page_sizes,
+                            QVariantList& rectangles, QString& error) {
+    return parse_geometry_rectangles(value, page_sizes, QStringLiteral("table_guideline"),
                                      rectangles, error);
 }
 
@@ -713,6 +719,11 @@ bool parse(const QJsonDocument& document, ParsedLayoutSnapshot& parsed_snapshot,
                                    error)) {
         return false;
     }
+    QVariantList parsed_table_guidelines;
+    if (!parse_table_guidelines(root.value(QStringLiteral("tableGuidelines")), parsed_sizes,
+                                parsed_table_guidelines, error)) {
+        return false;
+    }
     QVariantMap parsed_command_line;
     if (!parse_command_line(command_line_snapshot_value(root), parsed_command_line, error)) {
         return false;
@@ -752,6 +763,7 @@ bool parse(const QJsonDocument& document, ParsedLayoutSnapshot& parsed_snapshot,
     parsed_snapshot.paragraph_line_counts = std::move(paragraph_line_counts);
     parsed_snapshot.selection_rects = std::move(parsed_selection_rects);
     parsed_snapshot.composition_rects = std::move(parsed_composition_rects);
+    parsed_snapshot.table_guidelines = std::move(parsed_table_guidelines);
     parsed_snapshot.command_line = std::move(parsed_command_line);
     parsed_snapshot.current_structure = std::move(parsed_current_structure);
     parsed_snapshot.block_environment_highlight_rects =

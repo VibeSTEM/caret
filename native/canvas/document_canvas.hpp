@@ -61,6 +61,10 @@ class DocumentCanvas : public QQuickItem {
                    setBlockHighlightRects NOTIFY blockHighlightRectsChanged)
     Q_PROPERTY(QVariantList inlineHighlightRects READ inlineHighlightRects WRITE
                    setInlineHighlightRects NOTIFY inlineHighlightRectsChanged)
+    Q_PROPERTY(QVariantList tableGuidelines READ tableGuidelines WRITE setTableGuidelines NOTIFY
+                   tableGuidelinesChanged)
+    Q_PROPERTY(QColor tableGuidelineColor READ tableGuidelineColor WRITE setTableGuidelineColor
+                   NOTIFY appearanceChanged)
     Q_PROPERTY(
         QColor selectionColor READ selectionColor WRITE setSelectionColor NOTIFY appearanceChanged)
     Q_PROPERTY(QColor blockHighlightColor READ blockHighlightColor WRITE setBlockHighlightColor
@@ -132,6 +136,10 @@ class DocumentCanvas : public QQuickItem {
     void setSelectionColor(const QColor& color);
     [[nodiscard]] QColor blockHighlightColor() const;
     void setBlockHighlightColor(const QColor& color);
+    [[nodiscard]] QVariantList tableGuidelines() const;
+    void setTableGuidelines(const QVariantList& guidelines);
+    [[nodiscard]] QColor tableGuidelineColor() const;
+    void setTableGuidelineColor(const QColor& color);
     [[nodiscard]] QColor inlineHighlightColor() const;
     void setInlineHighlightColor(const QColor& color);
     [[nodiscard]] qreal environmentHighlightRadius() const;
@@ -189,6 +197,7 @@ class DocumentCanvas : public QQuickItem {
     void selectionRectsChanged();
     void selectionPreviewRectsChanged();
     void blockHighlightRectsChanged();
+    void tableGuidelinesChanged();
     void inlineHighlightRectsChanged();
     void glyphRasterMetricsChanged();
     void caretWidthCentipixelsChanged();
@@ -233,6 +242,7 @@ class DocumentCanvas : public QQuickItem {
     QVariantList m_selection_rects;
     QVariantList m_selection_preview_rects;
     QVariantList m_block_highlight_rects;
+    QVariantList m_table_guidelines;
     QVariantList m_inline_highlight_rects;
     quint64 m_highlight_revision = 0;
     quint64 m_glyph_frame_revision = 0;
@@ -240,6 +250,7 @@ class DocumentCanvas : public QQuickItem {
     QColor m_caret_color;
     QColor m_selection_color;
     QColor m_block_highlight_color;
+    QColor m_table_guideline_color = QColor(255, 255, 255, 230);
     QColor m_inline_highlight_color;
     qreal m_environment_highlight_radius = 0.0;
     qreal m_environment_highlight_padding_px = 0.0;

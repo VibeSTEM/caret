@@ -11,6 +11,7 @@ pub mod pagination;
 mod paragraph;
 mod paragraph_style;
 mod shaping;
+pub mod table;
 
 pub use font_selection::{FontPreferenceError, FontPreferenceRules, ResolvedDocumentTextSettings};
 pub use fontique::Synthesis as GlyphSynthesis;
@@ -23,8 +24,9 @@ pub use line_metrics::{
     row_spacing_for_line_spacing,
 };
 pub use pagination::{
-    MathBlockFragment, MathBlockPaginationInput, PageLayout, PaginationError, PaginationItem,
-    ParagraphFragment, ParagraphPaginationInput, paginate_paragraphs,
+    FragmentClip, FragmentHost, MathBlockFragment, MathBlockPaginationInput, PageLayout,
+    PaginationError, PaginationItem, ParagraphFragment, ParagraphPaginationInput, TableFragment,
+    TablePaginationInput, paginate_paragraphs,
 };
 pub use paragraph::{
     HitAffinity, InlineObjectLayout, ParagraphHit, ParagraphLayout, ParagraphLayoutError,
@@ -35,6 +37,11 @@ pub use paragraph::{
 pub use paragraph_style::{ParagraphStyleError, ResolvedParagraphStyle, resolve_paragraph_style};
 pub use parley::{FontData as GlyphFontData, PositionedLayoutItem as PositionedGlyphLayoutItem};
 pub use shaping::{FontRole, ShapingStyle, UnicodeBoundaries, paragraph_text, run_has_underline};
+pub use table::{
+    MeasuredCellBlock, TableCellBlockGeometry, TableCellGeometry, TableCellMeasurement,
+    TableGridLayout, TableLayoutError, TableLayoutOptions, TableRowGeometry, TableRowMeasurement,
+    layout_table_grid, table_column_width_pt,
+};
 
 #[cfg(test)]
 mod tests;
