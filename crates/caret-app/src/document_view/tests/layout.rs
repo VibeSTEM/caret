@@ -3362,6 +3362,70 @@ fn empty_body_paragraph_vertical_arrow_stays_put() -> Result<(), Box<dyn std::er
 }
 
 #[test]
+fn table_host_horizontal_navigation_and_shift_never_mismatch_story()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.insert_text_json("BEFORE".to_owned())?;
+    runtime.handle_editor_key_json("insert-table")?;
+    runtime.handle_editor_key_json("escape")?;
+    assert!(matches!(
+        &runtime.session.selection().focus.story,
+        caret_engine::StoryId::Body
+    ));
+    runtime
+        .move_visual_caret_json(true, false)
+        .map_err(|error| format!("plain right into table: {error}"))?;
+    assert!(
+        matches!(
+            &runtime.session.selection().focus.story,
+            caret_engine::StoryId::TableCell { .. }
+        ),
+        "Right after a body paragraph must enter the adjacent table"
+    );
+    runtime.handle_editor_key_json("escape")?;
+    let before_shift = runtime.session.selection().focus.clone();
+    runtime
+        .move_visual_caret_json(true, true)
+        .map_err(|error| format!("shift right at table edge: {error}"))?;
+    assert_eq!(
+        runtime.session.selection().focus,
+        before_shift,
+        "Shift+Right into a table must not cross stories or move the caret"
+    );
+    runtime
+        .move_vertical_caret_json(1, true)
+        .map_err(|error| format!("shift down at table edge: {error}"))?;
+    assert_eq!(
+        runtime.session.selection().focus,
+        before_shift,
+        "Shift+Down into a table must not cross stories or move the caret"
+    );
+    Ok(())
+}
+
+#[test]
+fn shift_extension_at_cell_boundary_with_active_selection_stays_in_cell()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.handle_editor_key_json("insert-table")?;
+    runtime.insert_text_json("ab".to_owned())?;
+    let cell = match &runtime.session.selection().focus.story {
+        caret_engine::StoryId::TableCell { cell_id, .. } => cell_id.clone(),
+        story => return Err(format!("focus must start in a table cell: {story:?}").into()),
+    };
+    for _ in 0..3 {
+        runtime
+            .move_visual_caret_json(false, true)
+            .map_err(|error| format!("shift left with active selection: {error}"))?;
+    }
+    assert!(
+        matches!(&runtime.session.selection().focus.story, caret_engine::StoryId::TableCell { cell_id: current, .. } if current == &cell),
+        "Shift extension must stay inside the focused cell"
+    );
+    Ok(())
+}
+
+#[test]
 fn unavailable_table_key_is_noop_and_escape_exits_table_to_body()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut runtime = DocumentViewRuntime::new_blank()?;

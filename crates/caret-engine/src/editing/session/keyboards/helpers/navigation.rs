@@ -95,6 +95,27 @@ impl Session {
         extend: bool,
     ) -> Result<Effect, EditError> {
         self.validate_navigation_generation(&generation)?;
+        if focus.story != self.selection.focus.story
+            && (matches!(focus.story, crate::StoryId::TableCell { .. })
+                || matches!(self.selection.focus.story, crate::StoryId::TableCell { .. }))
+        {
+            // 表格是块宿主：跨 Story 候选不能直接提交（TableCell 位置与 Body
+            // 位置不可比较）。普通移动按块邻接进入表格，其余跨格候选收敛为
+            // no-op，避免 layout 候选把 QML 导航打成 position_story_mismatch。
+            if extend {
+                return Ok(Effect::default());
+            }
+            if let Some(direction) = direction
+                && matches!(self.selection.focus.story, crate::StoryId::Body)
+                && self.enter_adjacent_table(direction)?
+            {
+                return Ok(Effect {
+                    selection_changed: true,
+                    ..Effect::default()
+                });
+            }
+            return Ok(Effect::default());
+        }
         let retained_empty_inline_host = if !extend
             && focus.paragraph_id == self.selection.focus.paragraph_id
             && focus.story == self.selection.focus.story

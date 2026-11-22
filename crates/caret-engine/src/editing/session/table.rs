@@ -4,7 +4,6 @@
 // 署名：Yuki Lu
 
 use super::*;
-use crate::editing::NavigationCandidate;
 use crate::editing::paragraph_ops::{
     BlockContainerPath, TableCellPath, block_list_in_container, block_list_in_container_mut,
     build_paragraph_index,
@@ -271,20 +270,6 @@ impl Session {
             context.cell_index,
             true,
         )?))
-    }
-
-    /// Shift+方向键在 cell 内允许同宿主扩选；跨 cell/跨表候选必须先收敛而不是提交失败。
-    pub(super) fn table_extension_candidate_allowed(
-        &self,
-        candidate: Option<&NavigationCandidate>,
-    ) -> bool {
-        match candidate {
-            None => true,
-            Some(NavigationCandidate::Document { focus, .. }) => {
-                focus.story == self.selection.focus.story
-            }
-            Some(_) => false,
-        }
     }
 
     /// 从表格相邻正文段落进入表格首/末格；成功时提交选区。

@@ -42,12 +42,6 @@ impl Session {
         if self.math_edit.is_some() {
             return self.commit_math_vertical_navigation_candidate(candidate, extend, direction);
         }
-        if extend
-            && self.table_context().is_some()
-            && !self.table_extension_candidate_allowed(candidate.as_ref())
-        {
-            return Ok(Effect::default());
-        }
         if !extend
             && !self.has_structure_selection()
             && candidate.is_none()
@@ -217,6 +211,23 @@ impl Session {
                 generation,
             }) => {
                 self.validate_navigation_generation(&generation)?;
+                if focus.story != self.selection.focus.story
+                    && (matches!(focus.story, crate::StoryId::TableCell { .. })
+                        || matches!(self.selection.focus.story, crate::StoryId::TableCell { .. }))
+                {
+                    if extend {
+                        return Ok(Effect::default());
+                    }
+                    if matches!(self.selection.focus.story, crate::StoryId::Body)
+                        && self.enter_adjacent_table(direction)?
+                    {
+                        return Ok(Effect {
+                            selection_changed: true,
+                            ..Effect::default()
+                        });
+                    }
+                    return Ok(Effect::default());
+                }
                 if extend
                     && let Some((anchor, _)) = self.structure_selection_range()
                     && anchor.is_inline_math()
