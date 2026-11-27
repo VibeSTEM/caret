@@ -864,7 +864,7 @@ class DocumentInteractionFixture {
     DocumentInteractionFixture(const DocumentInteractionFixture&) = delete;
     DocumentInteractionFixture& operator=(const DocumentInteractionFixture&) = delete;
 
-    bool initialize();
+    bool initialize(QSize size);
 
     std::unique_ptr<QQmlEngine> engine;
     std::unique_ptr<QQmlComponent> surface_component;
@@ -910,20 +910,22 @@ bool installBlankInteractionRuntime(QString* error) {
     return true;
 }
 
-bool DocumentInteractionFixture::initialize() {
+bool DocumentInteractionFixture::initialize(QSize size) {
     installDocumentInteractionTheme();
     engine = std::make_unique<QQmlEngine>();
     engine->addImportPath(QString::fromUtf8(CARET_QML_IMPORT_PATH));
     surface_component = std::make_unique<QQmlComponent>(engine.get());
     surface_component->setData(QByteArrayLiteral("import QtQuick\n"
                                                  "import Caret.Shell\n"
-                                                 "PageSurface { width: 500; height: 500 }\n"),
+                                                 "PageSurface {}\n"),
                                QUrl());
     if (!surface_component->isReady()) {
         error = surface_component->errorString();
         return false;
     }
-    surface = qobject_cast<QQuickItem*>(surface_component->create());
+    const QVariantMap dimensions{{QStringLiteral("width"), size.width()},
+                                 {QStringLiteral("height"), size.height()}};
+    surface = qobject_cast<QQuickItem*>(surface_component->createWithInitialProperties(dimensions));
     if (surface == nullptr) {
         error = QStringLiteral("PageSurface 无法创建");
         return false;
@@ -937,7 +939,7 @@ bool DocumentInteractionFixture::initialize() {
         error = QStringLiteral("PageSurface 缺少文档画布或指针处理子项");
         return false;
     }
-    window.resize(500, 500);
+    window.resize(size);
     surface->setParentItem(window.contentItem());
     window.show();
     if (!QTest::qWaitForWindowExposed(&window, 3000)) {
@@ -953,11 +955,12 @@ bool DocumentInteractionFixture::initialize() {
     return true;
 }
 
-bool prepareDocumentInteractionFixture(DocumentInteractionFixture& fixture) {
+bool prepareDocumentInteractionFixture(DocumentInteractionFixture& fixture,
+                                       QSize size = {500, 500}) {
     if (!installBlankInteractionRuntime(&fixture.error)) {
         return false;
     }
-    return fixture.initialize();
+    return fixture.initialize(size);
 }
 
 bool waitForDocumentGeneration(DocumentInteractionFixture& fixture, const QString& generation) {
@@ -1405,15 +1408,8 @@ void set_clipboard_fragment_payload(const QByteArray& fragment_utf8, const QStri
 } // namespace
 
 void ShellDocumentInteractionTest::documentHitTestReturnsRustPosition() {
-    auto runtime = caret::ffi::new_blank_document_runtime();
-    const rust::String snapshot = caret::ffi::layout_snapshot_json(*runtime);
-    QVERIFY(!std::string_view(snapshot.data(), snapshot.size()).starts_with("error:"));
-    QVERIFY(caret::install_layout_snapshot(
-        QString::fromUtf8(snapshot.data(), static_cast<qsizetype>(snapshot.size()))));
-    QVERIFY(caret::install_document_runtime(std::move(runtime)));
-
     DocumentInteractionFixture fixture;
-    QVERIFY2(fixture.initialize(), qPrintable(fixture.error));
+    QVERIFY2(prepareDocumentInteractionFixture(fixture), qPrintable(fixture.error));
     QVERIFY2(fixture.surface_component->isReady(),
              qPrintable(fixture.surface_component->errorString()));
     QVERIFY(fixture.surface != nullptr);
@@ -2217,33 +2213,14 @@ void ShellDocumentInteractionTest::mathTextDragUsesSharedPreviewAndCommitProtoco
     QCOMPARE(document_file.write(document), document.size());
     document_file.close();
 
-    auto runtime = caret::ffi::new_blank_document_runtime();
-    const rust::String snapshot = caret::ffi::layout_snapshot_json(*runtime);
-    QVERIFY(!std::string_view(snapshot.data(), snapshot.size()).starts_with("error:"));
-    QVERIFY(caret::install_layout_snapshot(
-        QString::fromUtf8(snapshot.data(), static_cast<qsizetype>(snapshot.size()))));
-    QVERIFY(caret::install_document_runtime(std::move(runtime)));
+    DocumentInteractionFixture fixture;
+    QVERIFY2(prepareDocumentInteractionFixture(fixture, QSize(600, 700)),
+             qPrintable(fixture.error));
+    auto& window = fixture.window;
+    auto* view_model = fixture.layout_view_model;
+    auto* canvas = fixture.canvas;
+    QCOMPARE(canvas->caretWidthCentipixels(), 100);
 
-    QQmlApplicationEngine engine;
-    engine.addImportPath(QString::fromUtf8(CARET_QML_IMPORT_PATH));
-    QQmlComponent component(&engine);
-    component.setData(QByteArrayLiteral("import QtQuick\n"
-                                        "import Caret.Shell\n"
-                                        "PageSurface { width: 600; height: 700 }\n"),
-                      QUrl());
-    QVERIFY2(component.isReady(), qPrintable(component.errorString()));
-    auto* surface = qobject_cast<QQuickItem*>(component.create());
-    QVERIFY(surface != nullptr);
-    QQuickWindow window;
-    surface->setParentItem(window.contentItem());
-    surface->setSize(QSizeF(600, 700));
-    window.resize(600, 700);
-    window.show();
-    QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 3000);
-
-    auto* view_model =
-        engine.singletonInstance<caret::LayoutViewModel*>("Caret.ViewModels", "LayoutViewModel");
-    QVERIFY(view_model != nullptr);
     QSignalSpy open_finished(view_model, &caret::LayoutViewModel::documentFileOperationFinished);
     QVERIFY(open_finished.isValid());
     const QString initial_session_id = view_model->sessionId();
@@ -2260,18 +2237,11 @@ void ShellDocumentInteractionTest::mathTextDragUsesSharedPreviewAndCommitProtoco
     QCOMPARE(view_model->documentGeneration(), initial_document_generation);
     QVERIFY(!view_model->fontGeneration().isEmpty());
 
-    auto* canvas = surface->findChild<caret::DocumentCanvas*>(QStringLiteral("documentCanvas"));
-    QVERIFY(canvas != nullptr);
-    // 该隔离 QML 测试未初始化 ThemeViewModel，因此需显式设置光标宽度。
-    canvas->setCaretWidthCentipixels(100);
     window.requestActivate();
     canvas->forceActiveFocus(Qt::OtherFocusReason);
     QTRY_VERIFY_WITH_TIMEOUT(canvas->hasActiveFocus(), 3000);
-    QObject* selection_drag = surface->findChild<QObject*>(QStringLiteral("documentSelectionDrag"));
-    QObject* pointer_handler =
-        surface->findChild<QObject*>(QStringLiteral("documentCanvasPointerHandler"));
-    QVERIFY(selection_drag != nullptr);
-    QVERIFY(pointer_handler != nullptr);
+    QObject* selection_drag = fixture.selection_drag;
+    QObject* pointer_handler = fixture.pointer_handler;
 
     const QVariantMap hit_map = view_model->dragHitMap(0);
     QVERIFY2(hit_map.value(QStringLiteral("valid")).toBool(),
@@ -2644,7 +2614,6 @@ void ShellDocumentInteractionTest::mathTextDragUsesSharedPreviewAndCommitProtoco
     QVERIFY(open_finished.last().at(0).toBool());
     QVERIFY(!pointer_handler->property("dragRebasePending").toBool());
     QVERIFY(pointer_handler->property("dragAnchor").toMap().isEmpty());
-    delete surface;
 }
 
 void ShellDocumentInteractionTest::emptyInlineMathFocusRendersInsertionSlotAcrossZoom() {

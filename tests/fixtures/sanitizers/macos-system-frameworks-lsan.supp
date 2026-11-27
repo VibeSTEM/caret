@@ -39,6 +39,11 @@ leak:_refreshMenuFontsIfNeeded
 # macOS 26 Nightly 的两笔泄漏报告来自 LaunchServices 通知注册回调。
 leak:LaunchServices::notifyd::NotifyToken::RegisterDispatch
 
+# Nightly 45923495672 的 Qml.ShellLoad 退出时，libdispatch 工作线程留下
+# Objective-C 运行时的线程局部类初始化列表（120 字节，3 次分配）。
+# 只匹配分配该列表的函数；macOS 或 LLVM 更新后复查。
+leak:_fetchInitializingClassList
+
 # macOS Nightly 的 Qml.ShellLoad 偶发泄漏（issue #152；run 44646139582 的
 # macos-latest job 135989089454 报 5736 字节、10 次分配）来自 Qt FileDialog/
 # 文件夹监视器与 macOS FSEvents 的进程级资源：QQuickFileDialog 打开时
