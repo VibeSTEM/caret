@@ -257,7 +257,7 @@ fn shift_right_covers_adjacent_equation_then_extends_into_following_text() {
     shift_right(&mut session);
 
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
     assert_eq!(session.selected_block_environments(), &[]);
@@ -286,7 +286,7 @@ fn shift_right_covers_adjacent_equation_then_extends_into_following_text() {
     assert_eq!(text_endpoint(anchor), &paragraph_end(&before));
     assert_eq!(text_endpoint(focus), &paragraph_start(&after));
     assert_eq!(session.selection().focus, paragraph_start(&after));
-    assert_eq!(session.selected_math_blocks(), &[equation_id]);
+    assert_eq!(session.selected_atomic_blocks(), &[equation_id]);
     assert!(session.block_boundary_exit().is_none());
 
     shift_right(&mut session);
@@ -318,7 +318,7 @@ fn shift_left_covers_adjacent_equation_then_continues_into_previous_text() {
     shift_left(&mut session);
 
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
     let (anchor, focus) = session
@@ -341,7 +341,7 @@ fn shift_left_covers_adjacent_equation_then_continues_into_previous_text() {
 
     shift_left(&mut session);
 
-    assert_eq!(session.selected_math_blocks(), &[equation_id]);
+    assert_eq!(session.selected_atomic_blocks(), &[equation_id]);
     let (anchor, focus) = session
         .structure_selection_range()
         .unwrap_or_else(|| panic!("structural range missing"));
@@ -391,7 +391,7 @@ fn shift_arrows_extend_inside_equation_tree_then_convert_to_block_range() {
 
     assert!(session.math_edit().is_none());
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
     let (anchor, focus) = session
@@ -430,7 +430,7 @@ fn shift_left_selects_document_start_equation_without_previous_paragraph() {
 
     shift_left(&mut session);
 
-    assert_eq!(session.selected_math_blocks(), &[equation_id]);
+    assert_eq!(session.selected_atomic_blocks(), &[equation_id]);
     let (anchor, focus) = session
         .structure_selection_range()
         .unwrap_or_else(|| panic!("structural range missing"));
@@ -469,13 +469,13 @@ fn shift_right_covers_adjacent_equations_in_document_order() {
 
     shift_right(&mut session);
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&first_id)
     );
 
     shift_right(&mut session);
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         &[first_id, second_id.clone()]
     );
     let (_, focus) = session
@@ -611,7 +611,7 @@ fn horizontal_candidate_crossing_equation_keeps_the_host_covered() {
 
     assert!(effect.selection_changed);
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
     let (anchor, focus) = session
@@ -645,7 +645,7 @@ fn vertical_shift_down_covers_adjacent_equation_without_layout_candidate() {
         .unwrap_or_else(|error| panic!("shift-down failed: {error}"));
 
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
     assert_eq!(session.selection().focus, parked_start(&after));
@@ -714,7 +714,7 @@ fn shift_right_at_align_cell_boundary_converts_to_whole_block_range() {
     shift_right(&mut session);
     assert!(session.math_edit().is_none());
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&align_id)
     );
     let (anchor, focus) = session
@@ -770,6 +770,36 @@ fn shift_right_at_section_child_end_selects_whole_section() {
         session.block_boundary_exit(),
         Some((section_id, Direction::Forward))
     );
+}
+
+#[test]
+fn shift_right_skips_explicit_break_after_section_like_navigation() {
+    let body = paragraph_with_text("body");
+    let section = section("Heading", vec![Block::Paragraph(body.clone())]);
+    let section_id = environment_id(&section);
+    let after = paragraph_with_text("after");
+    let mut session = session_with_body(
+        vec![
+            section,
+            Block::ExplicitBreak(caret_doc::ExplicitBreak::default()),
+            Block::Paragraph(after.clone()),
+        ],
+        paragraph_end(&body),
+    );
+
+    shift_right(&mut session);
+    assert_eq!(
+        session.selected_block_environments(),
+        std::slice::from_ref(&section_id)
+    );
+    shift_right(&mut session);
+
+    let (_, focus) = session
+        .structure_selection_range()
+        .unwrap_or_else(|| panic!("structural range missing"));
+    assert_eq!(text_endpoint(focus), &paragraph_start(&after));
+    assert_eq!(session.selection().focus.paragraph_id, after.id);
+    assert_eq!(session.selection().focus.offset, 0);
 }
 
 #[test]
@@ -956,7 +986,7 @@ fn horizontal_shift_in_paragraph_keeps_inline_environment_without_structure_sele
 
     assert!(!session.has_structure_selection());
     assert!(session.structure_selection_range().is_none());
-    assert!(session.selected_math_blocks().is_empty());
+    assert!(session.selected_atomic_blocks().is_empty());
     let view = session
         .current_environment_view()
         .unwrap_or_else(|error| panic!("environment view failed: {error}"));
@@ -1049,7 +1079,7 @@ fn shift_right_from_selected_equation_clears_hidden_range_and_keeps_typing_live(
         })
         .unwrap_or_else(|| panic!("equation missing"));
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
 
@@ -1058,7 +1088,7 @@ fn shift_right_from_selected_equation_clears_hidden_range_and_keeps_typing_live(
 
     assert!(!session.has_structure_selection());
     assert!(session.structure_selection_range().is_none());
-    assert!(session.selected_math_blocks().is_empty());
+    assert!(session.selected_atomic_blocks().is_empty());
     assert!(session.selected_block_environments().is_empty());
     let after_id = session.selection().focus.paragraph_id.clone();
     assert_eq!(
@@ -1169,7 +1199,7 @@ fn ime_commit_replaces_selected_equation_as_one_transaction() {
     );
     shift_right(&mut session);
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
 
@@ -1196,7 +1226,7 @@ fn ime_commit_replaces_selected_equation_as_one_transaction() {
 
     assert!(session.composition().is_none());
     assert!(!session.has_structure_selection());
-    assert!(session.selected_math_blocks().is_empty());
+    assert!(session.selected_atomic_blocks().is_empty());
     assert_eq!(session.document_generation(), generation_before + 1);
     assert!(
         !session
@@ -1252,7 +1282,7 @@ fn shift_left_at_align_cell_boundary_converts_to_whole_block_range() {
     shift_left(&mut session);
     assert!(session.math_edit().is_none());
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&align_id)
     );
     let (anchor, focus) = session

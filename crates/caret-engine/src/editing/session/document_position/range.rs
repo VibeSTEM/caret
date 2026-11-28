@@ -3,11 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
+use super::super::block_navigation::block_identity;
 use super::super::{
     Affinity, Direction, DocumentRangeEndpoint, EditError, HostCaretKind, HostCaretLocalPosition,
-    HostCaretPosition, Pos, Session, StructureSelection,
+    HostCaretPosition, Pos, Session, StoryId, StructureSelection,
 };
-use crate::editing::paragraph_ops::compare_positions;
+use crate::editing::paragraph_ops::compare_document_positions;
 use crate::editing::{Selection, text_map::TextMap};
 use caret_doc::{Block, NodeId};
 use caret_structure::{
@@ -43,7 +44,7 @@ impl Session {
     /// 比较两个结构选区端点的文档顺序。
     ///
     /// 文本端点使用段落顺序与亲和性；块外侧边界使用物理节点边界。端点不属于
-    /// 可解析的 Section/Custom/Equation/Align 块或无法唯一排序时返回 `InvalidPosition`。
+    /// 可解析的 Section/Custom/Equation/Align/Table 块或无法唯一排序时返回 `InvalidPosition`。
     pub(crate) fn compare_range_endpoints(
         &self,
         left: &DocumentRangeEndpoint,
@@ -72,7 +73,7 @@ impl Session {
                 self.compare_caret_snapshots(&snapshot(left)?, &snapshot(right)?)
             }
             (DocumentRangeEndpoint::Text(left), DocumentRangeEndpoint::Text(right)) => {
-                compare_positions(&self.document.body, &self.paragraph_index, left, right)
+                compare_document_positions(&self.document.body, &self.paragraph_index, left, right)
             }
             (
                 DocumentRangeEndpoint::BlockEdge {
@@ -136,7 +137,7 @@ impl Session {
         }
     }
 
-    /// 返回结构选区覆盖的最外层块环境与公式块，均按文档顺序排列。
+    /// 返回结构选区覆盖的最外层块环境与原子块，均按文档顺序排列。
     ///
     /// 块的完整外侧边界都落在范围内才算覆盖；被覆盖环境的后代不单独列出，
     /// 因为删除父环境已经包含其全部子项。
@@ -149,24 +150,24 @@ impl Session {
             return Err(EditError::InvalidPosition);
         }
         let mut environments = Vec::new();
-        let mut math_blocks = Vec::new();
+        let mut atomic_blocks = Vec::new();
         self.collect_covered_block_nodes(
             &self.document.body,
             start,
             end,
             &mut environments,
-            &mut math_blocks,
+            &mut atomic_blocks,
         )?;
-        Ok((environments, math_blocks))
+        Ok((environments, atomic_blocks))
     }
 
-    /// 按段落顺序规范化一对文本端点后派生覆盖的块环境与公式块。
+    /// 按段落顺序规范化一对文本端点后派生覆盖的块环境与原子块。
     pub(in crate::editing::session) fn covered_block_nodes_for_text_pair(
         &self,
         anchor: &Pos,
         focus: &Pos,
     ) -> Result<(Vec<NodeId>, Vec<NodeId>), EditError> {
-        let (start, end) = if compare_positions(
+        let (start, end) = if compare_document_positions(
             &self.document.body,
             &self.paragraph_index,
             anchor,
@@ -196,9 +197,13 @@ impl Session {
     pub fn structure_selection_text_bounds(&self) -> Option<(Pos, Pos)> {
         if let Some(parts) = self.inline_math_range_parts() {
             let Selection { anchor, focus } = parts.body;
-            let ordered =
-                compare_positions(&self.document.body, &self.paragraph_index, &anchor, &focus)
-                    .ok()?;
+            let ordered = compare_document_positions(
+                &self.document.body,
+                &self.paragraph_index,
+                &anchor,
+                &focus,
+            )
+            .ok()?;
             return Some(if ordered.is_gt() {
                 (focus, anchor)
             } else {
@@ -289,13 +294,8 @@ impl Session {
         endpoint: &DocumentRangeEndpoint,
         environment_id: &NodeId,
     ) -> bool {
-        let node_id = match endpoint {
-            DocumentRangeEndpoint::InlineMathTree { paragraph_id, .. }
-            | DocumentRangeEndpoint::InlineMathText { paragraph_id, .. } => paragraph_id,
-            DocumentRangeEndpoint::Text(position) => &position.paragraph_id,
-            DocumentRangeEndpoint::BlockEdge { block_id, .. } => block_id,
-        };
-        let Some(location) = find_document_node(&self.document, node_id) else {
+        let Some(location) = find_document_node(&self.document, endpoint.block_container_node_id())
+        else {
             return false;
         };
         if matches!(endpoint, DocumentRangeEndpoint::BlockEdge { .. })
@@ -383,13 +383,10 @@ impl Session {
                     DocumentRangeEndpoint::Text(end),
                 ))
             }
-            Block::Environment(environment) => Some(range_block_unit(&environment.id)),
-            Block::Equation(equation) => Some(range_block_unit(&equation.id)),
-            Block::Align(align) => Some(range_block_unit(&align.id)),
-            // 表格作为结构范围对象（整表选择/删除/复制）随 046 接入；当前先拒绝而不是
-            // 让结构范围跳过整张表后产生半覆盖删除。
-            Block::Table(_) => None,
-            Block::ExplicitBreak(_) | Block::Opaque(_) => None,
+            block => {
+                let (id, kind) = block_identity(block)?;
+                kind.is_range_block().then(|| range_block_unit(id))
+            }
         }
     }
 
@@ -409,19 +406,10 @@ impl Session {
         start: &DocumentRangeEndpoint,
         end: &DocumentRangeEndpoint,
         environments: &mut Vec<NodeId>,
-        math_blocks: &mut Vec<NodeId>,
+        atomic_blocks: &mut Vec<NodeId>,
     ) -> Result<(), EditError> {
         for block in blocks {
             match block {
-                Block::Table(table) => {
-                    // 表格尚未作为范围对象；只有范围真正覆盖整表时拒绝，避免
-                    // 含表文档的无关结构选区被一刀切禁用。
-                    let unit = range_block_unit(&table.id);
-                    if matches!(self.block_unit_is_covered(start, end, &unit), Ok(true)) {
-                        return Err(EditError::UnsupportedTableContent);
-                    }
-                    continue;
-                }
                 Block::Environment(environment) => {
                     let Some(unit) = self.block_range_unit(block) else {
                         continue;
@@ -436,15 +424,28 @@ impl Session {
                         start,
                         end,
                         environments,
-                        math_blocks,
+                        atomic_blocks,
                     )?;
                 }
-                Block::Equation(_) | Block::Align(_) => {
+                Block::Equation(_) | Block::Align(_) | Block::Table(_) => {
                     let Some(unit) = self.block_range_unit(block) else {
                         continue;
                     };
                     if self.block_unit_is_covered(start, end, &unit)? {
-                        math_blocks.push(unit.0);
+                        atomic_blocks.push(unit.0);
+                    } else if let Block::Table(table) = block
+                        && self.compare_range_endpoints(start, &unit.2)?.is_lt()
+                        && self.compare_range_endpoints(end, &unit.1)?.is_gt()
+                    {
+                        for cell in table.rows.iter().flat_map(|row| &row.cells) {
+                            self.collect_covered_block_nodes(
+                                &cell.blocks,
+                                start,
+                                end,
+                                environments,
+                                atomic_blocks,
+                            )?;
+                        }
                     }
                 }
                 Block::Paragraph(_) | Block::ExplicitBreak(_) | Block::Opaque(_) => {}
@@ -458,25 +459,7 @@ impl Session {
         &self,
         endpoint: &DocumentRangeEndpoint,
     ) -> Option<Pos> {
-        if let DocumentRangeEndpoint::Text(position) = endpoint {
-            return Some(position.clone());
-        }
-        let length = self.structure_index.navigation_paragraphs().len();
-        for ordinal in 0..length {
-            let Some(position) = self.paragraph_edge_position(ordinal, false) else {
-                continue;
-            };
-            if self
-                .compare_range_endpoints(&DocumentRangeEndpoint::Text(position.clone()), endpoint)
-                .ok()?
-                .is_ge()
-            {
-                return Some(position);
-            }
-        }
-        length
-            .checked_sub(1)
-            .and_then(|ordinal| self.paragraph_edge_position(ordinal, true))
+        self.text_endpoint_on_side(endpoint, Direction::Forward, None)
     }
 
     /// 映射到边界同侧最近的段落终点；没有时退回文档顺序上最近的段落。
@@ -484,23 +467,46 @@ impl Session {
         &self,
         endpoint: &DocumentRangeEndpoint,
     ) -> Option<Pos> {
+        self.text_endpoint_on_side(endpoint, Direction::Backward, None)
+    }
+
+    /// 取指定侧最近的段落边界。指定 Story 时只接受该 Story 内且确实位于该侧的切口。
+    pub(in crate::editing::session) fn text_endpoint_on_side(
+        &self,
+        endpoint: &DocumentRangeEndpoint,
+        direction: Direction,
+        story: Option<&StoryId>,
+    ) -> Option<Pos> {
         if let DocumentRangeEndpoint::Text(position) = endpoint {
-            return Some(position.clone());
+            return story
+                .is_none_or(|story| story == &position.story)
+                .then(|| position.clone());
         }
+        let backward = direction == Direction::Backward;
         let length = self.structure_index.navigation_paragraphs().len();
-        for ordinal in (0..length).rev() {
-            let Some(position) = self.paragraph_edge_position(ordinal, true) else {
+        for index in 0..length {
+            let ordinal = if backward { length - index - 1 } else { index };
+            let paragraph_id = self.structure_index.paragraph_id_at(ordinal)?;
+            if let Some(story) = story
+                && self.paragraph_index.get(paragraph_id)?.story != *story
+            {
+                continue;
+            }
+            let Some(position) = self.paragraph_edge_position(ordinal, backward) else {
                 continue;
             };
-            if self
+            let order = self
                 .compare_range_endpoints(&DocumentRangeEndpoint::Text(position.clone()), endpoint)
-                .ok()?
-                .is_le()
-            {
+                .ok()?;
+            if (backward && order.is_le()) || (!backward && order.is_ge()) {
                 return Some(position);
             }
         }
-        self.paragraph_edge_position(0, false)
+        if story.is_some() {
+            return None;
+        }
+        let ordinal = if backward { 0 } else { length.checked_sub(1)? };
+        self.paragraph_edge_position(ordinal, !backward)
     }
 
     fn paragraph_edge_position(&self, ordinal: usize, at_end: bool) -> Option<Pos> {

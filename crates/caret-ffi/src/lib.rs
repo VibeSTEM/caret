@@ -97,6 +97,9 @@ mod generated {
             clip_enabled: bool,
             clip_y0_pt: f64,
             clip_y1_pt: f64,
+            clip_x_enabled: bool,
+            clip_x0_pt: f64,
+            clip_x1_pt: f64,
         }
 
         struct GlyphDecoration {
@@ -112,6 +115,9 @@ mod generated {
             clip_enabled: bool,
             clip_y0_pt: f64,
             clip_y1_pt: f64,
+            clip_x_enabled: bool,
+            clip_x0_pt: f64,
+            clip_x1_pt: f64,
         }
 
         struct GlyphShape {
@@ -137,6 +143,9 @@ mod generated {
             clip_enabled: bool,
             clip_y0_pt: f64,
             clip_y1_pt: f64,
+            clip_x_enabled: bool,
+            clip_x0_pt: f64,
+            clip_x1_pt: f64,
         }
 
         struct PageGlyphFrame {

@@ -84,6 +84,38 @@ impl Session {
         }
     }
 
+    pub(in crate::editing::session::keyboards) fn step_table_horizontally(
+        &mut self,
+        direction: Direction,
+        candidate: Option<&NavigationCandidate>,
+    ) -> Result<Option<Effect>, EditError> {
+        if self.table_context().is_none() {
+            return Ok(None);
+        }
+        if let Some(candidate) = candidate {
+            let NavigationCandidate::Document {
+                focus,
+                visual_affinity,
+                generation,
+            } = candidate
+            else {
+                return Err(EditError::InvalidPosition);
+            };
+            self.validate_navigation_generation(generation)?;
+            self.text_map_for(focus)?.validate_pos(focus)?;
+            if focus.paragraph_id == self.selection.focus.paragraph_id
+                && (focus.offset != self.selection.focus.offset
+                    || *visual_affinity != self.selection_visual_affinity)
+            {
+                return Ok(None);
+            }
+        }
+        self.table_arrow_step(
+            super::super::super::table::TableArrowAxis::Horizontal,
+            direction,
+        )
+    }
+
     /// 提交正文候选；锚点根据调用方已选择的扩展状态构造。
     pub(in crate::editing::session::keyboards) fn commit_document_navigation_candidate(
         &mut self,
@@ -95,30 +127,15 @@ impl Session {
         extend: bool,
     ) -> Result<Effect, EditError> {
         self.validate_navigation_generation(&generation)?;
-        if focus.story != self.selection.focus.story
-            && (matches!(focus.story, crate::StoryId::TableCell { .. })
-                || matches!(self.selection.focus.story, crate::StoryId::TableCell { .. }))
+        if extend
+            && intent == NavigationIntent::Horizontal
+            && let Some(direction) = direction
+            && self
+                .block_boundary_exit()
+                .is_some_and(|(_, side)| side != direction)
         {
-            // 表格是块宿主：跨 Story 候选不能直接提交（TableCell 位置与 Body
-            // 位置不可比较）。普通移动按块邻接进入表格，其余跨格候选收敛为
-            // no-op，避免 layout 候选把 QML 导航打成 position_story_mismatch。
-            if extend {
-                return Ok(Effect::default());
-            }
-            if let Some(direction) = direction
-                && matches!(self.selection.focus.story, crate::StoryId::Body)
-            {
-                if self.enter_adjacent_table(direction)? {
-                    return Ok(Effect {
-                        selection_changed: true,
-                        ..Effect::default()
-                    });
-                }
-                // 候选可能跳过紧邻的公式/环境（扁平段落顺序不含公式）；表格
-                // 不直接相邻时回落到既有复杂块边缘逻辑，不能把方向键吃掉。
-                return self.complete_horizontal_document_edge(direction, false);
-            }
-            return Ok(Effect::default());
+            self.text_map_for(&focus)?.validate_pos(&focus)?;
+            return self.extend_structure_selection(direction);
         }
         let retained_empty_inline_host = if !extend
             && focus.paragraph_id == self.selection.focus.paragraph_id
@@ -135,6 +152,7 @@ impl Session {
             None
         };
         if !extend
+            && self.block_boundary_exit().is_none()
             && self.selection.anchor == self.selection.focus
             && focus == self.selection.focus
             && visual_affinity != self.selection_visual_affinity
@@ -295,7 +313,7 @@ impl Session {
     }
 
     /// 完成正文水平导航的空候选边缘动作；按键 handler 负责调用时机。
-    pub(in crate::editing::session::keyboards) fn complete_horizontal_document_edge(
+    pub(in crate::editing::session) fn complete_horizontal_document_edge(
         &mut self,
         direction: Direction,
         extend: bool,
@@ -304,10 +322,16 @@ impl Session {
             // 布局没有给出候选时，扩选仍按共享文档单元前进，跨入相邻 Equation/Align。
             return self.extend_structure_selection(direction);
         }
-        if let Some(effect) = self.move_from_math_block_boundary_stop(direction)? {
+        if let Some(effect) = self.move_from_block_boundary_stop(direction)? {
             return Ok(effect);
         }
         if self.enter_adjacent_math_if_present(direction)? {
+            return Ok(Effect {
+                selection_changed: true,
+                ..Effect::default()
+            });
+        }
+        if self.park_beside_adjacent_atomic_block(direction, true)? {
             return Ok(Effect {
                 selection_changed: true,
                 ..Effect::default()
@@ -317,23 +341,31 @@ impl Session {
     }
 
     /// 完成正文视觉列的上下边缘；若相邻块是显示公式，复用同一块邻接入口。
-    pub(in crate::editing::session::keyboards) fn complete_vertical_document_edge(
+    pub(in crate::editing::session) fn complete_vertical_document_edge(
         &mut self,
         direction: Direction,
         extend: bool,
     ) -> Result<Effect, EditError> {
+        if let Some(effect) = self.move_vertically_at_block_boundary(direction, extend)? {
+            return Ok(effect);
+        }
+        if !extend
+            && self.selection.anchor == self.selection.focus
+            && self.block_boundary_exit().is_none()
+            && self.focus_is_inside_table_cell_environment()
+            && let Some(effect) = self.exit_block_environment_at_vertical_edge(direction)?
+        {
+            return Ok(effect);
+        }
+        if extend && self.block_boundary_exit().is_some() {
+            return self.extend_structure_selection(direction);
+        }
         // 外侧停靠的前进方向取决于真实视觉行；没有候选即保持原位。
         if self.block_boundary_exit().is_some() {
             return Ok(Effect::default());
         }
         if !extend {
-            if self.enter_adjacent_table(direction)? {
-                return Ok(Effect {
-                    selection_changed: true,
-                    ..Effect::default()
-                });
-            }
-            if self.enter_adjacent_block_math_if_present(direction)? {
+            if self.park_beside_adjacent_atomic_block(direction, false)? {
                 return Ok(Effect {
                     selection_changed: true,
                     ..Effect::default()
@@ -348,17 +380,15 @@ impl Session {
         {
             return self.extend_structure_selection(direction);
         }
-        // 没有视觉行候选时，只有焦点已停在段落边界且相邻块是显示公式，才按文档
-        // 单元扩选；其余纵向扩选需要布局候选，不能用一个字素步长伪造视觉行移动。
+        // 无布局候选的调用方只能在确定的文本首尾跨入相邻原子块。
         let focus = self.selection.focus.clone();
-        let text_len = self.text_map_for(&focus)?.text.len();
         let at_paragraph_edge = match direction {
             Direction::Backward => focus.offset == 0,
-            Direction::Forward => focus.offset == text_len,
+            Direction::Forward => focus.offset == self.text_map_for(&focus)?.text.len(),
         };
         if self.selection.anchor == self.selection.focus
             && at_paragraph_edge
-            && self.paragraph_beside_block_math(&focus, direction)?
+            && self.adjacent_atomic_block(&focus, direction)?.is_some()
         {
             return self.extend_structure_selection(direction);
         }

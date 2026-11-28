@@ -1,6 +1,6 @@
 # Task 索引
 
-更新日期：2026-11-22。非平凡改动先从[模板](task/_template.md)建 task，在本索引登记，然后再动代码。行为规格在[架构](architecture/README.md)和[规范](standards/README.md)。2026-10-25 删去未执行的旧队列，现行任务从 001 重新编号。
+更新日期：2026-11-28。非平凡改动先从[模板](task/_template.md)建 task，在本索引登记，然后再动代码。行为规格在[架构](architecture/README.md)和[规范](standards/README.md)。2026-10-25 删去未执行的旧队列，现行任务从 001 重新编号。
 
 ## 使用方式
 
@@ -43,7 +43,7 @@
 | 009 | 命令输入 | [M1：`\` 命令](task/009-impl-commands.md) | P2 | 008 | M | done |
 | 010 | 结构导航 | [M2：结构导航与结构命令](task/010-impl-structure.md) | P2 | 009、020 | M | done |
 | 011 | 数学排版 | [M3：公式总体验收](task/011-impl-math.md) | P2 | 010、042、043、044、045、046、069 | M | planned |
-| 012 | 表格排版 | [M3：表格总体验收](task/012-impl-table.md) | P2 | 045、046 | S | planned |
+| 012 | 表格排版 | [M3：表格总体验收](task/012-impl-table.md) | P2 | 045、046、106 | S | implemented |
 | 013 | 性能 | [M4：脏段落排版](task/013-impl-layout.md) | P2 | 011、012、027 | M | planned |
 | 014 | CLI | [应用命令行](task/014-impl-cli.md) | P2 | 008 | M | ready |
 | 015 | 文档维护 | [文档审查修正](task/015-doc-review-fixes.md) | P0 | — | S | done |
@@ -76,7 +76,7 @@
 | 042 | 数学排版 | [M3：数学后端选型与验证](task/042-math-backend.md) | P2 | — | M | done |
 | 043 | 数学排版 | [M3：公式模型与编辑](task/043-math-model-and-editing.md) | P2 | 010、042 | L | done |
 | 044 | 数学排版 | [M3：公式布局与画布渲染](task/044-math-layout-and-rendering.md) | P2 | 027、043 | L | done |
-| 045 | 表格 | [M3：表格模型与交互](task/045-table-model-and-editing.md) | P2 | 010、021、043、071 | M | implemented |
+| 045 | 表格 | [M3：表格模型与交互](task/045-table-model-and-editing.md) | P2 | 010、021、043、071 | M | done |
 | 046 | 表格 | [M3：表格布局与画布](task/046-table-layout-and-canvas.md) | P2 | 027、043、044、045 | M | implemented |
 | 047 | 文档交换 | [Markdown 导入导出与转换框架](task/047-markdown-interchange.md) | P2 | 008、010–012、018、021、023–027、029、050–053、092 | L | planned |
 | 048 | 文档交换 | [DOCX 导入导出适配器](task/048-docx-interchange.md) | P2 | 047 | L | planned |
@@ -115,11 +115,11 @@
 | 081 | 编辑交互 | [Block/Inline 共享三态焦点仲裁](task/081-host-three-state-caret-arbitration.md) | P0 | 071、074、077 | M | done |
 | 082 | 架构 | [共享文档位置、全序与宿主定位](task/082-shared-document-position-and-order.md) | P1 | 071、074、077、081 | M | done |
 | 083 | 编辑交互 | [跨宿主选区、编辑事务与几何投影](task/083-cross-host-selection-and-transactions.md) | P1 | 071、074、077、081、082 | L | done |
-| 084 | 文档模型 | [行内与数学内容形状及容器边界](task/084-document-content-shapes-and-boundaries.md) | P1 | 025、032、081、082 | L | planned |
+| 084 | 文档模型 | [行内与数学内容形状及容器边界](task/084-document-content-shapes-and-boundaries.md) | P1 | 025、032、081、082 | L | implemented |
 | 085 | 文档存储 | [已知节点严格字段与消费者校验](task/085-strict-document-schema-validation.md) | P1 | 093 | L | ready |
 | 086 | 画布几何 | [行内对象边界选区几何修正](task/086-inline-box-selection-geometry.md) | P1 | 030、044、068 | S | done |
 | 087 | 数学排版 | [空 InlineMath 行内推进与聚焦高亮契约](task/087-empty-inline-math-advance-and-highlight.md) | P1 | 044、072、074 | M | done |
-| 088 | 数学排版 | [收敛空 InlineMath 插入槽与正文命中优先级](task/088-unify-empty-inline-math-hit-slot.md) | P2 | 087、069 | S | planned |
+| 088 | 数学排版 | [收敛空 InlineMath 插入槽与正文命中优先级](task/088-unify-empty-inline-math-hit-slot.md) | P2 | 087、069 | S | implemented |
 | 089 | 行内格式 | [InlineEnvironment 普通 Backspace 清理语义](task/089-inline-environment-backspace-cleanup.md) | P1 | 031、044、075 | S | done |
 | 090 | 画布交互 | [拖选跨公式块/块环境的实时预览](task/090-drag-selection-live-preview.md) | P1 | 027、031、044、083 | M | done |
 | 091 | 剪贴板 | [富剪贴板与数学片段接入](task/091-rich-clipboard-integration.md) | P1 | 083、092 | M | done |

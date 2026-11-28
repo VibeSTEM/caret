@@ -5,17 +5,17 @@
 
 use super::super::document_position::visual_affinity_for;
 use super::super::formatting::PendingInlineStyle;
-use super::super::math_edit::find_block_path;
 use super::super::{DocumentRangeEndpoint, MathEdit, StructureSelection};
 use super::*;
-use crate::editing::paragraph_ops::BlockContainerPath;
 use crate::editing::paragraph_ops::{
     ParagraphIndex, ParagraphLocation, build_paragraph_index, merge_paragraph_range,
     paragraph_at_location_mut,
 };
 use crate::editing::session::history::{self, ParagraphState};
 use caret_doc::Document;
-use caret_structure::{DocumentNodeKind, find_document_node};
+use caret_structure::{
+    DocumentNodeKind, block_list_by_container, block_list_by_container_mut, find_document_node,
+};
 use std::collections::VecDeque;
 
 /// 结构范围删除计划：先完整校验端点、覆盖节点与文字切口，再一次性提交。
@@ -187,23 +187,6 @@ impl Session {
         }))
     }
 
-    /// 记录结构编辑前的选区、视觉侧与文档边界停靠，供历史回退精确恢复。
-    fn capture_structure_edit_before_state(&self) -> StructureEditBeforeState {
-        StructureEditBeforeState {
-            inline_range: self
-                .structure_selection
-                .as_ref()
-                .filter(|range| range.anchor.is_inline_math() || range.focus.is_inline_math())
-                .cloned()
-                .map(Box::new),
-            selection: self.selection.clone(),
-            anchor_visual_affinity: self.selection_anchor_visual_affinity,
-            visual_affinity: self.selection_visual_affinity,
-            state_id: self.history_state_id,
-            host_caret_position: self.host_caret_position.clone(),
-        }
-    }
-
     /// 替换事务失败时用于原子回滚的文档、交互与历史记账快照。
     fn capture_structure_edit_restore_point(&self) -> StructureEditRestorePoint {
         StructureEditRestorePoint {
@@ -216,7 +199,7 @@ impl Session {
             selection_visual_affinity: self.selection_visual_affinity,
             math_edit: self.math_edit.clone(),
             selected_block_environments: self.selected_block_environments.clone(),
-            selected_math_blocks: self.selected_math_blocks.clone(),
+            selected_atomic_blocks: self.selected_atomic_blocks.clone(),
             structure_selection: self.structure_selection.clone(),
             host_caret_position: self.host_caret_position.clone(),
             pending_inline_style: self.pending_inline_style.clone(),
@@ -236,7 +219,7 @@ impl Session {
         self.selection_visual_affinity = restore.selection_visual_affinity;
         self.set_math_edit(restore.math_edit);
         self.selected_block_environments = restore.selected_block_environments;
-        self.selected_math_blocks = restore.selected_math_blocks;
+        self.selected_atomic_blocks = restore.selected_atomic_blocks;
         self.structure_selection = restore.structure_selection;
         self.set_host_caret_position(restore.host_caret_position);
         self.pending_inline_style = restore.pending_inline_style;
@@ -279,11 +262,11 @@ impl Session {
             let Some((start, end)) = self.ordered_range_endpoints()? else {
                 return Ok(None);
             };
-            let (environments, math_blocks) = self.structure_range_block_nodes()?;
+            let (environments, atomic_blocks) = self.structure_range_block_nodes()?;
             if parts.body.anchor == parts.body.focus
                 && parts.formula_ranges().all(|(_, range)| range.is_empty())
                 && environments.is_empty()
-                && math_blocks.is_empty()
+                && atomic_blocks.is_empty()
             {
                 return Ok(None);
             }
@@ -298,28 +281,25 @@ impl Session {
                 },
             );
             let mut node_patches =
-                self.structure_node_deletion_patches(&environments, &math_blocks)?;
+                self.structure_node_deletion_patches(&environments, &atomic_blocks)?;
             let mut document_after_nodes = self.document.clone();
             for patch in &node_patches {
                 if !patch.redo(&mut document_after_nodes) {
                     return Err(EditError::InvalidPosition);
                 }
             }
-            let fallback_paragraph_id = build_paragraph_index(&document_after_nodes.body)
-                .is_empty()
-                .then(|| {
-                    let paragraph = Box::new(Paragraph::empty(NodeId::generate()));
-                    let sibling_index = document_after_nodes.body.len();
-                    document_after_nodes
-                        .body
-                        .push(Block::Paragraph((*paragraph).clone()));
-                    node_patches.push(DocumentPatch::ParagraphInsertion {
-                        parent_environment_ids: Vec::new(),
-                        sibling_index,
-                        paragraph: paragraph.clone(),
-                    });
-                    paragraph.id.clone()
+            if build_paragraph_index(&document_after_nodes.body).is_empty() {
+                let paragraph = Box::new(Paragraph::empty(NodeId::generate()));
+                let sibling_index = document_after_nodes.body.len();
+                document_after_nodes
+                    .body
+                    .push(Block::Paragraph((*paragraph).clone()));
+                node_patches.push(DocumentPatch::ParagraphInsertion {
+                    parent_environment_ids: Vec::new(),
+                    sibling_index,
+                    paragraph: paragraph.clone(),
                 });
+            }
             document_after_nodes
                 .validate()
                 .map_err(|error| EditError::InvalidDocument(error.to_string()))?;
@@ -335,7 +315,7 @@ impl Session {
                 &environments,
                 &document_after_nodes,
             )?;
-            let fallback_paragraph_id = if build_paragraph_index(&document.body).is_empty() {
+            if build_paragraph_index(&document.body).is_empty() {
                 let paragraph = Box::new(Paragraph::empty(NodeId::generate()));
                 let sibling_index = document_after_nodes.body.len();
                 document.body.push(Block::Paragraph((*paragraph).clone()));
@@ -347,10 +327,7 @@ impl Session {
                     sibling_index,
                     paragraph: paragraph.clone(),
                 });
-                Some(paragraph.id.clone())
-            } else {
-                fallback_paragraph_id
-            };
+            }
             let mut before_ids = before_ids;
             for (target, _) in parts.formula_ranges() {
                 let crate::MathEditTarget::Inline { paragraph_id, .. } = target else {
@@ -406,7 +383,7 @@ impl Session {
                 &text_bounds,
                 &document,
                 &after_index,
-                &fallback_paragraph_id,
+                &node_patches,
             )?;
             return Ok(Some(StructureRangeDeletion {
                 node_patches,
@@ -420,31 +397,29 @@ impl Session {
         let Some((start, end)) = self.ordered_range_endpoints()? else {
             return Ok(None);
         };
-        let (environments, math_blocks) = self.structure_range_block_nodes()?;
+        let (environments, atomic_blocks) = self.structure_range_block_nodes()?;
         let text_bounds = self.usable_structure_text_bounds()?;
 
-        let mut node_patches = self.structure_node_deletion_patches(&environments, &math_blocks)?;
+        let mut node_patches =
+            self.structure_node_deletion_patches(&environments, &atomic_blocks)?;
         let mut document_after_nodes = self.document.clone();
         for patch in &node_patches {
             if !patch.redo(&mut document_after_nodes) {
                 return Err(EditError::InvalidPosition);
             }
         }
-        let fallback_paragraph_id = build_paragraph_index(&document_after_nodes.body)
-            .is_empty()
-            .then(|| {
-                let paragraph = Box::new(Paragraph::empty(NodeId::generate()));
-                let sibling_index = document_after_nodes.body.len();
-                document_after_nodes
-                    .body
-                    .push(Block::Paragraph((*paragraph).clone()));
-                node_patches.push(DocumentPatch::ParagraphInsertion {
-                    parent_environment_ids: Vec::new(),
-                    sibling_index,
-                    paragraph: paragraph.clone(),
-                });
-                paragraph.id.clone()
+        if build_paragraph_index(&document_after_nodes.body).is_empty() {
+            let paragraph = Box::new(Paragraph::empty(NodeId::generate()));
+            let sibling_index = document_after_nodes.body.len();
+            document_after_nodes
+                .body
+                .push(Block::Paragraph((*paragraph).clone()));
+            node_patches.push(DocumentPatch::ParagraphInsertion {
+                parent_environment_ids: Vec::new(),
+                sibling_index,
+                paragraph: paragraph.clone(),
             });
+        }
         document_after_nodes
             .validate()
             .map_err(|error| EditError::InvalidDocument(error.to_string()))?;
@@ -462,7 +437,7 @@ impl Session {
             &document_after_nodes,
         )?;
         // 移除范围中间的普通段落也可能再次清空文档；与节点删除一样补一个可编辑空段落。
-        let fallback_paragraph_id = if build_paragraph_index(&document.body).is_empty() {
+        if build_paragraph_index(&document.body).is_empty() {
             let paragraph = Box::new(Paragraph::empty(NodeId::generate()));
             // 补位段落追加在节点删除后文档的末尾，重放顺序才与 before 快照一致。
             let sibling_index = document_after_nodes.body.len();
@@ -475,10 +450,7 @@ impl Session {
                 sibling_index,
                 paragraph: paragraph.clone(),
             });
-            Some(paragraph.id.clone())
-        } else {
-            fallback_paragraph_id
-        };
+        }
         if node_patches.is_empty() && before_ids.is_empty() {
             return Ok(None);
         }
@@ -506,7 +478,7 @@ impl Session {
             &text_bounds,
             &document,
             &after_index,
-            &fallback_paragraph_id,
+            &node_patches,
         )?;
         Ok(Some(StructureRangeDeletion {
             node_patches,
@@ -585,7 +557,8 @@ impl Session {
                 .ok_or(EditError::InvalidPosition)?;
             *slot = updated;
         }
-        remove_range_paragraphs(&mut document, &after_nodes_index, &removed_ids)?;
+        let blank_cell_paragraphs =
+            remove_range_paragraphs(&mut document, &after_nodes_index, &removed_ids)?;
         let mut before_ids = text_edits
             .iter()
             .map(|(paragraph_id, _, _)| paragraph_id.clone())
@@ -594,6 +567,7 @@ impl Session {
         let surviving_ids = text_edits
             .iter()
             .map(|(paragraph_id, _, _)| paragraph_id.clone())
+            .chain(blank_cell_paragraphs)
             .collect();
         Ok(StructureRangeTextPlan {
             document,
@@ -606,7 +580,7 @@ impl Session {
     // 文本端点解析成节点移除后的文档位置，不同容器、标题段落、样式不兼容、未知
     // opaque 内容等条件全部交给合并函数返回 `CrossParagraphSelection` 或具体错误。
 
-    /// 当前结构选区覆盖的块节点，按文档顺序返回最外层环境与未被环境包含的公式块。
+    /// 当前结构选区覆盖的块节点，按文档顺序返回最外层环境与未被环境包含的原子块。
     ///
     /// 选区安装时已从范围派生这两个列表；这里再按物理树校验节点身份并裁掉被选中
     /// 环境的后代，避免同一祖先子树被删除两次。
@@ -635,11 +609,11 @@ impl Session {
             })
             .cloned()
             .collect::<Vec<_>>();
-        let mut math_blocks = Vec::with_capacity(self.selected_math_blocks.len());
-        for id in &self.selected_math_blocks {
+        let mut atomic_blocks = Vec::with_capacity(self.selected_atomic_blocks.len());
+        for id in &self.selected_atomic_blocks {
             let location =
                 find_document_node(&self.document, id).ok_or(EditError::InvalidPosition)?;
-            if !location.kind.is_math_block() {
+            if !location.kind.is_atomic_block() {
                 return Err(EditError::InvalidPosition);
             }
             if location
@@ -649,9 +623,9 @@ impl Session {
             {
                 continue;
             }
-            math_blocks.push(id.clone());
+            atomic_blocks.push(id.clone());
         }
-        Ok((outermost, math_blocks))
+        Ok((outermost, atomic_blocks))
     }
 
     /// 按文档顺序返回结构选区两端；没有结构选区时返回 `None`。
@@ -736,7 +710,16 @@ impl Session {
             let Some(paragraph_id) = self.structure_index.paragraph_id_at(ordinal).cloned() else {
                 continue;
             };
-            if self.paragraph_inside_environments(&paragraph_id, environments) {
+            if self.paragraph_inside_environments(&paragraph_id, environments)
+                || self
+                    .paragraph_index
+                    .get(&paragraph_id)
+                    .is_some_and(|location| {
+                        location.container.innermost_cell().is_some_and(|cell| {
+                            self.selected_atomic_blocks.contains(&cell.table_id)
+                        })
+                    })
+            {
                 continue;
             }
             let text_len = self.paragraph_text_len(&paragraph_id)?;
@@ -811,49 +794,53 @@ impl Session {
     fn structure_node_deletion_patches(
         &self,
         environments: &[NodeId],
-        math_blocks: &[NodeId],
+        atomic_blocks: &[NodeId],
     ) -> Result<Vec<DocumentPatch>, EditError> {
-        let mut locations: Vec<(Vec<NodeId>, usize, NodeId)> =
-            Vec::with_capacity(environments.len() + math_blocks.len());
-        for block_id in environments.iter().chain(math_blocks) {
-            let (parent_environment_ids, sibling_index) =
-                find_block_path(&self.document.body, block_id).ok_or(EditError::InvalidPosition)?;
-            locations.push((parent_environment_ids, sibling_index, block_id.clone()));
-        }
-        locations.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| right.1.cmp(&left.1)));
+        let mut locations = environments
+            .iter()
+            .chain(atomic_blocks)
+            .map(|id| {
+                let location =
+                    find_document_node(&self.document, id).ok_or(EditError::InvalidPosition)?;
+                let sibling_index = location.sibling_index.ok_or(EditError::InvalidPosition)?;
+                Ok((sibling_index, location))
+            })
+            .collect::<Result<Vec<_>, EditError>>()?;
+        locations.sort_by_key(|(index, _)| std::cmp::Reverse(*index));
         let mut patches = Vec::with_capacity(locations.len());
-        for (parent_environment_ids, sibling_index, block_id) in locations {
-            let siblings = block_list_by_parent_ids(&self.document.body, &parent_environment_ids)
+        for (sibling_index, location) in &locations {
+            let siblings = block_list_by_container(&self.document.body, &location.container)
                 .ok_or(EditError::InvalidPosition)?;
-            match siblings.get(sibling_index) {
-                Some(Block::Environment(environment))
-                    if environments.contains(&block_id) && environment.id == block_id =>
-                {
-                    patches.push(DocumentPatch::EnvironmentDeletion {
-                        parent_environment_ids,
-                        sibling_index,
-                        environment_estimated_bytes: history::environment_estimated_bytes(
-                            environment,
-                        ),
-                        environment: Box::new(environment.clone()),
-                        fallback_paragraph: None,
-                    });
-                }
-                Some(block)
-                    if math_blocks.contains(&block_id)
-                        && matches!(block, Block::Equation(_) | Block::Align(_)) =>
-                {
-                    patches.push(DocumentPatch::BlockRange {
-                        container: BlockContainerPath::from_environment_ids(
-                            &parent_environment_ids,
-                        ),
-                        sibling_index,
-                        before: vec![block.clone()],
-                        after: Vec::new(),
-                    });
-                }
-                _ => return Err(EditError::InvalidPosition),
+            let block = siblings
+                .get(*sibling_index)
+                .ok_or(EditError::InvalidPosition)?;
+            if !super::super::block_navigation::block_identity(block)
+                .is_some_and(|(id, kind)| id == &location.id && kind == location.kind)
+            {
+                return Err(EditError::InvalidPosition);
             }
+            // 补位随最后一块的删除补丁提交，保证有效单元格和 Undo/Redo 一致。
+            let empties_cell = *sibling_index == 0
+                && matches!(
+                    location.container.last_step(),
+                    Some(caret_structure::ContainerStep::TableCell(_))
+                )
+                && locations
+                    .iter()
+                    .filter(|(_, node)| node.container == location.container)
+                    .count()
+                    == siblings.len();
+            let after = if empties_cell {
+                vec![Block::Paragraph(Paragraph::empty(NodeId::generate()))]
+            } else {
+                Vec::new()
+            };
+            patches.push(DocumentPatch::BlockRange {
+                container: location.container.clone(),
+                sibling_index: *sibling_index,
+                before: vec![block.clone()],
+                after,
+            });
         }
         Ok(patches)
     }
@@ -867,8 +854,20 @@ impl Session {
         text_bounds: &Option<(Pos, Pos, usize, usize)>,
         document: &Document,
         index: &ParagraphIndex,
-        fallback_paragraph_id: &Option<NodeId>,
+        node_patches: &[DocumentPatch],
     ) -> Result<Pos, EditError> {
+        let containing_cell = |endpoint: &DocumentRangeEndpoint| {
+            let node_id = match endpoint {
+                DocumentRangeEndpoint::BlockEdge { block_id, .. } => block_id,
+                DocumentRangeEndpoint::Text(position) => &position.paragraph_id,
+                DocumentRangeEndpoint::InlineMathText { paragraph_id, .. }
+                | DocumentRangeEndpoint::InlineMathTree { paragraph_id, .. } => paragraph_id,
+            };
+            find_document_node(&self.document, node_id)?
+                .container
+                .innermost_cell()
+                .cloned()
+        };
         let mut candidates = Vec::new();
         match start {
             DocumentRangeEndpoint::Text(position) => candidates.push(position.clone()),
@@ -882,6 +881,36 @@ impl Session {
         }
         if let Some(position) = self.text_endpoint_clamped(end) {
             candidates.push(position);
+        }
+        if let Some(cell) = containing_cell(start)
+            && containing_cell(end).as_ref() == Some(&cell)
+        {
+            if let Some(caret) = candidates
+                .iter()
+                .filter(|position| self.table_cell_for_position(position) == Some(&cell))
+                .find_map(|position| clamped_caret(document, index, position))
+            {
+                return Ok(caret);
+            }
+            if let Some(paragraph_id) = node_patches.iter().find_map(|patch| match patch {
+                DocumentPatch::BlockRange {
+                    container, after, ..
+                } if container.innermost_cell() == Some(&cell) => {
+                    let [Block::Paragraph(paragraph)] = after.as_slice() else {
+                        return None;
+                    };
+                    Some(&paragraph.id)
+                }
+                _ => None,
+            }) {
+                let location = index.get(paragraph_id).ok_or(EditError::InvalidPosition)?;
+                return Ok(Pos {
+                    story: location.story.clone(),
+                    paragraph_id: paragraph_id.clone(),
+                    offset: 0,
+                    affinity: Affinity::Downstream,
+                });
+            }
         }
         for candidate in candidates {
             if let Some(position) = clamped_caret(document, index, &candidate) {
@@ -921,8 +950,12 @@ impl Session {
                 }
             }
         }
-        let fallback_id = fallback_paragraph_id
-            .as_ref()
+        let fallback_id = node_patches
+            .iter()
+            .find_map(|patch| match patch {
+                DocumentPatch::ParagraphInsertion { paragraph, .. } => Some(&paragraph.id),
+                _ => None,
+            })
             .ok_or(EditError::InvalidPosition)?;
         let location = index.get(fallback_id).ok_or(EditError::InvalidPosition)?;
         Ok(Pos {
@@ -955,7 +988,7 @@ struct StructureEditRestorePoint {
     selection_visual_affinity: VisualAffinity,
     math_edit: Option<MathEdit>,
     selected_block_environments: Vec<NodeId>,
-    selected_math_blocks: Vec<NodeId>,
+    selected_atomic_blocks: Vec<NodeId>,
     structure_selection: Option<StructureSelection>,
     host_caret_position: Option<HostCaretPosition<Pos>>,
     pending_inline_style: PendingInlineStyle,
@@ -994,7 +1027,7 @@ fn remove_range_paragraphs(
     document: &mut Document,
     index: &ParagraphIndex,
     paragraph_ids: &[NodeId],
-) -> Result<(), EditError> {
+) -> Result<Vec<NodeId>, EditError> {
     let mut locations = paragraph_ids
         .iter()
         .map(|paragraph_id| {
@@ -1004,27 +1037,36 @@ fn remove_range_paragraphs(
                 .ok_or(EditError::InvalidPosition)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    locations.sort_by(|left, right| {
-        left.parent_environment_ids
-            .cmp(&right.parent_environment_ids)
-            .then_with(|| right.block_path.cmp(&left.block_path))
-    });
+    locations.sort_by_key(|location| std::cmp::Reverse(location.block_path.last().copied()));
+    let mut retained = Vec::new();
     for location in locations {
         let Some((&sibling_index, _)) = location.block_path.split_last() else {
             return Err(EditError::InvalidPosition);
         };
-        let siblings =
-            block_list_by_parent_ids_mut(&mut document.body, &location.parent_environment_ids)
-                .ok_or(EditError::InvalidPosition)?;
+        let siblings = block_list_by_container_mut(&mut document.body, &location.container)
+            .ok_or(EditError::InvalidPosition)?;
         if !matches!(
             siblings.get(sibling_index),
             Some(Block::Paragraph(paragraph)) if paragraph.id == location.paragraph_id
         ) {
             return Err(EditError::InvalidPosition);
         }
-        siblings.remove(sibling_index);
+        if siblings.len() == 1
+            && matches!(
+                location.container.last_step(),
+                Some(caret_structure::ContainerStep::TableCell(_))
+            )
+        {
+            let Block::Paragraph(paragraph) = &mut siblings[sibling_index] else {
+                return Err(EditError::InvalidPosition);
+            };
+            paragraph.inlines.clear();
+            retained.push(paragraph.id.clone());
+        } else {
+            siblings.remove(sibling_index);
+        }
     }
-    Ok(())
+    Ok(retained)
 }
 
 /// 在范围删改后的文档中按稳定公式 ID 定位行内公式，允许其段落在合并中迁移。
@@ -1054,12 +1096,14 @@ fn find_inline_math_in_blocks_mut<'a>(
                     return Some(math);
                 }
             }
-            // 单元格内公式定位随 046 的容器感知公式定位器接入。
-            Block::Table(_)
-            | Block::Equation(_)
-            | Block::Align(_)
-            | Block::ExplicitBreak(_)
-            | Block::Opaque(_) => {}
+            Block::Table(table) => {
+                for cell in table.rows.iter_mut().flat_map(|row| &mut row.cells) {
+                    if let Some(math) = find_inline_math_in_blocks_mut(&mut cell.blocks, math_id) {
+                        return Some(math);
+                    }
+                }
+            }
+            Block::Equation(_) | Block::Align(_) | Block::ExplicitBreak(_) | Block::Opaque(_) => {}
         }
     }
     None
@@ -1085,8 +1129,14 @@ fn find_inline_math_paragraph_id(blocks: &[Block], math_id: &NodeId) -> Option<N
                     return Some(id);
                 }
             }
+            Block::Table(table) => {
+                for cell in table.rows.iter().flat_map(|row| &row.cells) {
+                    if let Some(id) = find_inline_math_paragraph_id(&cell.blocks, math_id) {
+                        return Some(id);
+                    }
+                }
+            }
             Block::Paragraph(_)
-            | Block::Table(_)
             | Block::Equation(_)
             | Block::Align(_)
             | Block::ExplicitBreak(_)

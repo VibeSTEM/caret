@@ -152,7 +152,7 @@ impl DocumentLayoutSnapshot {
         position: &MathTextPosition,
         visual_affinity: VisualAffinity,
     ) -> Option<(PageCaretGeometry, u16)> {
-        self.math_text_caret_with_clipping(target, position, visual_affinity, true)
+        self.math_text_caret_with_clipping(target, position, visual_affinity, true, true)
     }
 
     /// 返回未按宿主行框裁切的数学 caret，用于保留多行文本的视觉顺序。
@@ -162,7 +162,7 @@ impl DocumentLayoutSnapshot {
         position: &MathTextPosition,
         visual_affinity: VisualAffinity,
     ) -> Option<PageCaretGeometry> {
-        self.math_text_caret_with_clipping(target, position, visual_affinity, false)
+        self.math_text_caret_with_clipping(target, position, visual_affinity, false, false)
             .map(|(caret, _)| caret)
     }
 
@@ -172,6 +172,7 @@ impl DocumentLayoutSnapshot {
         position: &MathTextPosition,
         visual_affinity: VisualAffinity,
         clip: bool,
+        clip_x: bool,
     ) -> Option<(PageCaretGeometry, u16)> {
         for projection in self.math_projections_for_target(target) {
             let Some((layout, sidecars)) = self.math_projection_items(projection) else {
@@ -188,9 +189,14 @@ impl DocumentLayoutSnapshot {
                 math_text_caret_in_items(&geometry, target, position, visual_affinity)
             {
                 return if clip {
-                    projection
-                        .clip_caret_for_row(caret, self.math_text_row_id(target, position))
-                        .map(|caret| (caret, size))
+                    let caret = projection
+                        .clip_caret_for_row(caret, self.math_text_row_id(target, position))?;
+                    let caret = if clip_x {
+                        projection.clip_caret_x(caret)
+                    } else {
+                        caret
+                    };
+                    Some((caret, size))
                 } else {
                     Some((caret, size))
                 };
@@ -273,6 +279,9 @@ impl DocumentLayoutSnapshot {
                     rectangles
                         .into_iter()
                         .filter_map(|mut rect| {
+                            if !projection.clip_selection_x(&mut rect) {
+                                return None;
+                            }
                             (rect.y0_pt, rect.y1_pt) = projection.clip_range_for_row(
                                 rect.y0_pt,
                                 rect.y1_pt,
@@ -601,7 +610,7 @@ impl DocumentLayoutSnapshot {
             let vertical_origin_x = if matches!(movement, MathTextMoveRequest::Vertical(_, _)) {
                 let local_x = sidecar.layout.cursor_geometry(cursor, 0.0)?.x0;
                 let page_x = self
-                    .math_text_caret_geometry(target, position, visual_affinity)?
+                    .math_text_caret_geometry_for_visual_order(target, position, visual_affinity)?
                     .x_pt;
                 Some((page_x - local_x) as f32)
             } else {

@@ -43,7 +43,7 @@ fn block_path_lookup_rejects_inline_host_ids() -> Result<(), EditError> {
         caret_structure::find_block_node(&blocks, &inline_id).map(|location| location.kind),
         Some(caret_structure::DocumentNodeKind::InlineMath)
     );
-    assert!(find_block_path(&blocks, &inline_id).is_none());
+    assert!(find_block_container_path(&blocks, &inline_id).is_none());
     Ok(())
 }
 

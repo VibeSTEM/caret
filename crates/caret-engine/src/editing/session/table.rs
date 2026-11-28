@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
+use super::document_position::visual_affinity_for;
 use super::*;
 use crate::editing::paragraph_ops::{
     BlockContainerPath, TableCellPath, block_list_in_container, block_list_in_container_mut,
@@ -17,28 +18,81 @@ pub(super) enum TableArrowAxis {
     Vertical,
 }
 
-/// 当前段落所在的表格单元格上下文。
+/// 当前表格单元格及其所属表格的块序列位置。
 #[derive(Clone)]
 pub(super) struct TableContext {
     /// 表格块所在容器（单元格之前的容器路径）。
     pub(super) table_container: BlockContainerPath,
     pub(super) table_sibling_index: usize,
     pub(super) cell: TableCellPath,
-    pub(super) row_index: usize,
-    pub(super) cell_index: usize,
 }
 
 impl Session {
+    /// 返回交互焦点所属单元格。块外停靠以宿主的容器为准，忽略借用的文本位置。
+    pub fn focused_table_cell(&self) -> Option<TableCellPath> {
+        if self.has_structure_selection() {
+            return None;
+        }
+        if let Some(target) = self.current_math_edit_target() {
+            return match target {
+                MathEditTarget::Block { block_id, .. } => {
+                    caret_structure::find_block_node(&self.document.body, block_id)?
+                        .container
+                        .innermost_cell()
+                        .cloned()
+                }
+                MathEditTarget::Inline { paragraph_id, .. } => self
+                    .paragraph_index
+                    .get(paragraph_id)?
+                    .container
+                    .innermost_cell()
+                    .cloned(),
+            };
+        }
+        if let Some((block_id, _)) = self.block_boundary_exit() {
+            return caret_structure::find_block_node(&self.document.body, &block_id)?
+                .container
+                .innermost_cell()
+                .cloned();
+        }
+        self.table_cell_for_position(&self.selection.focus).cloned()
+    }
+
+    pub(super) fn table_cell_for_position(&self, position: &Pos) -> Option<&TableCellPath> {
+        self.paragraph_index
+            .get(&position.paragraph_id)?
+            .container
+            .innermost_cell()
+    }
+
+    /// 垂直视觉边缘可先退出单元格内环境，再由共享块边界导航处理单元格迁移。
+    pub(super) fn focus_is_inside_table_cell_environment(&self) -> bool {
+        let Some(location) = self.paragraph_index.get(&self.selection.focus.paragraph_id) else {
+            return false;
+        };
+        let Some(cell_container) = location.container.container_before_innermost_cell() else {
+            return false;
+        };
+        location.container.environment_depth() > cell_container.environment_depth()
+    }
+
     /// 解析当前焦点所在的表格单元格；焦点必须落在单元格块流内的段落上。
     pub(super) fn table_context(&self) -> Option<TableContext> {
-        if self.selection.anchor != self.selection.focus {
+        if self.selection.anchor != self.selection.focus
+            || self.block_boundary_exit().is_some()
+            || self.has_structure_selection()
+        {
             return None;
         }
         let location = self
             .paragraph_index
             .get(&self.selection.focus.paragraph_id)?;
-        let cell = location.container.innermost_cell()?.clone();
-        let table_container = location.container.container_before_innermost_cell()?;
+        self.table_context_for_container(&location.container)
+    }
+
+    fn table_context_for_container(&self, container: &BlockContainerPath) -> Option<TableContext> {
+        let cell = container.innermost_cell()?.clone();
+        let table_container = container.container_before_innermost_cell()?;
         let blocks = block_list_in_container(&self.document.body, &table_container)?;
         let table_sibling_index = blocks
             .iter()
@@ -46,10 +100,20 @@ impl Session {
         Some(TableContext {
             table_container,
             table_sibling_index,
-            row_index: cell.row_index,
-            cell_index: cell.cell_index,
             cell,
         })
+    }
+
+    /// Tab 可用单元格内块的真实容器；行列与方向键仍要求文本光标上下文。
+    fn table_tab_context(&self) -> Option<TableContext> {
+        let Some((block_id, _)) = self.block_boundary_exit() else {
+            return self.table_context();
+        };
+        if self.has_structure_selection() {
+            return None;
+        }
+        let location = caret_structure::find_block_node(&self.document.body, &block_id)?;
+        self.table_context_for_container(&location.container)
     }
 
     pub(super) fn run_table_command(&mut self, command: Command) -> Result<Effect, EditError> {
@@ -101,33 +165,33 @@ impl Session {
 
     pub(super) fn insert_table_row(&mut self, direction: Direction) -> Result<Effect, EditError> {
         let context = self.table_context().ok_or(EditError::InvalidPosition)?;
-        let before = self.current_table(&context)?;
+        let before = self.current_table(&context)?.clone();
         let columns = before
             .rows
-            .get(context.row_index)
+            .get(context.cell.row_index)
             .ok_or(EditError::InvalidPosition)?
             .cells
             .len();
         let mut table = before.clone();
         let insert_at = match direction {
-            Direction::Backward => context.row_index,
-            Direction::Forward => context.row_index + 1,
+            Direction::Backward => context.cell.row_index,
+            Direction::Forward => context.cell.row_index + 1,
         };
         table.rows.insert(insert_at, empty_row(columns));
-        let target = table_target(&table, insert_at, context.cell_index, true);
+        let target = table_target(&table, insert_at, context.cell.cell_index, true);
         self.replace_table(context, before, table, target)
     }
 
     pub(super) fn delete_table_row(&mut self) -> Result<Effect, EditError> {
         let context = self.table_context().ok_or(EditError::InvalidPosition)?;
-        let before = self.current_table(&context)?;
+        let before = self.current_table(&context)?.clone();
         if before.rows.len() <= 1 {
             return Ok(Effect::default());
         }
         let mut table = before.clone();
-        table.rows.remove(context.row_index);
-        let target_row = context.row_index.min(table.rows.len() - 1);
-        let target = table_target(&table, target_row, context.cell_index, true);
+        table.rows.remove(context.cell.row_index);
+        let target_row = context.cell.row_index.min(table.rows.len() - 1);
+        let target = table_target(&table, target_row, context.cell.cell_index, true);
         self.replace_table(context, before, table, target)
     }
 
@@ -136,52 +200,53 @@ impl Session {
         direction: Direction,
     ) -> Result<Effect, EditError> {
         let context = self.table_context().ok_or(EditError::InvalidPosition)?;
-        let before = self.current_table(&context)?;
+        let before = self.current_table(&context)?.clone();
         let mut table = before.clone();
         let insert_at = match direction {
-            Direction::Backward => context.cell_index,
-            Direction::Forward => context.cell_index + 1,
+            Direction::Backward => context.cell.cell_index,
+            Direction::Forward => context.cell.cell_index + 1,
         };
         for row in &mut table.rows {
             row.cells.insert(insert_at, empty_cell());
         }
-        let target = table_target(&table, context.row_index, insert_at, true);
+        let target = table_target(&table, context.cell.row_index, insert_at, true);
         self.replace_table(context, before, table, target)
     }
 
     pub(super) fn delete_table_column(&mut self) -> Result<Effect, EditError> {
         let context = self.table_context().ok_or(EditError::InvalidPosition)?;
-        let before = self.current_table(&context)?;
+        let before = self.current_table(&context)?.clone();
         if before.rows.first().is_none_or(|row| row.cells.len() <= 1) {
             return Ok(Effect::default());
         }
         let mut table = before.clone();
         for row in &mut table.rows {
-            if context.cell_index < row.cells.len() {
-                row.cells.remove(context.cell_index);
+            if context.cell.cell_index < row.cells.len() {
+                row.cells.remove(context.cell.cell_index);
             }
         }
-        let target_cell = context.cell_index.min(table.rows[0].cells.len() - 1);
-        let target = table_target(&table, context.row_index, target_cell, true);
+        let target_cell = context.cell.cell_index.min(table.rows[0].cells.len() - 1);
+        let target = table_target(&table, context.cell.row_index, target_cell, true);
         self.replace_table(context, before, table, target)
     }
 
     /// Tab 到下一格；最后一格再按 Tab 增加一行并落到新行首格。
     pub(super) fn table_tab_forward(&mut self) -> Result<Option<Effect>, EditError> {
-        let Some(context) = self.table_context() else {
+        let Some(context) = self.table_tab_context() else {
             return Ok(None);
         };
         let before = self.current_table(&context)?;
         let columns = before.rows[0].cells.len();
-        let index = context.row_index * columns + context.cell_index + 1;
+        let index = context.cell.row_index * columns + context.cell.cell_index + 1;
         if index < before.rows.len() * columns {
             return Ok(Some(self.focus_table_cell(
-                &before,
+                &context.cell.table_id,
                 index / columns,
                 index % columns,
                 true,
             )?));
         }
+        let before = before.clone();
         let mut table = before.clone();
         table.rows.push(empty_row(columns));
         let last_row = table.rows.len() - 1;
@@ -191,17 +256,17 @@ impl Session {
 
     /// Shift+Tab 到上一格；首格保持原位。
     pub(super) fn table_tab_backward(&mut self) -> Result<Option<Effect>, EditError> {
-        let Some(context) = self.table_context() else {
+        let Some(context) = self.table_tab_context() else {
             return Ok(None);
         };
-        if context.row_index == 0 && context.cell_index == 0 {
+        if context.cell.row_index == 0 && context.cell.cell_index == 0 {
             return Ok(Some(Effect::default()));
         }
         let before = self.current_table(&context)?;
         let columns = before.rows[0].cells.len();
-        let previous = context.row_index * columns + context.cell_index - 1;
+        let previous = context.cell.row_index * columns + context.cell.cell_index - 1;
         Ok(Some(self.focus_table_cell(
-            &before,
+            &context.cell.table_id,
             previous / columns,
             previous % columns,
             false,
@@ -220,21 +285,21 @@ impl Session {
         let columns = table.rows[0].cells.len();
         let cell_index = match direction {
             Direction::Backward => {
-                if context.cell_index == 0 {
-                    return self.leave_table(context, false);
+                if context.cell.cell_index == 0 {
+                    return self.leave_table(context, false).map(Some);
                 }
-                context.cell_index - 1
+                context.cell.cell_index - 1
             }
             Direction::Forward => {
-                if context.cell_index + 1 >= columns {
-                    return self.leave_table(context, true);
+                if context.cell.cell_index + 1 >= columns {
+                    return self.leave_table(context, true).map(Some);
                 }
-                context.cell_index + 1
+                context.cell.cell_index + 1
             }
         };
         Ok(Some(self.focus_table_cell(
-            &table,
-            context.row_index,
+            &context.cell.table_id,
+            context.cell.row_index,
             cell_index,
             true,
         )?))
@@ -248,92 +313,41 @@ impl Session {
         let Some(context) = self.table_context() else {
             return Ok(None);
         };
-        let table = self.current_table(&context)?;
-        let rows = table.rows.len();
-        let row_index = match direction {
-            Direction::Backward => {
-                if context.row_index == 0 {
-                    return self.leave_table(context, false);
-                }
-                context.row_index - 1
-            }
-            Direction::Forward => {
-                if context.row_index + 1 >= rows {
-                    return self.leave_table(context, true);
-                }
-                context.row_index + 1
-            }
+        self.move_across_table_cell_boundary(&context.cell, TableArrowAxis::Vertical, direction)
+            .map(Some)
+    }
+
+    /// 提供表格首末格的局部入口，外侧状态由共享块边界处理。
+    pub(super) fn enter_table_at_edge(
+        &mut self,
+        table_id: &NodeId,
+        direction: Direction,
+    ) -> Result<Effect, EditError> {
+        let (row_index, cell_index) = if direction == Direction::Forward {
+            (0, 0)
+        } else {
+            let Some(Block::Table(table)) =
+                super::block_navigation::find_block_by_id(&self.document.body, table_id)
+            else {
+                return Err(EditError::InvalidPosition);
+            };
+            let row_index = table.rows.len() - 1;
+            (row_index, table.rows[row_index].cells.len() - 1)
         };
-        Ok(Some(self.focus_table_cell(
-            &table,
+        self.focus_table_cell(
+            table_id,
             row_index,
-            context.cell_index,
-            true,
-        )?))
+            cell_index,
+            direction == Direction::Forward,
+        )
     }
 
-    /// 从表格相邻正文段落进入表格首/末格；成功时提交选区。
-    pub(super) fn enter_adjacent_table(&mut self, direction: Direction) -> Result<bool, EditError> {
-        let Some(location) = self
-            .paragraph_index
-            .get(&self.selection.focus.paragraph_id)
-            .cloned()
-        else {
-            return Ok(false);
-        };
-        if location.container.innermost_cell().is_some() || location.is_title {
-            return Ok(false);
-        }
-        let Some(block_index) = location.block_path.last().copied() else {
-            return Ok(false);
-        };
-        let Some(blocks) = block_list_in_container(&self.document.body, &location.container) else {
-            return Ok(false);
-        };
-        let neighbour = match direction {
-            Direction::Backward => block_index.checked_sub(1),
-            Direction::Forward => block_index.checked_add(1),
-        };
-        let Some(Block::Table(table)) = neighbour.and_then(|index| blocks.get(index)) else {
-            return Ok(false);
-        };
-        let table = table.clone();
-        let (row_index, cell_index, forward) = match direction {
-            Direction::Backward => (
-                table.rows.len().saturating_sub(1),
-                table
-                    .rows
-                    .last()
-                    .map_or(0, |row| row.cells.len().saturating_sub(1)),
-                false,
-            ),
-            Direction::Forward => (0, 0, true),
-        };
-        let Some(target) = table_target(&table, row_index, cell_index, forward) else {
-            return Ok(false);
-        };
-        if !self.paragraph_index.contains_key(&target.paragraph_id) {
-            return Ok(false);
-        }
-        self.selection = Selection {
-            anchor: target.clone(),
-            focus: target,
-        };
-        Ok(true)
-    }
-
-    /// Escape 从单元格回到表格前/后的相邻正文段落；表格末尾没有尾随段落时保持。
+    /// Escape 从当前单元格停靠到表格外后。
     pub(super) fn exit_table_for_escape(&mut self) -> Result<Option<Effect>, EditError> {
         let Some(context) = self.table_context() else {
             return Ok(None);
         };
-        if let Some(effect) = self.leave_table(context.clone(), true)? {
-            return Ok(Some(effect));
-        }
-        let Some(context) = self.table_context() else {
-            return Ok(None);
-        };
-        self.leave_table(context, false)
+        self.leave_table(context, true).map(Some)
     }
 
     /// 判断方向键是否落在单元格首/末内容边界；返回上下文供导航与 app 查询共用。
@@ -342,7 +356,7 @@ impl Session {
         &self,
         axis: TableArrowAxis,
         direction: Direction,
-    ) -> Result<Option<(TableContext, usize)>, EditError> {
+    ) -> Result<Option<TableContext>, EditError> {
         let Some(context) = self.table_context() else {
             return Ok(None);
         };
@@ -368,10 +382,10 @@ impl Session {
             return Ok(None);
         };
         let table = self.current_table(&context)?;
-        let Some(row) = table.rows.get(context.row_index) else {
+        let Some(row) = table.rows.get(context.cell.row_index) else {
             return Ok(None);
         };
-        let Some(cell) = row.cells.get(context.cell_index) else {
+        let Some(cell) = row.cells.get(context.cell.cell_index) else {
             return Ok(None);
         };
         let Some(Block::Paragraph(paragraph)) = cell.blocks.get(block_index) else {
@@ -380,120 +394,126 @@ impl Session {
         if paragraph.id != self.selection.focus.paragraph_id {
             return Ok(None);
         }
-        let text_len = crate::editing::text_map::TextMap::new(paragraph)
-            .map_err(|error| EditError::InvalidDocument(error.to_string()))?
-            .text
-            .len();
+        let adjacent_index = match direction {
+            Direction::Backward => block_index.checked_sub(1),
+            Direction::Forward => block_index.checked_add(1),
+        };
+        let has_adjacent_block = adjacent_index.is_some_and(|index| {
+            self.find_caret_sibling(&cell.blocks, index, direction)
+                .is_some()
+        });
+        if has_adjacent_block {
+            return Ok(None);
+        }
         let at_boundary = match axis {
             TableArrowAxis::Horizontal => match direction {
-                Direction::Backward => block_index == 0 && self.selection.focus.offset == 0,
+                Direction::Backward => self.selection.focus.offset == 0,
                 Direction::Forward => {
-                    block_index + 1 == cell.blocks.len() && self.selection.focus.offset == text_len
+                    let text_len = crate::editing::text_map::TextMap::new(paragraph)
+                        .map_err(|error| EditError::InvalidDocument(error.to_string()))?
+                        .text
+                        .len();
+                    self.selection.focus.offset == text_len
                 }
             },
-            TableArrowAxis::Vertical => match direction {
-                Direction::Backward => block_index == 0,
-                Direction::Forward => block_index + 1 == cell.blocks.len(),
-            },
+            TableArrowAxis::Vertical => true,
         };
-        Ok(at_boundary.then_some((context, block_index)))
-    }
-
-    /// app 纵向导航查询：当前焦点是否位于 cell 首/末块的纵向边界。
-    /// 该查询不感知视觉行；折行文本的视觉行导航仍由布局候选负责。
-    pub fn table_vertical_block_boundary(&self, direction: Direction) -> bool {
-        self.table_arrow_boundary_state(TableArrowAxis::Vertical, direction)
-            .is_ok_and(|state| state.is_some())
+        Ok(at_boundary.then_some(context))
     }
 
     /// 方向键在单元格首/末内容边界进入相邻单元格；返回 `None` 表示不在边界、交给文本/外层导航。
-    /// 表格边缘仍消费按键（`Some(default)`），不让普通方向键把光标带出表格。
+    /// 表格边缘停靠到共享块外侧。
     pub(super) fn table_arrow_step(
         &mut self,
         axis: TableArrowAxis,
         direction: Direction,
     ) -> Result<Option<Effect>, EditError> {
-        let Some((context, _block_index)) = self.table_arrow_boundary_state(axis, direction)?
-        else {
+        let Some(context) = self.table_arrow_boundary_state(axis, direction)? else {
             return Ok(None);
         };
-        let table = self.current_table(&context)?;
-        let columns = table.rows.first().map_or(0, |row| row.cells.len());
-        let (target_row, target_cell) = match axis {
-            TableArrowAxis::Horizontal => {
-                let index = context.row_index * columns + context.cell_index;
-                if direction == Direction::Backward {
-                    if index == 0 {
-                        return Ok(Some(self.leave_table(context, false)?.unwrap_or_default()));
-                    }
-                    let previous = index - 1;
-                    (previous / columns, previous % columns)
-                } else {
-                    let next = index + 1;
-                    if next >= table.rows.len() * columns {
-                        return Ok(Some(self.leave_table(context, true)?.unwrap_or_default()));
-                    }
-                    (next / columns, next % columns)
-                }
-            }
-            TableArrowAxis::Vertical => {
-                let target_row = match direction {
-                    Direction::Backward => {
-                        let Some(row) = context.row_index.checked_sub(1) else {
-                            return Ok(Some(self.leave_table(context, false)?.unwrap_or_default()));
-                        };
-                        row
-                    }
-                    Direction::Forward => {
-                        let row = context.row_index + 1;
-                        if row >= table.rows.len() {
-                            return Ok(Some(self.leave_table(context, true)?.unwrap_or_default()));
-                        }
-                        row
-                    }
-                };
-                (target_row, context.cell_index)
+        self.move_across_table_cell_boundary(&context.cell, axis, direction)
+            .map(Some)
+    }
+
+    /// 单元格内容耗尽后按行列顺序选择下一个入口，整表边缘停在 BlockEdge。
+    pub(super) fn move_across_table_cell_boundary(
+        &mut self,
+        cell: &TableCellPath,
+        axis: TableArrowAxis,
+        direction: Direction,
+    ) -> Result<Effect, EditError> {
+        let Some(Block::Table(table)) =
+            super::block_navigation::find_block_by_id(&self.document.body, &cell.table_id)
+        else {
+            return Err(EditError::InvalidPosition);
+        };
+        let columns = table
+            .rows
+            .first()
+            .ok_or(EditError::InvalidPosition)?
+            .cells
+            .len();
+        let rows = table.rows.len();
+        let forward = direction == Direction::Forward;
+        let next_index = |index: usize, limit: usize| {
+            if forward {
+                (index + 1 < limit).then_some(index + 1)
+            } else {
+                index.checked_sub(1)
             }
         };
-        Ok(Some(self.focus_table_cell(
-            &table,
-            target_row,
-            target_cell,
-            direction == Direction::Forward,
-        )?))
+        let target = match axis {
+            TableArrowAxis::Horizontal => {
+                next_index(cell.row_index * columns + cell.cell_index, rows * columns)
+                    .map(|index| (index / columns, index % columns))
+            }
+            TableArrowAxis::Vertical => {
+                next_index(cell.row_index, rows).map(|row| (row, cell.cell_index))
+            }
+        };
+        if let Some((row, column)) = target {
+            self.focus_table_cell(&cell.table_id, row, column, forward)
+        } else {
+            self.park_at_block_edge(cell.table_id.clone(), direction)
+        }
     }
 
     /// 纯单元格移动只改变选区，不产生文档补丁、generation 或历史步。
     fn focus_table_cell(
         &mut self,
-        table: &Table,
+        table_id: &NodeId,
         row_index: usize,
         cell_index: usize,
         forward: bool,
     ) -> Result<Effect, EditError> {
-        let Some(target) = table_target(table, row_index, cell_index, forward) else {
+        let Some(Block::Table(table)) =
+            super::block_navigation::find_block_by_id(&self.document.body, table_id)
+        else {
+            return Err(EditError::InvalidPosition);
+        };
+        let cell = table
+            .rows
+            .get(row_index)
+            .and_then(|row| row.cells.get(cell_index))
+            .ok_or(EditError::InvalidPosition)?;
+        let direction = if forward {
+            Direction::Forward
+        } else {
+            Direction::Backward
+        };
+        let Some(target) = self.block_sequence_entry(&cell.blocks, direction) else {
             return Err(EditError::UnsupportedTableContent);
         };
-        if !self.paragraph_index.contains_key(&target.paragraph_id) {
-            return Err(EditError::InvalidPosition);
-        }
-        self.selection = Selection {
-            anchor: target.clone(),
-            focus: target,
-        };
-        Ok(Effect {
-            selection_changed: true,
-            ..Effect::default()
-        })
+        self.commit_block_entry(target)
     }
 
-    fn current_table(&self, context: &TableContext) -> Result<Table, EditError> {
+    fn current_table(&self, context: &TableContext) -> Result<&Table, EditError> {
         let blocks = block_list_in_container(&self.document.body, &context.table_container)
             .ok_or(EditError::InvalidPosition)?;
         blocks
-            .iter()
-            .find_map(|block| match block {
-                Block::Table(table) if table.id == context.cell.table_id => Some(table.clone()),
+            .get(context.table_sibling_index)
+            .and_then(|block| match block {
+                Block::Table(table) if table.id == context.cell.table_id => Some(table),
                 _ => None,
             })
             .ok_or(EditError::InvalidPosition)
@@ -527,10 +547,6 @@ impl Session {
         let Some(target_position) = target_position else {
             return Err(EditError::UnsupportedTableContent);
         };
-        let before_selection = self.selection.clone();
-        let before_anchor_visual_affinity = self.selection_anchor_visual_affinity;
-        let before_visual_affinity = self.selection_visual_affinity;
-        let before_state_id = self.history_state_id;
         let mut candidate = self.document.clone();
         {
             let Some(blocks) = block_list_in_container_mut(&mut candidate.body, &container) else {
@@ -547,13 +563,24 @@ impl Session {
         candidate
             .validate()
             .map_err(|error| EditError::InvalidDocument(error.to_string()))?;
+        let index = build_paragraph_index(&candidate.body);
+        let location = index
+            .get(&target_position.paragraph_id)
+            .ok_or(EditError::InvalidPosition)?;
+        if location.story != target_position.story {
+            return Err(EditError::WrongStory);
+        }
+        let before_state = self.capture_structure_edit_before_state();
         self.document = candidate;
+        self.clear_host_caret_position();
+        let visual_affinity = visual_affinity_for(target_position.affinity);
+        self.selection_visual_affinity = visual_affinity;
+        self.selection_anchor_visual_affinity = visual_affinity;
         self.selection = Selection {
             anchor: target_position.clone(),
             focus: target_position,
         };
-        let index = build_paragraph_index(&self.document.body);
-        self.finalize_structure_edit(
+        self.finalize_structure_edit_with_boundary(
             index,
             DocumentPatch::BlockRange {
                 container,
@@ -561,10 +588,7 @@ impl Session {
                 before,
                 after,
             },
-            before_selection,
-            before_anchor_visual_affinity,
-            before_visual_affinity,
-            before_state_id,
+            before_state,
         );
         Ok(Effect {
             document_changed: true,
@@ -573,53 +597,15 @@ impl Session {
         })
     }
 
-    fn leave_table(
-        &mut self,
-        context: TableContext,
-        forward: bool,
-    ) -> Result<Option<Effect>, EditError> {
-        let Some(blocks) = block_list_in_container(&self.document.body, &context.table_container)
-        else {
-            return Ok(None);
-        };
-        let neighbour_index = if forward {
-            context.table_sibling_index.checked_add(1)
-        } else {
-            context.table_sibling_index.checked_sub(1)
-        };
-        let Some(neighbour_index) = neighbour_index else {
-            return Ok(None);
-        };
-        let Some(Block::Paragraph(paragraph)) = blocks.get(neighbour_index) else {
-            return Ok(None);
-        };
-        let text_len = crate::editing::text_map::TextMap::new(paragraph)
-            .map_err(|error| EditError::InvalidDocument(error.to_string()))?
-            .text
-            .len();
-        let location = self
-            .paragraph_index
-            .get(&paragraph.id)
-            .cloned()
-            .ok_or(EditError::InvalidPosition)?;
-        let position = Pos {
-            story: location.story.clone(),
-            paragraph_id: paragraph.id.clone(),
-            offset: if forward { 0 } else { text_len },
-            affinity: if forward {
-                Affinity::Downstream
+    fn leave_table(&mut self, context: TableContext, forward: bool) -> Result<Effect, EditError> {
+        self.park_at_block_edge(
+            context.cell.table_id,
+            if forward {
+                Direction::Forward
             } else {
-                Affinity::Upstream
+                Direction::Backward
             },
-        };
-        self.selection = Selection {
-            anchor: position.clone(),
-            focus: position,
-        };
-        Ok(Some(Effect {
-            selection_changed: true,
-            ..Effect::default()
-        }))
+        )
     }
 }
 

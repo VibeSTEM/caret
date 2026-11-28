@@ -48,59 +48,6 @@ impl InlineMathRangeParts {
 }
 
 impl Session {
-    /// 判断正文指针端点位于行内公式之前还是之后，供扩选方向适配器使用。
-    pub fn inline_math_entry_math_forward(
-        &self,
-        body_endpoint: &Pos,
-        target: &MathEditTarget,
-    ) -> Result<bool, EditError> {
-        let MathEditTarget::Inline {
-            paragraph_id,
-            math_id,
-        } = target
-        else {
-            return Err(EditError::InvalidPosition);
-        };
-        let location = self
-            .paragraph_index
-            .get(paragraph_id)
-            .ok_or(EditError::InvalidPosition)?;
-        let paragraph = paragraph_at_location(&self.document.body, location)
-            .ok_or(EditError::InvalidPosition)?;
-        let body_location = self
-            .paragraph_index
-            .get(&body_endpoint.paragraph_id)
-            .ok_or(EditError::InvalidPosition)?;
-        if body_endpoint.story != body_location.story {
-            return Err(EditError::WrongStory);
-        }
-        let body_paragraph = paragraph_at_location(&self.document.body, body_location)
-            .ok_or(EditError::InvalidPosition)?;
-        TextMap::new(body_paragraph)?.validate_pos(body_endpoint)?;
-        let (before, after) =
-            math_edit::selection_extension::slot_bounds(paragraph, &location.story, math_id)?;
-        let before_order = crate::editing::paragraph_ops::compare_positions(
-            &self.document.body,
-            &self.paragraph_index,
-            body_endpoint,
-            &before,
-        )?;
-        if !before_order.is_gt() {
-            return Ok(true);
-        }
-        let after_order = crate::editing::paragraph_ops::compare_positions(
-            &self.document.body,
-            &self.paragraph_index,
-            body_endpoint,
-            &after,
-        )?;
-        if !after_order.is_lt() {
-            Ok(false)
-        } else {
-            Err(EditError::InvalidPosition)
-        }
-    }
-
     /// 返回行内公式对象在正文中的两个 UTF-8 边界，供不兼容数学局部路径退回对象范围。
     pub fn inline_math_pointer_bounds(
         &self,
@@ -125,7 +72,12 @@ impl Session {
         anchor_visual_affinity: caret_layout::VisualAffinity,
         focus_visual_affinity: caret_layout::VisualAffinity,
     ) -> Result<Effect, EditError> {
-        self.install_inline_math_selection(range, anchor_visual_affinity, focus_visual_affinity)
+        self.install_inline_math_selection_inner(
+            range,
+            anchor_visual_affinity,
+            focus_visual_affinity,
+            true,
+        )
     }
 
     /// 键盘范围保留进入公式时的视觉方向与局部步进关系，包括反向跨过原锚点的情况。
@@ -135,14 +87,30 @@ impl Session {
         anchor_visual_affinity: VisualAffinity,
         focus_visual_affinity: VisualAffinity,
     ) -> Result<Effect, EditError> {
+        self.install_inline_math_selection_inner(
+            range,
+            anchor_visual_affinity,
+            focus_visual_affinity,
+            false,
+        )
+    }
+
+    fn install_inline_math_selection_inner(
+        &mut self,
+        range: StructureSelection,
+        anchor_visual_affinity: VisualAffinity,
+        focus_visual_affinity: VisualAffinity,
+        promote_across_table_cells: bool,
+    ) -> Result<Effect, EditError> {
         if let Some(id) = self.composition.as_ref().map(|composition| composition.id) {
             // 指针端点无效时须保留预编辑，因此预编辑撤销与选区安装在临时会话中一起提交。
             let mut candidate = self.clone_preserving_identity();
             let cancel = candidate.cancel_composition(id)?;
-            let mut effect = candidate.install_inline_math_selection(
+            let mut effect = candidate.install_inline_math_selection_inner(
                 range,
                 anchor_visual_affinity,
                 focus_visual_affinity,
+                promote_across_table_cells,
             )?;
             effect.composition_changed |= cancel.composition_changed;
             *self = candidate;
@@ -154,6 +122,42 @@ impl Session {
                 "resolve or cancel the incomplete math source draft before dragging a selection"
                     .to_owned(),
             ));
+        }
+        if promote_across_table_cells
+            && self
+                .crossed_pointer_tables(&range.anchor, &range.focus)
+                .is_some()
+        {
+            // 分别解析两端，先确认数学宿主、局部路径及正文坐标都有效；成对投影会
+            // 拒绝 TableCell story 不同的端点，跨单元格指针范围应先提升到表格边界。
+            for endpoint in [&range.anchor, &range.focus] {
+                match endpoint {
+                    DocumentRangeEndpoint::BlockEdge { .. } => {
+                        self.compare_range_endpoints(endpoint, endpoint)?;
+                    }
+                    _ => {
+                        if let RangeEnd::Math(math_end) =
+                            RangeEnd::resolve(&self.document, &self.paragraph_index, endpoint)?
+                        {
+                            FormulaRange::between(
+                                math_end.target.clone(),
+                                math_end.tree,
+                                &math_end.cut,
+                                &math_end.cut,
+                                false,
+                            )?;
+                        }
+                    }
+                }
+            }
+            if let Some(effect) = self.promote_pointer_range_across_cells(
+                range.anchor.clone(),
+                range.focus.clone(),
+                anchor_visual_affinity,
+                focus_visual_affinity,
+            )? {
+                return Ok(effect);
+            }
         }
         let parts = self
             .resolve_inline_math_parts(&range)?
@@ -236,13 +240,21 @@ impl Session {
                 return resolve_inline_math_parts(&self.document, &self.paragraph_index, selection);
             }
         };
-        // 块边界只向范围内部投影，块自身继续由真实端点派生的覆盖列表表示。
-        let projected = if self.compare_range_endpoints(block, math)?.is_lt() {
-            self.text_endpoint_at_or_after(block)
+        // 文字切口留在公式的 Story 内，块覆盖继续使用原始端点。
+        let block_precedes_math = self.compare_range_endpoints(block, math)?.is_lt();
+        let direction = if block_precedes_math {
+            Direction::Forward
         } else {
-            self.text_endpoint_at_or_before(block)
-        }
-        .ok_or(EditError::InvalidPosition)?;
+            Direction::Backward
+        };
+        let RangeEnd::Math(math_end) =
+            RangeEnd::resolve(&self.document, &self.paragraph_index, math)?
+        else {
+            return Err(EditError::InvalidPosition);
+        };
+        let projected = self
+            .text_endpoint_on_side(block, direction, Some(&math_end.before.story))
+            .ok_or(EditError::InvalidPosition)?;
         let mut range = selection.clone();
         if block_is_anchor {
             range.anchor = DocumentRangeEndpoint::Text(projected);

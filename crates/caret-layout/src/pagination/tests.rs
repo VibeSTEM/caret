@@ -664,3 +664,30 @@ fn table_spacing_merges_with_previous_paragraph() {
     assert_eq!(pages.len(), 1);
     assert!((pages[0].table_fragments[0].y_offset_pt - 28.0).abs() < 1e-6);
 }
+
+#[test]
+fn table_borders_reserve_space_between_adjacent_paragraphs_and_at_page_edges() {
+    let id = NodeId::generate();
+    let body = paragraph(&[10.0]);
+    let mut table = table_layout(&[18.0, 18.0]);
+    table.height_pt = 38.0;
+    table.rows[0].top_pt = 1.0;
+    table.rows[1].top_pt = 19.0;
+    table.horizontal_rule_positions = vec![0.0, 19.0, 38.0];
+    let pages = paginate_paragraphs(
+        &[
+            input(&id, &body, 0.0, 0.0),
+            table_item(&id, &table, 0.0, 0.0),
+            input(&id, &body, 0.0, 0.0),
+        ],
+        29.0,
+    )
+    .unwrap_or_else(|error| panic!("分页失败: {error}"));
+
+    assert_eq!(pages.len(), 2);
+    assert_eq!(pages[0].table_fragments[0].y_offset_pt, 10.0);
+    assert_eq!(pages[0].used_height_pt, 29.0);
+    assert_eq!(pages[1].table_fragments[0].y_offset_pt, -19.0);
+    assert_eq!(pages[1].fragments[0].y_offset_pt, 19.0);
+    assert_eq!(pages[1].used_height_pt, 29.0);
+}

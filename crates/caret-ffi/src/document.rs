@@ -190,7 +190,7 @@ pub(crate) fn document_save_snapshot(
     snapshot.recovery_rebind_pending = runtime
         .recovery_update_gate
         .as_ref()
-        .is_some_and(|gate| gate.pending.load(std::sync::atomic::Ordering::Acquire));
+        .is_some_and(|gate| gate.is_rebind_pending());
     snapshot
 }
 
@@ -548,6 +548,10 @@ pub(crate) fn rasterize_page_glyphs(
             .line_clip_y_pt
             .map(|clip| (true, clip[0], clip[1]))
             .unwrap_or((false, 0.0, 0.0));
+        let (clip_x_enabled, clip_x0_pt, clip_x1_pt) = placement
+            .line_clip_x_pt
+            .map(|clip| (true, clip[0], clip[1]))
+            .unwrap_or((false, 0.0, 0.0));
         placements.push(bridge::GlyphPlacement {
             paint_order: placement.paint_order,
             image_index,
@@ -558,6 +562,9 @@ pub(crate) fn rasterize_page_glyphs(
             clip_enabled,
             clip_y0_pt,
             clip_y1_pt,
+            clip_x_enabled,
+            clip_x0_pt,
+            clip_x1_pt,
         });
     }
     let mut decorations = Vec::with_capacity(rasterized.decorations.len());
@@ -570,6 +577,10 @@ pub(crate) fn rasterize_page_glyphs(
         };
         let (clip_enabled, clip_y0_pt, clip_y1_pt) = decoration
             .line_clip_y_pt
+            .map(|clip| (true, clip[0], clip[1]))
+            .unwrap_or((false, 0.0, 0.0));
+        let (clip_x_enabled, clip_x0_pt, clip_x1_pt) = decoration
+            .line_clip_x_pt
             .map(|clip| (true, clip[0], clip[1]))
             .unwrap_or((false, 0.0, 0.0));
         decorations.push(bridge::GlyphDecoration {
@@ -585,12 +596,19 @@ pub(crate) fn rasterize_page_glyphs(
             clip_enabled,
             clip_y0_pt,
             clip_y1_pt,
+            clip_x_enabled,
+            clip_x0_pt,
+            clip_x1_pt,
         });
     }
     let mut shapes = Vec::with_capacity(rasterized.shapes.len());
     for shape in rasterized.shapes {
         let (clip_enabled, clip_y0_pt, clip_y1_pt) = shape
             .line_clip_y_pt
+            .map(|clip| (true, clip[0], clip[1]))
+            .unwrap_or((false, 0.0, 0.0));
+        let (clip_x_enabled, clip_x0_pt, clip_x1_pt) = shape
+            .line_clip_x_pt
             .map(|clip| (true, clip[0], clip[1]))
             .unwrap_or((false, 0.0, 0.0));
         let fill = shape.fill.unwrap_or([0; 4]);
@@ -618,6 +636,9 @@ pub(crate) fn rasterize_page_glyphs(
             clip_enabled,
             clip_y0_pt,
             clip_y1_pt,
+            clip_x_enabled,
+            clip_x0_pt,
+            clip_x1_pt,
         });
     }
     bridge::PageGlyphFrame {

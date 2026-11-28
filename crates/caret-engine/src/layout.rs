@@ -207,6 +207,7 @@ struct LaidOutParagraphInput {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct TableMathPlacement {
     pub(crate) math_id: NodeId,
+    pub(crate) cell_id: NodeId,
     /// 公式盒左边缘的页面局部 x 坐标。
     pub(crate) object_x_pt: f64,
     pub(crate) width_pt: f64,
@@ -232,6 +233,8 @@ pub struct PageLayoutSnapshot {
     pub margin_right_pt: f64,
     pub margin_bottom_pt: f64,
     pub layout: PageLayout,
+    /// 从本页分页片段与同代表格网格生成的单元格外框命中区域。
+    pub(crate) table_cell_hit_regions: Vec<PageCellHitRegion>,
     /// 本页单元格内显示公式的放置；不回写 PageLayout 的分页片段。
     pub(crate) table_math_placements: Vec<TableMathPlacement>,
 }
@@ -320,6 +323,7 @@ pub struct TextLayoutDiagnostic {
 #[derive(Debug, Clone)]
 pub(crate) struct MathPageProjection {
     pub(crate) math_id: NodeId,
+    pub(crate) cell_id: Option<NodeId>,
     pub(crate) page_index: usize,
     pub(crate) object_x_pt: f64,
     pub(crate) baseline_y_pt: f64,
@@ -349,6 +353,16 @@ pub(crate) struct MathPageRowBaseline {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PageSelectionRect {
     pub page_index: usize,
+    pub x0_pt: f64,
+    pub y0_pt: f64,
+    pub x1_pt: f64,
+    pub y1_pt: f64,
+}
+
+/// 同代页面上可参与指针归属裁决的表格单元格命中区域。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PageCellHitRegion {
+    pub cell_id: NodeId,
     pub x0_pt: f64,
     pub y0_pt: f64,
     pub x1_pt: f64,

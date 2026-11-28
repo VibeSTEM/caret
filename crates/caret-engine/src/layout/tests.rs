@@ -3561,7 +3561,7 @@ fn math_block_geometry_uses_the_same_full_width_page_rect_for_selection_and_high
         .unwrap_or_else(|| panic!("equation fragment is missing"));
 
     let rectangles = snapshot
-        .math_block_geometry(std::slice::from_ref(&math_id))
+        .atomic_block_geometry(std::slice::from_ref(&math_id))
         .unwrap_or_else(|| panic!("selected equation geometry is missing"));
     assert_eq!(rectangles.len(), 1);
     let rectangle = rectangles[0];
@@ -3575,10 +3575,10 @@ fn math_block_geometry_uses_the_same_full_width_page_rect_for_selection_and_high
     assert!(rectangle.y1_pt <= page.height_pt);
     assert!(rectangle.y1_pt > rectangle.y0_pt);
 
-    assert_eq!(snapshot.math_block_geometry(&[]), Some(Vec::new()));
+    assert_eq!(snapshot.atomic_block_geometry(&[]), Some(Vec::new()));
     assert!(
         snapshot
-            .math_block_geometry(&[NodeId::generate()])
+            .atomic_block_geometry(&[NodeId::generate()])
             .is_none()
     );
 }
@@ -3626,7 +3626,7 @@ fn empty_equation_and_align_keep_positive_math_block_geometry() {
             "empty math host must not collapse into a zero-height fragment"
         );
         let rectangles = snapshot
-            .math_block_geometry(std::slice::from_ref(block_id))
+            .atomic_block_geometry(std::slice::from_ref(block_id))
             .unwrap_or_else(|| panic!("empty math host geometry must not look stale"));
         assert_eq!(rectangles.len(), 1);
         let rectangle = rectangles[0];
@@ -4448,6 +4448,35 @@ fn selecting_only_an_empty_inline_math_does_not_publish_zero_width_rectangles() 
                     && rectangle.y1_pt > rectangle.y0_pt),
             "empty inline math selection {start}..{end} produced a degenerate rectangle: {rectangles:?}"
         );
+    }
+}
+
+#[test]
+fn inline_insertion_slot_stays_visible_at_page_edges_and_centers_on_the_caret() {
+    let snapshot = layout_document(&Document::blank());
+    let page_width = snapshot.pages[0].width_pt;
+    let page_height = snapshot.pages[0].height_pt;
+    for (x_pt, expected_x0, expected_x1) in [
+        (0.0, 0.0, 6.0),
+        (page_width, page_width - 6.0, page_width),
+        (120.0, 117.0, 123.0),
+    ] {
+        let slot = snapshot
+            .inline_insertion_slot(
+                super::PageCaretGeometry {
+                    page_index: 0,
+                    x_pt,
+                    y0_pt: page_height - 4.0,
+                    y1_pt: page_height + 2.0,
+                },
+                1200,
+                None,
+            )
+            .unwrap_or_else(|| {
+                panic!("the insertion slot must have positive area inside the page")
+            });
+        assert_eq!((slot.x0_pt, slot.x1_pt), (expected_x0, expected_x1));
+        assert_eq!((slot.y0_pt, slot.y1_pt), (page_height - 4.0, page_height));
     }
 }
 
@@ -5557,7 +5586,14 @@ fn basic_table_layout_places_cells_and_shared_caret_geometry() {
     assert!(first_caret.x_pt >= page.margin_left_pt);
     assert!(first_caret.y0_pt >= page.margin_top_pt);
     assert!(first_caret.y1_pt > first_caret.y0_pt);
-    let guidelines = snapshot.table_guidelines(&first_pos);
+    let guidelines = snapshot.table_guidelines(
+        snapshot
+            .paragraph_by_id(&first_pos.paragraph_id)
+            .unwrap_or_else(|| panic!("缺少单元格段落"))
+            .container
+            .innermost_cell()
+            .unwrap_or_else(|| panic!("缺少单元格路径")),
+    );
     assert_eq!(
         guidelines.len(),
         1,
@@ -5664,7 +5700,7 @@ fn table_cell_guidelines_use_symmetric_mesh_rects() {
         rows: (0..2)
             .map(|_| TableRow {
                 id: NodeId::generate(),
-                cells: (0..2)
+                cells: (0..3)
                     .map(|_| TableCell {
                         id: NodeId::generate(),
                         blocks: vec![Block::Paragraph(paragraph(""))],
@@ -5699,7 +5735,14 @@ fn table_cell_guidelines_use_symmetric_mesh_rects() {
             affinity: Affinity::Upstream,
         };
         snapshot
-            .table_guidelines(&pos)
+            .table_guidelines(
+                snapshot
+                    .paragraph_by_id(&pos.paragraph_id)
+                    .unwrap_or_else(|| panic!("缺少单元格段落"))
+                    .container
+                    .innermost_cell()
+                    .unwrap_or_else(|| panic!("缺少单元格路径")),
+            )
             .into_iter()
             .next()
             .unwrap_or_else(|| panic!("cell guideline"))
@@ -5716,12 +5759,38 @@ fn table_cell_guidelines_use_symmetric_mesh_rects() {
         .unwrap_or_else(|| panic!("table fragment"));
     let table_origin_x = page.margin_left_pt + f64::from(fragment.x_offset_pt);
     let left = rect_for(&row0, &row0.cells[0]);
-    let right = rect_for(&row0, &row0.cells[1]);
+    let middle = rect_for(&row0, &row0.cells[1]);
+    let right = rect_for(&row0, &row0.cells[2]);
     let lower = rect_for(&row1, &row1.cells[0]);
     assert!((left.x0_pt - table_origin_x).abs() < 0.01);
     assert!((right.x1_pt - (table_origin_x + grid.width_pt)).abs() < 0.01);
-    assert!((left.x1_pt - right.x0_pt).abs() < 0.01);
+    assert!((left.x1_pt - middle.x0_pt).abs() < 0.01);
+    assert!((middle.x1_pt - right.x0_pt).abs() < 0.01);
     assert!((left.x1_pt - left.x0_pt - (right.x1_pt - right.x0_pt)).abs() < 0.01);
+    for (index, guideline) in [&left, &middle, &right].into_iter().enumerate() {
+        let origin = table_origin_x;
+        assert!((guideline.x0_pt - (origin + grid.vertical_rule_positions[index])).abs() < 0.01);
+        assert!(
+            (guideline.x1_pt - (origin + grid.vertical_rule_positions[index + 1])).abs() < 0.01
+        );
+    }
+    let middle_cell = &grid.rows[0].cells[1];
+    let padding_hit = snapshot
+        .hit_test(
+            0,
+            table_origin_x + middle_cell.content_x_pt - 2.0,
+            page.margin_top_pt + f64::from(fragment.y_offset_pt) + middle_cell.content_y_pt + 2.0,
+        )
+        .unwrap_or_else(|| panic!("padding click must stay inside the middle cell hit clip"));
+    let middle_paragraph = row0.cells[1]
+        .blocks
+        .iter()
+        .find_map(|block| match block {
+            Block::Paragraph(paragraph) => Some(paragraph),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("middle cell paragraph"));
+    assert_eq!(padding_hit.position.paragraph_id, middle_paragraph.id);
     assert!(
         (lower.y0_pt
             - (page.margin_top_pt + f64::from(fragment.y_offset_pt) + grid.rows[1].top_pt))
@@ -5729,25 +5798,12 @@ fn table_cell_guidelines_use_symmetric_mesh_rects() {
             < 0.01
     );
     assert!((left.y1_pt - lower.y0_pt).abs() < 0.01);
-    let highlight = snapshot.table_block_highlight_rects(&Pos {
-        story: StoryId::TableCell {
-            table_id,
-            row_id: row0.id.clone(),
-            cell_id: row0.cells[0].id.clone(),
-        },
-        paragraph_id: match &row0.cells[0].blocks[0] {
-            Block::Paragraph(paragraph) => paragraph.id.clone(),
-            _ => unreachable!(),
-        },
-        offset: 0,
-        affinity: Affinity::Upstream,
-    });
+    let highlight = snapshot
+        .atomic_block_geometry(std::slice::from_ref(&table_id))
+        .unwrap_or_else(|| panic!("缺少表格投影"));
     assert_eq!(highlight.len(), 1);
-    let first_row = grid.rows.first().unwrap_or_else(|| panic!("first row"));
-    let last_row = grid.rows.last().unwrap_or_else(|| panic!("last row"));
-    let expected_y0 = page.margin_top_pt + f64::from(fragment.y_offset_pt) + first_row.top_pt;
-    let expected_y1 =
-        page.margin_top_pt + f64::from(fragment.y_offset_pt) + last_row.top_pt + last_row.height_pt;
+    let expected_y0 = page.margin_top_pt + f64::from(fragment.y_offset_pt);
+    let expected_y1 = expected_y0 + grid.height_pt;
     assert!((highlight[0].x0_pt - table_origin_x).abs() < 0.01);
     assert!((highlight[0].x1_pt - (table_origin_x + grid.width_pt)).abs() < 0.01);
     assert!((highlight[0].y0_pt - expected_y0).abs() < 0.01);
@@ -5783,7 +5839,7 @@ fn table_cell_display_equation_is_measured_projected_and_drawn() {
     assert!(placement.object_x_pt >= page.margin_left_pt);
     assert!(placement.baseline_y_pt > page.margin_top_pt);
     let geometry = snapshot
-        .math_block_geometry(std::slice::from_ref(&equation_id))
+        .atomic_block_geometry(std::slice::from_ref(&equation_id))
         .unwrap_or_else(|| panic!("cell equation must publish block geometry"));
     assert_eq!(geometry.len(), 1);
     assert!(geometry[0].x1_pt > geometry[0].x0_pt);
@@ -5824,9 +5880,35 @@ fn table_cell_align_is_measured_and_projected() {
     let page = &snapshot.pages[0];
     assert_eq!(page.table_math_placements.len(), 1);
     assert_eq!(page.table_math_placements[0].math_id, align_id);
+    let projection = snapshot
+        .math_projection(0, &align_id)
+        .unwrap_or_else(|| panic!("cell align must publish a page projection"));
+    let math_layout = snapshot
+        .math_blocks
+        .get(&align_id)
+        .unwrap_or_else(|| panic!("cell align must retain its math layout"));
+    assert_eq!(projection.row_clips.len(), math_layout.row_clips.len());
+    for (projected, source) in projection.row_clips.iter().zip(&math_layout.row_clips) {
+        assert_eq!(Some(&projected.row_id), source.row_id.as_ref());
+        assert!((projected.y0_pt - (projection.baseline_y_pt + source.y0)).abs() < 1e-6);
+        assert!((projected.y1_pt - (projection.baseline_y_pt + source.y1)).abs() < 1e-6);
+    }
+    assert_eq!(
+        projection.row_baselines.len(),
+        math_layout.row_baselines.len()
+    );
+    for (projected, source) in projection
+        .row_baselines
+        .iter()
+        .zip(&math_layout.row_baselines)
+    {
+        assert!(
+            (projected.baseline_y_pt - (projection.baseline_y_pt + source.baseline)).abs() < 1e-6
+        );
+    }
     assert!(
         snapshot
-            .math_block_geometry(std::slice::from_ref(&align_id))
+            .atomic_block_geometry(std::slice::from_ref(&align_id))
             .is_some(),
         "cell align must publish block geometry"
     );
@@ -5914,7 +5996,7 @@ fn hidden_tall_cell_math_degrades_to_empty_highlight_instead_of_stale_error() {
     let snapshot = layout_document(&document);
     assert!(snapshot.is_hidden_table_math(&equation_id));
     assert_eq!(
-        snapshot.math_block_geometry(std::slice::from_ref(&equation_id)),
+        snapshot.atomic_block_geometry(std::slice::from_ref(&equation_id)),
         Some(Vec::new()),
         "hidden table math must degrade to empty highlight, not stale error"
     );

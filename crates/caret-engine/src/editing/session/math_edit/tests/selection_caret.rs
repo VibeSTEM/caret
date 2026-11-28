@@ -3327,6 +3327,78 @@ fn align_backspace_removes_a_blank_row_and_history_restores_its_focus()
 }
 
 #[test]
+fn empty_display_math_hosts_enter_and_edit_with_their_existing_root_identity()
+-> Result<(), EditError> {
+    for align in [false, true] {
+        for explicit_placeholder in [false, true] {
+            let block_id = NodeId::generate();
+            let root_id = NodeId::generate();
+            let content = explicit_placeholder
+                .then(|| {
+                    caret_doc::MathContent::Math(caret_doc::MathNode {
+                        id: NodeId::generate(),
+                        kind: caret_doc::MathNodeKind::Placeholder,
+                        text: None,
+                        attributes: BTreeMap::new(),
+                        children: Vec::new(),
+                        extra: BTreeMap::new(),
+                    })
+                })
+                .into_iter()
+                .collect();
+            let tree = caret_doc::MathTree {
+                schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+                root: caret_doc::MathFlow {
+                    id: root_id.clone(),
+                    content,
+                    extra: BTreeMap::new(),
+                },
+                extra: BTreeMap::new(),
+            };
+            let block = if align {
+                Block::Align(caret_doc::Align {
+                    id: block_id.clone(),
+                    rows: vec![caret_doc::MathAlignRow {
+                        id: NodeId::generate(),
+                        cells: vec![tree],
+                        extra: BTreeMap::new(),
+                    }],
+                    extra: BTreeMap::new(),
+                })
+            } else {
+                Block::Equation(caret_doc::Equation {
+                    id: block_id.clone(),
+                    math_tree: tree,
+                    extra: BTreeMap::new(),
+                })
+            };
+            let mut document = caret_doc::Document::blank();
+            document.body.push(block);
+            let mut session = Session::new(document.clone())?;
+            session.run(Command::EnterMath(Direction::Forward))?;
+            assert!(matches!(session.math_edit().map(|edit| &edit.target),
+                Some(MathEditTarget::Block { block_id: id, align: target_align })
+                    if *id == block_id && *target_align == align));
+            session.run(Command::InsertText("x".to_owned()))?;
+            let inserted = session.document().clone();
+            let root = match &inserted.body[1] {
+                Block::Equation(equation) => &equation.math_tree.root,
+                Block::Align(align) => &align.rows[0].cells[0].root,
+                _ => return Err(EditError::InvalidPosition),
+            };
+            assert_eq!(root.id, root_id);
+            assert!(matches!(root.content.as_slice(),
+                [caret_doc::MathContent::Math(node)] if node.text.as_deref() == Some("x")));
+            session.run(Command::Undo)?;
+            assert_eq!(session.document(), &document);
+            session.run(Command::Redo)?;
+            assert_eq!(session.document(), &inserted);
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn caret_moves_between_adjacent_display_math_blocks() -> Result<(), Box<dyn std::error::Error>> {
     let mut document = caret_doc::Document::blank();
     document.body = vec![
@@ -4042,7 +4114,7 @@ fn shift_right_at_the_last_equation_text_island_converts_to_the_whole_equation()
 
     assert!(session.math_edit().is_none());
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
     let (anchor, focus) = session
@@ -4092,7 +4164,7 @@ fn align_first_cell_text_edge_shift_converts_the_whole_block()
     assert!(session.has_structure_selection());
     assert!(session.structure_selection_range().is_some());
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&align_id)
     );
     Ok(())
@@ -4127,7 +4199,7 @@ fn align_last_cell_text_edge_shift_left_converts_the_whole_block()
     assert!(session.math_edit().is_none());
     assert!(session.has_structure_selection());
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&align_id)
     );
     Ok(())
@@ -4176,7 +4248,7 @@ fn middle_text_island_shift_right_converts_the_whole_equation()
     assert!(session.math_edit().is_none());
     assert!(session.has_structure_selection());
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
     Ok(())

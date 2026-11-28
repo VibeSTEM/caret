@@ -5,7 +5,7 @@ use crate::editing::{DocumentRangeEndpoint, EditorKey, StructureSelection};
 use caret_doc::{
     Align, Block, BlockEnvironment, BlockEnvironmentKind, Document, Equation, MathAlignRow,
     MathContent, MathFlow, MathNode, MathNodeKind, MathTree, NodeId, Paragraph, ParagraphContent,
-    Run, SoftBreak, TextFlow,
+    Run, SoftBreak, Table, TableCell, TableRow, TextFlow,
 };
 use std::collections::BTreeMap;
 
@@ -319,6 +319,114 @@ fn structure_selection_expands_from_paragraph_to_containing_environment()
     let effect = session.run(Command::ExpandStructureSelection)?;
     assert!(!effect.selection_changed);
     assert_eq!(*session.selection(), unchanged);
+    Ok(())
+}
+
+#[test]
+fn mod_space_expands_table_selection_to_parent_and_preserves_the_outermost_range()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (nested, backward) in [(false, false), (true, false), (true, true)] {
+        let cell_text = if backward { "cell" } else { "" };
+        let paragraph = if cell_text.is_empty() {
+            paragraph()
+        } else {
+            paragraph_with_text(cell_text)
+        };
+        let paragraph_id = paragraph.id.clone();
+        let cell_id = NodeId::generate();
+        let row = TableRow {
+            id: NodeId::generate(),
+            cells: vec![TableCell {
+                id: cell_id.clone(),
+                blocks: vec![Block::Paragraph(paragraph)],
+            }],
+        };
+        let table_id = NodeId::generate();
+        let position = Pos {
+            story: StoryId::TableCell {
+                table_id: table_id.clone(),
+                row_id: row.id.clone(),
+                cell_id,
+            },
+            paragraph_id,
+            offset: 0,
+            affinity: Affinity::Downstream,
+        };
+        let table = Block::Table(Table {
+            id: table_id.clone(),
+            rows: vec![row],
+        });
+        let mut document = Document::blank();
+        let mut expected_blocks = vec![table_id.clone()];
+        let first_block = if nested {
+            let section = environment(
+                BlockEnvironmentKind::Section,
+                vec![table, Block::Paragraph(paragraph_with_text("section body"))],
+            );
+            let Block::Environment(section_data) = &section else {
+                unreachable!();
+            };
+            expected_blocks.push(section_data.id.clone());
+            section
+        } else {
+            table
+        };
+        document.body = vec![
+            first_block,
+            Block::Paragraph(paragraph_with_text("outside")),
+        ];
+        let mut session = Session::new(document.clone())?;
+        let anchor = if backward {
+            Pos {
+                offset: cell_text.len(),
+                affinity: Affinity::Upstream,
+                ..position.clone()
+            }
+        } else {
+            position.clone()
+        };
+        session.run(Command::SetSelection(Some(Selection {
+            anchor,
+            focus: position,
+        })))?;
+        let generation = session.document_generation();
+        let (anchor_side, focus_side) = if backward {
+            (Direction::Forward, Direction::Backward)
+        } else {
+            (Direction::Backward, Direction::Forward)
+        };
+
+        for block_id in &expected_blocks {
+            let effect = session.run(Command::EditorKey(EditorKey::ModSpace))?;
+            assert!(effect.selection_changed);
+            assert!(!effect.document_changed);
+            assert_eq!(
+                session.structure_selection_range(),
+                Some((
+                    &DocumentRangeEndpoint::BlockEdge {
+                        block_id: block_id.clone(),
+                        side: anchor_side,
+                    },
+                    &DocumentRangeEndpoint::BlockEdge {
+                        block_id: block_id.clone(),
+                        side: focus_side,
+                    },
+                ))
+            );
+        }
+        let before = session
+            .structure_selection_range()
+            .map(|(a, b)| (a.clone(), b.clone()));
+        let effect = session.run(Command::EditorKey(EditorKey::ModSpace))?;
+        assert!(!effect.selection_changed);
+        assert!(!effect.document_changed);
+        assert_eq!(
+            session.structure_selection_range(),
+            before.as_ref().map(|(a, b)| (a, b))
+        );
+        assert_eq!(session.document(), &document);
+        assert_eq!(session.document_generation(), generation);
+    }
     Ok(())
 }
 
@@ -2119,7 +2227,7 @@ fn deleting_cross_host_range_removes_math_block_and_range_text_in_one_step()
         body_position(&after, 1, Affinity::Upstream),
     )?;
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
 
@@ -2138,7 +2246,7 @@ fn deleting_cross_host_range_removes_math_block_and_range_text_in_one_step()
         body_position(&before, 1, Affinity::Downstream)
     );
     assert!(!session.has_structure_selection());
-    assert!(session.selected_math_blocks().is_empty());
+    assert!(session.selected_atomic_blocks().is_empty());
     assert!(session.selected_block_environments().is_empty());
     assert_eq!(session.document_generation(), 1);
 
@@ -2194,7 +2302,7 @@ fn deleting_range_spanning_equation_align_and_section_undoes_as_one_operation()
         body_position(&before, 1, Affinity::Downstream),
         body_position(&after, 1, Affinity::Upstream),
     )?;
-    assert_eq!(session.selected_math_blocks(), &[equation_id, align_id]);
+    assert_eq!(session.selected_atomic_blocks(), &[equation_id, align_id]);
     assert_eq!(
         session.selected_block_environments(),
         std::slice::from_ref(&section_id)
@@ -2240,7 +2348,7 @@ fn deleting_cross_host_range_with_equation_and_middle_paragraph_merges_like_text
         body_position(&after, 1, Affinity::Upstream),
     )?;
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
     let generation_before_delete = session.document_generation();
@@ -2258,7 +2366,7 @@ fn deleting_cross_host_range_with_equation_and_middle_paragraph_merges_like_text
     );
     assert!(session.math_edit().is_none());
     assert!(!session.has_structure_selection());
-    assert!(session.selected_math_blocks().is_empty());
+    assert!(session.selected_atomic_blocks().is_empty());
     assert!(session.selected_block_environments().is_empty());
     assert_eq!(session.document_generation(), generation_before_delete + 1);
 
@@ -2306,7 +2414,7 @@ fn deleting_cross_host_range_merges_endpoints_and_removes_all_middle_paragraphs(
         body_position(&before, 2, Affinity::Downstream),
         body_position(&after, 3, Affinity::Upstream),
     )?;
-    assert_eq!(session.selected_math_blocks(), &[equation_id, align_id]);
+    assert_eq!(session.selected_atomic_blocks(), &[equation_id, align_id]);
     let generation_before_delete = session.document_generation();
 
     session.run(Command::Delete(Direction::Backward))?;
@@ -2361,7 +2469,7 @@ fn incompatible_endpoint_paragraph_styles_keep_structure_deletion_atomic()
     let selected_document = session.document().clone();
     let selected_selection = session.selection().clone();
     let selected_generation = session.document_generation();
-    let selected_math = session.selected_math_blocks().to_vec();
+    let selected_math = session.selected_atomic_blocks().to_vec();
     let selected_environments = session.selected_block_environments().to_vec();
 
     assert_eq!(
@@ -2372,7 +2480,7 @@ fn incompatible_endpoint_paragraph_styles_keep_structure_deletion_atomic()
     assert_eq!(session.document(), &selected_document);
     assert_eq!(session.selection(), &selected_selection);
     assert_eq!(session.document_generation(), selected_generation);
-    assert_eq!(session.selected_math_blocks(), selected_math.as_slice());
+    assert_eq!(session.selected_atomic_blocks(), selected_math.as_slice());
     assert_eq!(
         session.selected_block_environments(),
         selected_environments.as_slice()
@@ -2463,7 +2571,7 @@ fn deleting_selected_block_object_keeps_preceding_empty_paragraph_identity()
         body_position(&preceding, 0, Affinity::Upstream)
     );
     assert!(!session.has_structure_selection());
-    assert!(session.selected_math_blocks().is_empty());
+    assert!(session.selected_atomic_blocks().is_empty());
     assert_eq!(session.document_generation(), generation_before_delete + 1);
 
     session.run(Command::Undo)?;
@@ -2495,7 +2603,7 @@ fn deleting_text_to_block_edge_range_keeps_preceding_empty_paragraph()
         },
     })?;
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
 
@@ -2557,7 +2665,7 @@ fn shift_right_from_empty_paragraph_deletes_block_object_without_the_paragraph()
         extend: true,
     }))?;
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
     assert_eq!(
@@ -2596,7 +2704,7 @@ fn shift_left_from_empty_paragraph_deletes_block_object_without_the_paragraph()
         extend: true,
     }))?;
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
 
@@ -2721,7 +2829,7 @@ fn failed_math_range_deletion_keeps_document_generation_and_history()
     let selected_document = session.document().clone();
     let selected_selection = session.selection().clone();
     let selected_generation = session.document_generation();
-    let selected_math = session.selected_math_blocks().to_vec();
+    let selected_math = session.selected_atomic_blocks().to_vec();
 
     assert_eq!(
         session.run(Command::Delete(Direction::Backward)),
@@ -2731,7 +2839,7 @@ fn failed_math_range_deletion_keeps_document_generation_and_history()
     assert_eq!(session.document(), &selected_document);
     assert_eq!(session.selection(), &selected_selection);
     assert_eq!(session.document_generation(), selected_generation);
-    assert_eq!(session.selected_math_blocks(), selected_math.as_slice());
+    assert_eq!(session.selected_atomic_blocks(), selected_math.as_slice());
     assert!(session.has_structure_selection());
     assert!(!session.can_undo());
     Ok(())
@@ -2767,7 +2875,7 @@ fn typing_over_cross_host_structure_selection_replaces_range_in_one_step()
         "aZd"
     );
     assert!(!session.has_structure_selection());
-    assert!(session.selected_math_blocks().is_empty());
+    assert!(session.selected_atomic_blocks().is_empty());
 
     session.run(Command::Undo)?;
     assert_eq!(session.document(), &original);
@@ -2881,7 +2989,7 @@ fn escape_clears_structure_selection_while_block_stop_is_active()
     assert!(effect.selection_changed);
     assert!(!session.has_structure_selection());
     assert!(session.selected_block_environments().is_empty());
-    assert!(session.selected_math_blocks().is_empty());
+    assert!(session.selected_atomic_blocks().is_empty());
     assert!(session.block_boundary_exit().is_some());
     Ok(())
 }
@@ -2938,7 +3046,7 @@ fn typing_over_selected_math_block_inserts_at_the_neighbour_and_keeps_one_undo_s
         "beforeZ"
     );
     assert!(!session.has_structure_selection());
-    assert!(session.selected_math_blocks().is_empty());
+    assert!(session.selected_atomic_blocks().is_empty());
 
     session.run(Command::Undo)?;
     assert_eq!(session.document(), &original);
@@ -2971,7 +3079,7 @@ fn backspace_after_shift_extension_consumes_the_range_before_the_math_adjacency_
         extend: true,
     }))?;
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
     session.run(Command::EditorKey(EditorKey::RightArrow {
@@ -2996,7 +3104,7 @@ fn backspace_after_shift_extension_consumes_the_range_before_the_math_adjacency_
     );
     assert!(session.math_edit().is_none());
     assert!(!session.has_structure_selection());
-    assert!(session.selected_math_blocks().is_empty());
+    assert!(session.selected_atomic_blocks().is_empty());
     assert!(session.selected_block_environments().is_empty());
     assert_eq!(session.document_generation(), generation_before_delete + 1);
 
@@ -3030,7 +3138,7 @@ fn empty_insertion_over_structure_selection_is_a_plain_noop()
         body_position(&before, 1, Affinity::Downstream),
         body_position(&after, 1, Affinity::Upstream),
     )?;
-    let selected_math = session.selected_math_blocks().to_vec();
+    let selected_math = session.selected_atomic_blocks().to_vec();
 
     let effect = session.run(Command::InsertText(String::new()))?;
 
@@ -3038,7 +3146,7 @@ fn empty_insertion_over_structure_selection_is_a_plain_noop()
     assert_eq!(session.document(), &original);
     assert_eq!(session.document_generation(), generation);
     assert!(session.has_structure_selection());
-    assert_eq!(session.selected_math_blocks(), selected_math.as_slice());
+    assert_eq!(session.selected_atomic_blocks(), selected_math.as_slice());
     assert!(session.selected_text()?.contains('\u{fffc}'));
 
     let pasted = session.run(Command::PasteText(String::new()))?;
@@ -3131,14 +3239,14 @@ fn deleting_range_covering_adjacent_equation_and_align_removes_both_in_one_trans
         extend: true,
     }))?;
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
     session.run(Command::EditorKey(EditorKey::RightArrow {
         candidate: None,
         extend: true,
     }))?;
-    assert_eq!(session.selected_math_blocks(), &[equation_id, align_id]);
+    assert_eq!(session.selected_atomic_blocks(), &[equation_id, align_id]);
     let generation_before_delete = session.document_generation();
 
     session.run(Command::Delete(Direction::Backward))?;
@@ -3190,7 +3298,7 @@ fn failed_replace_over_structure_selection_rolls_back_every_interaction_field()
     assert!(session.has_pending_inline_style());
     select_block_object(&mut session, equation_id.clone())?;
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
     assert!(session.selected_block_environments().is_empty());
@@ -3234,7 +3342,7 @@ fn failed_replace_over_structure_selection_rolls_back_every_interaction_field()
     assert_eq!(session.has_pending_inline_style(), pending_style_before);
     assert!(session.has_structure_selection());
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
     assert!(session.selected_block_environments().is_empty());
@@ -3436,7 +3544,7 @@ fn deleting_equation_range_inside_an_environment_merges_child_paragraphs()
         body_position(&second, 0, Affinity::Downstream),
     )?;
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
 
@@ -3483,7 +3591,7 @@ fn unmergeable_text_range_falls_back_to_object_deletion_and_keeps_break()
         body_position(&after, 1, Affinity::Upstream),
     )?;
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
 

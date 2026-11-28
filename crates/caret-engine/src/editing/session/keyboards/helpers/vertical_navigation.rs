@@ -211,24 +211,6 @@ impl Session {
                 generation,
             }) => {
                 self.validate_navigation_generation(&generation)?;
-                if focus.story != self.selection.focus.story
-                    && (matches!(focus.story, crate::StoryId::TableCell { .. })
-                        || matches!(self.selection.focus.story, crate::StoryId::TableCell { .. }))
-                {
-                    if extend {
-                        return Ok(Effect::default());
-                    }
-                    if matches!(self.selection.focus.story, crate::StoryId::Body) {
-                        if self.enter_adjacent_table(direction)? {
-                            return Ok(Effect {
-                                selection_changed: true,
-                                ..Effect::default()
-                            });
-                        }
-                        return self.complete_vertical_document_edge(direction, false);
-                    }
-                    return Ok(Effect::default());
-                }
                 if extend
                     && let Some((anchor, _)) = self.structure_selection_range()
                     && anchor.is_inline_math()
@@ -264,7 +246,7 @@ impl Session {
                     Selection { anchor, focus },
                     visual_affinity,
                     NavigationIntent::Vertical,
-                    None,
+                    Some(direction),
                 )
             }
             Some(

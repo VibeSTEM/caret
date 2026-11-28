@@ -3,15 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use super::super::paragraph_ops::{ParagraphLocation, compare_positions, paragraph_at_location};
+use super::super::paragraph_ops::{
+    ParagraphLocation, compare_document_positions, compare_positions, paragraph_at_location,
+};
 use super::super::text_map::{OBJECT_REPLACEMENT, TextMap};
 use super::super::{
-    Affinity, Command, Direction, DocumentRangeEndpoint, EditError, Effect, HostCaretKind,
-    NavigationIntent, Pos, Selection, StoryId, StructureSelection,
+    Affinity, Command, Direction, DocumentRangeEndpoint, EditError, Effect, NavigationIntent, Pos,
+    Selection, StructureSelection,
 };
 use super::Session;
 use super::document_position::{visual_affinity_for, visual_affinity_for_block_edge};
-use super::range_extension::AdjacentComplexUnit;
 use caret_doc::NodeId;
 use caret_layout::VisualAffinity;
 use std::ops::Range;
@@ -53,24 +54,12 @@ impl Session {
                     .ok_or(EditError::InvalidPosition)?
                     .to_owned()
             } else {
-                if parts.body.anchor.story != StoryId::Body
-                    || parts.body.focus.story != StoryId::Body
-                {
+                if parts.body.anchor.story != parts.body.focus.story {
                     return Err(EditError::CrossParagraphSelection);
                 }
                 let (start, end) =
                     self.ordered_text_range(&parts.body.anchor, &parts.body.focus)?;
-                let mut text = String::new();
-                let mut first = true;
-                self.visit_ordered_paragraph_ranges(&start, &end, |_, _, map, range| {
-                    if !first {
-                        text.push('\n');
-                    }
-                    text.push_str(map.text.get(range).ok_or(EditError::InvalidPosition)?);
-                    first = false;
-                    Ok(())
-                })?;
-                text
+                self.selected_cross_paragraph_text(&start, &end, Some(&parts))?
             };
             return parts.copy_with_body(&self.document, body);
         }
@@ -96,16 +85,44 @@ impl Session {
                 .map(str::to_owned)
                 .ok_or(EditError::InvalidPosition);
         }
-        if anchor.story != StoryId::Body || focus.story != StoryId::Body {
+        if anchor.story != focus.story {
             return Err(EditError::CrossParagraphSelection);
         }
         let focus_map = TextMap::new(self.paragraph_for(&focus)?)?;
         focus_map.validate_pos(&focus)?;
 
         let (start, end) = self.ordered_text_range(&anchor, &focus)?;
+        self.selected_cross_paragraph_text(&start, &end, None)
+    }
+
+    fn selected_cross_paragraph_text(
+        &self,
+        start: &Pos,
+        end: &Pos,
+        inline_math: Option<&super::InlineMathRangeParts>,
+    ) -> Result<String, EditError> {
+        let (environments, atomic_blocks) = self.covered_block_nodes_for_text_pair(start, end)?;
+        let covers_table = atomic_blocks.iter().any(|id| {
+            self.structure_index
+                .get(id)
+                .is_some_and(|entry| entry.kind == caret_structure::StructureKind::Table)
+        });
+        let covers_cell_structure = matches!(start.story, crate::StoryId::TableCell { .. })
+            && (!environments.is_empty() || !atomic_blocks.is_empty());
+        if covers_table || covers_cell_structure {
+            return self.structure_text_for_range(
+                start,
+                end,
+                &environments,
+                &atomic_blocks,
+                inline_math,
+            );
+        }
+
+        // 普通段落范围保留文本端点自身的空切口，因此跨段换行也属于选中内容。
         let mut text = String::new();
         let mut first = true;
-        self.visit_ordered_paragraph_ranges(&start, &end, |_, _, map, range| {
+        self.visit_ordered_paragraph_ranges(start, end, |_, _, map, range| {
             if !first {
                 text.push('\n');
             }
@@ -133,10 +150,49 @@ impl Session {
                 end_offset: end_position.offset,
             },
         );
+        self.collect_text_range(bounds, &environments, &math_blocks, inline_math)
+    }
+
+    fn structure_text_for_range(
+        &self,
+        start: &Pos,
+        end: &Pos,
+        environments: &[NodeId],
+        math_blocks: &[NodeId],
+        inline_math: Option<&super::InlineMathRangeParts>,
+    ) -> Result<String, EditError> {
+        let start_ordinal = self
+            .structure_index
+            .paragraph_ordinal(&start.paragraph_id)
+            .ok_or(EditError::InvalidPosition)?;
+        let end_ordinal = self
+            .structure_index
+            .paragraph_ordinal(&end.paragraph_id)
+            .ok_or(EditError::InvalidPosition)?;
+        self.collect_text_range(
+            Some(StructureTextBounds {
+                start_ordinal,
+                end_ordinal,
+                start_offset: start.offset,
+                end_offset: end.offset,
+            }),
+            environments,
+            math_blocks,
+            inline_math,
+        )
+    }
+
+    fn collect_text_range(
+        &self,
+        bounds: Option<StructureTextBounds>,
+        environments: &[NodeId],
+        math_blocks: &[NodeId],
+        inline_math: Option<&super::InlineMathRangeParts>,
+    ) -> Result<String, EditError> {
         let copy = StructureTextCopy {
             bounds,
-            environments: &environments,
-            math_blocks: &math_blocks,
+            environments,
+            math_blocks,
             inline_math,
         };
         let mut text = String::new();
@@ -180,6 +236,7 @@ impl Session {
                 }
                 caret_doc::Block::Table(table) => {
                     let covered = whole
+                        || copy.math_blocks.contains(&table.id)
                         || match copy.bounds {
                             Some(bounds) => {
                                 let Some(entry) = self.structure_index.get(&table.id) else {
@@ -194,10 +251,41 @@ impl Session {
                                         && range.end > bounds.start_ordinal
                                 }
                             }
-                            None => true,
+                            None => false,
                         };
                     if covered {
-                        return Err(EditError::UnsupportedTableContent);
+                        if whole || copy.math_blocks.contains(&table.id) {
+                            for row in &table.rows {
+                                let mut cells = Vec::with_capacity(row.cells.len());
+                                for cell in &row.cells {
+                                    let mut cell_text = String::new();
+                                    let mut cell_first = true;
+                                    self.collect_structure_selection_text(
+                                        &cell.blocks,
+                                        copy,
+                                        true,
+                                        &mut cell_text,
+                                        &mut cell_first,
+                                    )?;
+                                    cells.push(cell_text);
+                                }
+                                let row_text = cells.join("\t");
+                                push_structure_selection_unit(text, first, Some(&row_text));
+                            }
+                        } else {
+                            // 局部范围沿用段落序号与切口；完整表格才增加行列分隔。
+                            for row in &table.rows {
+                                for cell in &row.cells {
+                                    self.collect_structure_selection_text(
+                                        &cell.blocks,
+                                        copy,
+                                        false,
+                                        text,
+                                        first,
+                                    )?;
+                                }
+                            }
+                        }
                     }
                 }
                 caret_doc::Block::Equation(equation)
@@ -319,6 +407,31 @@ impl Session {
         anchor_visual_affinity: VisualAffinity,
         visual_affinity: VisualAffinity,
     ) -> Result<Effect, EditError> {
+        if let Some(id) = self.composition.as_ref().map(|composition| composition.id) {
+            // 端点验证、预编辑撤销与选区安装在候选会话中提交；任何失败都保留原态。
+            let mut candidate = self.clone_preserving_identity();
+            let cancel = candidate.cancel_composition(id)?;
+            let mut effect = candidate.set_pointer_selection_range(
+                anchor,
+                focus,
+                anchor_visual_affinity,
+                visual_affinity,
+            )?;
+            effect.composition_changed |= cancel.composition_changed;
+            *self = candidate;
+            return Ok(effect);
+        }
+        // 先验证两个正文位置；跨单元格提升不能让无效坐标绕过正常选区校验。
+        self.validate_navigation_position(&anchor)?;
+        self.validate_navigation_position(&focus)?;
+        if let Some(effect) = self.promote_pointer_range_across_cells(
+            DocumentRangeEndpoint::Text(anchor.clone()),
+            DocumentRangeEndpoint::Text(focus.clone()),
+            anchor_visual_affinity,
+            visual_affinity,
+        )? {
+            return Ok(effect);
+        }
         if self.range_requires_structure_selection(&anchor, &focus)? {
             return self.promote_text_range_to_structure(
                 anchor,
@@ -332,6 +445,117 @@ impl Session {
             anchor_visual_affinity,
             visual_affinity,
         )
+    }
+
+    /// 跳过两端共有的单元格父链，找到每端实际跨越的最外层表格。
+    pub(super) fn crossed_pointer_tables(
+        &self,
+        anchor: &DocumentRangeEndpoint,
+        focus: &DocumentRangeEndpoint,
+    ) -> Option<(Option<NodeId>, Option<NodeId>)> {
+        let cells = |endpoint: &DocumentRangeEndpoint| {
+            let container = if matches!(endpoint, DocumentRangeEndpoint::BlockEdge { .. }) {
+                caret_structure::find_document_node(
+                    &self.document,
+                    endpoint.block_container_node_id(),
+                )
+                .map(|location| location.container)
+            } else {
+                self.paragraph_index
+                    .get(endpoint.block_container_node_id())
+                    .map(|location| location.container.clone())
+            }?;
+            Some(container.table_cells().cloned().collect::<Vec<_>>())
+        };
+        let mut anchor_cells = cells(anchor)?.into_iter();
+        let mut focus_cells = cells(focus)?.into_iter();
+        loop {
+            let anchor = anchor_cells.next();
+            let focus = focus_cells.next();
+            if anchor != focus {
+                return Some((
+                    anchor.map(|cell| cell.table_id),
+                    focus.map(|cell| cell.table_id),
+                ));
+            }
+            anchor?;
+        }
+    }
+
+    /// 跨格端点分属不同块，以物理块顺序确定拖选方向。
+    fn compare_pointer_range_endpoints(
+        &self,
+        left: &DocumentRangeEndpoint,
+        right: &DocumentRangeEndpoint,
+    ) -> Result<std::cmp::Ordering, EditError> {
+        use caret_structure::DocumentNodeEdge;
+
+        let side = |endpoint: &DocumentRangeEndpoint| match endpoint {
+            DocumentRangeEndpoint::BlockEdge {
+                side: Direction::Forward,
+                ..
+            } => DocumentNodeEdge::After,
+            _ => DocumentNodeEdge::Before,
+        };
+        caret_structure::compare_document_node_edges(
+            &self.document,
+            left.block_container_node_id(),
+            side(left),
+            right.block_container_node_id(),
+            side(right),
+        )
+        .ok_or(EditError::InvalidPosition)
+    }
+
+    /// 跨单元格拖选统一提升为表格块边界范围；同格端点交还原入口维持原语义。
+    pub(super) fn promote_pointer_range_across_cells(
+        &mut self,
+        anchor: DocumentRangeEndpoint,
+        focus: DocumentRangeEndpoint,
+        anchor_visual_affinity: VisualAffinity,
+        focus_visual_affinity: VisualAffinity,
+    ) -> Result<Option<Effect>, EditError> {
+        let Some((anchor_table, focus_table)) = self.crossed_pointer_tables(&anchor, &focus) else {
+            return Ok(None);
+        };
+        self.ensure_math_edit_revision_current()?;
+        if self.has_uncommitted_math_source_draft() {
+            return Err(EditError::InvalidMath(
+                "resolve or cancel the incomplete math source draft before changing selection"
+                    .to_owned(),
+            ));
+        }
+        let forward = self
+            .compare_pointer_range_endpoints(&anchor, &focus)?
+            .is_lt();
+        let (anchor_side, focus_side) = if forward {
+            (Direction::Backward, Direction::Forward)
+        } else {
+            (Direction::Forward, Direction::Backward)
+        };
+        let table_edge = |endpoint: DocumentRangeEndpoint, table_id: Option<NodeId>, side| {
+            table_id
+                .map(|block_id| DocumentRangeEndpoint::BlockEdge { block_id, side })
+                .unwrap_or(endpoint)
+        };
+        let anchor = table_edge(anchor, anchor_table, anchor_side);
+        let focus = table_edge(focus, focus_table, focus_side);
+        if anchor.is_inline_math() || focus.is_inline_math() {
+            // 保留表外数学端点的局部范围；数学安装器会投影 TableEdge，并从已选表格
+            // 的另一侧取得正文切口，避免把内部段落误作表外焦点。
+            return self
+                .install_inline_math_selection(
+                    StructureSelection { anchor, focus },
+                    anchor_visual_affinity,
+                    focus_visual_affinity,
+                )
+                .map(Some);
+        }
+        let effect = self.commit_range_between(anchor, focus, Some(focus_visual_affinity), true)?;
+        self.clear_math_edit();
+        self.selection_anchor_visual_affinity = anchor_visual_affinity;
+        self.selection_visual_affinity = focus_visual_affinity;
+        Ok(Some(effect))
     }
 
     /// 判定文本范围是否需要提升为结构选区。
@@ -503,29 +727,6 @@ impl Session {
         logical_direction: Option<Direction>,
     ) -> Result<Effect, EditError> {
         self.ensure_math_edit_revision_current()?;
-        if selection.focus.story != self.selection.focus.story
-            && (matches!(selection.focus.story, crate::StoryId::TableCell { .. })
-                || matches!(self.selection.focus.story, crate::StoryId::TableCell { .. }))
-        {
-            // 表格是块宿主，TableCell 位置与 Body/环境位置不可比较。扩选候选在
-            // 表格边界收敛为 no-op；普通纵向/横向移动交给块邻接入口；其余跨格
-            // 候选保持原位，避免布局候选把 QML 导航变成 position_story_mismatch。
-            let extending = self.selection.anchor != self.selection.focus
-                || selection.anchor != selection.focus;
-            if extending {
-                return Ok(Effect::default());
-            }
-            if let Some(direction) = logical_direction
-                && matches!(self.selection.focus.story, crate::StoryId::Body)
-                && self.enter_adjacent_table(direction)?
-            {
-                return Ok(Effect {
-                    selection_changed: true,
-                    ..Effect::default()
-                });
-            }
-            return Ok(Effect::default());
-        }
         self.validate_navigation_position(&selection.anchor)?;
         self.validate_navigation_position(&selection.focus)?;
         // 候选可以落在不同 Story（例如从正文进入环境标题），因此用共享结构端点
@@ -545,10 +746,25 @@ impl Session {
         let was_collapsed = selection.anchor == selection.focus;
         if intent == NavigationIntent::Horizontal
             && was_collapsed
-            && let Some(direction) = logical_direction
-            && let Some(effect) = self.move_from_math_block_boundary_stop(direction)?
+            && let Some(direction) = Self::arrow_direction(candidate_direction, logical_direction)
+            && let Some(effect) = self.move_from_block_boundary_stop(direction)?
         {
             return Ok(effect);
+        }
+        if selection.focus.story != self.selection.focus.story
+            && (matches!(selection.focus.story, crate::StoryId::TableCell { .. })
+                || matches!(self.selection.focus.story, crate::StoryId::TableCell { .. }))
+            && self.block_boundary_exit().is_none()
+        {
+            let direction = Self::arrow_direction(candidate_direction, logical_direction);
+            if let Some(direction) = direction {
+                return if intent == NavigationIntent::Horizontal {
+                    self.complete_horizontal_document_edge(direction, !was_collapsed)
+                } else {
+                    self.complete_vertical_document_edge(direction, !was_collapsed)
+                };
+            }
+            return Ok(Effect::default());
         }
         let anchor_visual_affinity = if self.selection.anchor == self.selection.focus
             && self.structure_selection.is_none()
@@ -608,6 +824,17 @@ impl Session {
                 ..Effect::default()
             });
         }
+        if intent == NavigationIntent::Horizontal
+            && was_collapsed
+            && let Some(direction) = Self::arrow_direction(candidate_direction, logical_direction)
+            && self.selection.focus.paragraph_id != selection.focus.paragraph_id
+            && self.park_beside_adjacent_atomic_block(direction, true)?
+        {
+            return Ok(Effect {
+                selection_changed: true,
+                ..Effect::default()
+            });
+        }
         // 任意复杂块链：布局候选可能一次跨过紧邻的公式对象，仍按块外侧停靠/进入
         // 逐个消费，不能跳过第一个公式直接落到后面的块环境或段落。
         if intent == NavigationIntent::Horizontal
@@ -615,7 +842,9 @@ impl Session {
             && self.selection.anchor == self.selection.focus
             && self.math_edit.is_none()
             && let Some(direction) = candidate_direction
-            && self.paragraph_beside_block_math(&self.selection.focus, direction)?
+            && self
+                .adjacent_atomic_block(&self.selection.focus, direction)?
+                .is_some_and(|(_, kind)| kind.is_math_block())
             && self.candidate_skips_next_complex_unit(&selection.focus, direction)?
             && self.enter_adjacent_math_if_present(direction)?
         {
@@ -624,36 +853,16 @@ impl Session {
                 ..Effect::default()
             });
         }
-        // 环境外侧停靠/BlockEdge 焦点不在紧邻公式的文本段落里：按文档顺序向上越过
-        // 环境边界识别下一个复杂单元，先停靠/进入它，避免直接跳到环境后的段落。
-        // 仅在外侧停靠状态生效，环境内部的普通离开仍先走环境外侧边界停靠契约。
         if intent == NavigationIntent::Horizontal
             && was_collapsed
             && self.selection.anchor == self.selection.focus
-            && self.math_edit.is_none()
-            && self
-                .host_caret_position
-                .as_ref()
-                .is_some_and(|position| position.kind() == HostCaretKind::Block)
-            && let Some(direction) = Self::arrow_direction(candidate_direction, logical_direction)
-            && let Some(unit) = self.adjacent_complex_unit(&self.selection.focus, direction)?
-            && self.candidate_beyond_complex_unit(&selection.focus, &unit, direction)?
-            && self.stop_or_enter_adjacent_complex_unit(&unit, direction)?
-        {
-            return Ok(Effect {
-                selection_changed: true,
-                ..Effect::default()
-            });
-        }
-        if intent == NavigationIntent::Horizontal
-            && was_collapsed
-            && self.selection.anchor == self.selection.focus
+            && self.block_boundary_exit().is_none()
             && let Some(direction) =
                 self.navigation_block_boundary_stop_direction(&selection.focus, logical_direction)?
         {
             return self.run(Command::ExitBlockEnvironment(direction));
         }
-        let ordering = compare_positions(
+        let ordering = compare_document_positions(
             &self.document.body,
             &self.paragraph_index,
             &self.selection.focus,
@@ -795,7 +1004,7 @@ impl Session {
         )?;
         let previous_selection = self.structure_selection.clone();
         let previous_environments = self.selected_block_environments.clone();
-        let previous_math_blocks = self.selected_math_blocks.clone();
+        let previous_math_blocks = self.selected_atomic_blocks.clone();
         // 目标与范围均有效后，才切换离开公式编辑状态。
         self.install_structure_selection(structure_selection)?;
         let cancels_command_line_preedit = self
@@ -804,7 +1013,7 @@ impl Session {
             .is_some_and(|line| !line.preedit.is_empty());
         let changed = self.structure_selection != previous_selection
             || self.selected_block_environments != previous_environments
-            || self.selected_math_blocks != previous_math_blocks
+            || self.selected_atomic_blocks != previous_math_blocks
             || self.selection.focus != focus
             || self.selection_anchor_visual_affinity != anchor_visual_affinity
             || self.selection_visual_affinity != focus_visual_affinity;
@@ -847,11 +1056,11 @@ impl Session {
         };
         let previous_selection = self.structure_selection.clone();
         let previous_environments = self.selected_block_environments.clone();
-        let previous_math_blocks = self.selected_math_blocks.clone();
+        let previous_math_blocks = self.selected_atomic_blocks.clone();
         self.install_structure_selection(structure_selection)?;
         let changed = self.structure_selection != previous_selection
             || self.selected_block_environments != previous_environments
-            || self.selected_math_blocks != previous_math_blocks;
+            || self.selected_atomic_blocks != previous_math_blocks;
         self.clear_math_edit();
         self.selection = Selection {
             anchor: focus.clone(),
@@ -953,29 +1162,6 @@ impl Session {
             return Ok(false);
         };
         Ok(matches!(following, DocumentRangeEndpoint::BlockEdge { .. }))
-    }
-
-    /// 判断水平候选是否越过复杂单元在原方向上的外侧边界。
-    fn candidate_beyond_complex_unit(
-        &mut self,
-        target: &Pos,
-        unit: &AdjacentComplexUnit,
-        direction: Direction,
-    ) -> Result<bool, EditError> {
-        let block_id = match unit {
-            AdjacentComplexUnit::Math { block_id } => block_id,
-            AdjacentComplexUnit::Environment { environment_id } => environment_id,
-        };
-        let endpoint = DocumentRangeEndpoint::BlockEdge {
-            block_id: block_id.clone(),
-            side: direction,
-        };
-        let ordering =
-            self.compare_range_endpoints(&DocumentRangeEndpoint::Text(target.clone()), &endpoint)?;
-        Ok(match direction {
-            Direction::Forward => ordering.is_gt(),
-            Direction::Backward => ordering.is_lt(),
-        })
     }
 
     /// 箭头键逐块停靠优先采用实体方向键方向。
@@ -1105,7 +1291,7 @@ impl Session {
             || self.host_caret_position.is_some()
             || self.has_structure_selection()
             || !self.selected_block_environments.is_empty()
-            || !self.selected_math_blocks.is_empty();
+            || !self.selected_atomic_blocks.is_empty();
         self.clear_host_caret_position();
         self.clear_structure_selection_state();
         self.selection = next;

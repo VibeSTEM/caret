@@ -17,6 +17,16 @@ class ShellDocumentInteractionTest final : public ShellTestBase {
     void documentCanvasRoutesCommandKeysAndKeepsNormalEditingBehavior();
     void documentHitTestReturnsRustPosition();
     void documentCanvasClickAndTypingPublishRustSnapshot();
+    void tableGuidelinesRefreshForArrowAndCellClick();
+    void tableThemeTokensRenderAcrossZoomAndWindowFocus();
+    void tablePaintUsesBuiltinThemeColors();
+    void tableBoundaryCaretAndShiftArrowsUseWholeGrid();
+    void tableGuidelineUsesTheVisiblePageFragment();
+    void tableDragSelectsAcrossUnevenCells();
+    void tableDragFromPreeditSelectsAcrossCells();
+    void textDragFromPreeditKeepsTheMappedAnchor();
+    void tableDragSelectsACellContainingOnlyDisplayMath();
+    void tableShapeShortcutsMutateThroughTheFocusedViewModel();
     void documentCanvasRasterizesTypedGlyphWithInk();
     void documentFontFallbackPreservesLatinBaseline();
     void returnSplitsParagraphAndForwardsEditorKey();
@@ -34,6 +44,7 @@ class ShellDocumentInteractionTest final : public ShellTestBase {
     void richClipboardCopyPreservesMathStructure();
     void richClipboardPasteRoundTripsMathStructureAndUndo();
     void richClipboardBlocksPasteRoundTripsDisplayMathAndUndo();
+    void richClipboardRoundTripsATableAndItsDisplayMath();
     void richClipboardRejectsInvalidFragmentPayload();
     void externalMathTextPasteRecognizesDelimiters();
     void selectionDragFromExistingSelectionPublishesCanvasRects();

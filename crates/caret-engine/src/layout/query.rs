@@ -6,6 +6,22 @@
 use super::*;
 
 impl DocumentLayoutSnapshot {
+    /// 返回该页公式投影所属的文档单元格。目标不匹配或公式在本页没有格内投影时返回空。
+    pub fn math_target_cell_id(
+        &self,
+        page_index: usize,
+        target: &MathEditTarget,
+    ) -> Option<&NodeId> {
+        let math_id = match target {
+            MathEditTarget::Inline { math_id, .. } => math_id,
+            MathEditTarget::Block { block_id, .. } => block_id,
+        };
+        if &self.math_host(math_id)?.target != target {
+            return None;
+        }
+        self.math_projection(page_index, math_id)?.cell_id.as_ref()
+    }
+
     pub(crate) fn math_projection(
         &self,
         page_index: usize,

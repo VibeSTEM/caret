@@ -295,7 +295,7 @@ fn selection_rectangles_json(
     structure_text_bounds: Option<(Pos, Pos)>,
     has_structure_selection: bool,
     selected_environment_ids: &[NodeId],
-    selected_math_block_ids: &[NodeId],
+    selected_atomic_block_ids: &[NodeId],
     snapshot: &caret_engine::DocumentLayoutSnapshot,
 ) -> Result<Value, String> {
     let rectangles = if let Some((anchor, focus)) = structure_text_bounds {
@@ -304,7 +304,7 @@ fn selection_rectangles_json(
                 &anchor,
                 &focus,
                 selected_environment_ids,
-                selected_math_block_ids,
+                selected_atomic_block_ids,
             )
             .ok_or_else(|| "layout.stale_selection_geometry".to_owned())?
     } else if has_structure_selection {
@@ -330,7 +330,7 @@ pub(super) fn caret_geometry_with_block_boundary_exit(
 
 fn block_environment_highlight_rects(
     environment_id: Option<&NodeId>,
-    focus: &caret_engine::Pos,
+    table_id: Option<&NodeId>,
     snapshot: &caret_engine::DocumentLayoutSnapshot,
 ) -> Value {
     let mut rectangles = Vec::new();
@@ -349,8 +349,13 @@ fn block_environment_highlight_rects(
                 }),
         );
     }
-    // 表格单元格与 Section/Equation 共用同一 block 高亮层；几何来自同一快照网格。
-    rectangles.extend(snapshot.table_block_highlight_rects(focus));
+    if let Some(table_id) = table_id {
+        rectangles.extend(
+            snapshot
+                .atomic_block_geometry(std::slice::from_ref(table_id))
+                .unwrap_or_default(),
+        );
+    }
     rectangle_values(rectangles)
 }
 
@@ -367,7 +372,7 @@ fn math_block_highlight_rects(
     };
     Ok(rectangle_values(
         snapshot
-            .math_block_geometry(std::slice::from_ref(block_id))
+            .atomic_block_geometry(std::slice::from_ref(block_id))
             .ok_or_else(|| "layout.stale_math_highlight_geometry".to_owned())?,
     ))
 }
@@ -413,11 +418,11 @@ fn math_text_highlight_rects(
     rectangle_values(rectangles)
 }
 
-/// 行内环境/空公式高亮输入：文本范围、空宿主标记与公式 caret 插入槽。
+/// 行内环境与空公式高亮所需的文本范围和树光标位置。
 struct InlineHighlightContext<'a> {
     range: Option<&'a caret_engine::InlineSpan>,
     empty_inline_host: bool,
-    math_caret: Option<(caret_engine::PageCaretGeometry, u16)>,
+    math_tree_context: Option<&'a (MathEditTarget, MathTreePosition)>,
 }
 
 /// 将当前最内层行内环境投影为布局层选区矩形。
@@ -431,25 +436,26 @@ fn inline_environment_highlight_rects(
     let InlineHighlightContext {
         range,
         empty_inline_host,
-        math_caret,
+        math_tree_context,
     } = context;
-    // 空 InlineMath 与空 InlineEnvironment 一致：不按 U+FFFC 跨度铺满隐藏盒，
-    // 而以公式 caret 为中心绘制同一插入槽。Source 分支拿不到公式 caret 时退回
-    // 共享 caret/行框插入槽，避免零宽对象或无意义范围高亮。
+    // Source 分支只有正文位置。树编辑中的槽位由实际公式投影决定，裁切后为空时跳过高亮。
     if empty_inline_host {
-        if let Some((caret, font_size)) = math_caret {
-            return rectangle_values(insertion_slot_rect_from_caret(caret, font_size, snapshot));
-        }
-        return rectangle_values(insertion_slot_rect(focus, visual_affinity, snapshot));
+        let slot = match math_tree_context {
+            Some((target, position)) => snapshot
+                .inline_math_insertion_slot(target, position)
+                .map(|(_, slot)| slot),
+            None => snapshot.inline_text_insertion_slot(focus, visual_affinity),
+        };
+        return rectangle_values(slot);
     }
     let Some(range) = range else {
         if pending_style {
-            return rectangle_values(insertion_slot_rect(focus, visual_affinity, snapshot));
+            return rectangle_values(snapshot.inline_text_insertion_slot(focus, visual_affinity));
         }
         return Value::Array(Vec::new());
     };
     if range.start_utf8 == range.end_utf8 {
-        return rectangle_values(insertion_slot_rect(focus, visual_affinity, snapshot));
+        return rectangle_values(snapshot.inline_text_insertion_slot(focus, visual_affinity));
     }
     let selection = Selection {
         anchor: Pos {
@@ -467,59 +473,9 @@ fn inline_environment_highlight_rects(
     };
     let mut rectangles = snapshot.selection_geometry(&selection).unwrap_or_default();
     if pending_style {
-        rectangles.extend(insertion_slot_rect(focus, visual_affinity, snapshot));
+        rectangles.extend(snapshot.inline_text_insertion_slot(focus, visual_affinity));
     }
     rectangle_values(rectangles)
-}
-
-/// 以当前行高和字号为零长度格式范围生成可见插入槽高亮。
-fn insertion_slot_rect(
-    focus: &Pos,
-    visual_affinity: caret_engine::VisualAffinity,
-    snapshot: &caret_engine::DocumentLayoutSnapshot,
-) -> Vec<PageSelectionRect> {
-    let Some(caret) = snapshot.caret_geometry(focus, visual_affinity) else {
-        return Vec::new();
-    };
-    let Some(font_size) = snapshot.font_size_centipoints_at(focus, visual_affinity) else {
-        return Vec::new();
-    };
-    insertion_slot_rect_from_caret(caret, font_size, snapshot)
-}
-
-/// 以给定 caret 几何与字号生成可见插入槽；空宿主公式与零长度格式范围共用。
-fn insertion_slot_rect_from_caret(
-    caret: caret_engine::PageCaretGeometry,
-    font_size: u16,
-    snapshot: &caret_engine::DocumentLayoutSnapshot,
-) -> Vec<PageSelectionRect> {
-    let Some(page) = snapshot.pages.get(caret.page_index) else {
-        return Vec::new();
-    };
-    let width = (f64::from(font_size) / 100.0 * 0.5)
-        .max(4.0)
-        .min(page.width_pt);
-    let x = caret.x_pt.clamp(0.0, page.width_pt);
-    let (x0, x1) = insertion_slot_horizontal_bounds(x, page.width_pt, width);
-    let y0 = caret.y0_pt.clamp(0.0, page.height_pt);
-    let y1 = caret.y1_pt.clamp(0.0, page.height_pt);
-    if ![x0, y0, x1, y1].into_iter().all(f64::is_finite) || x1 <= x0 || y1 <= y0 {
-        return Vec::new();
-    }
-    vec![PageSelectionRect {
-        page_index: caret.page_index,
-        x0_pt: x0,
-        y0_pt: y0,
-        x1_pt: x1,
-        y1_pt: y1,
-    }]
-}
-
-/// 在字形视觉光标两侧居中放置空槽，并在页面边缘整体内移。
-fn insertion_slot_horizontal_bounds(x: f64, page_width: f64, width: f64) -> (f64, f64) {
-    let width = width.min(page_width);
-    let x0 = (x - width / 2.0).clamp(0.0, page_width - width);
-    (x0, x0 + width)
 }
 
 /// 布局与交互快照共享的高亮状态；组合预览会话优先于主会话。
@@ -536,11 +492,13 @@ struct HighlightState {
     inline_visual_affinity: caret_engine::VisualAffinity,
     math_text_context: Option<MathTextInputContext>,
     focus_environment_id: Option<NodeId>,
+    focus_table_cell: Option<caret_engine::TableCellPath>,
 }
 
 /// 两个快照入口共享的四个高亮层矩形；字段名沿用各自的 JSON 键。
 struct HighlightRectangles {
     block_environment: Value,
+    table_guidelines: Value,
     math_block: Value,
     math_text: Value,
     inline_environment: Value,
@@ -552,15 +510,16 @@ impl HighlightState {
         &self,
         snapshot: &caret_engine::DocumentLayoutSnapshot,
     ) -> Result<HighlightRectangles, String> {
-        let inline_math_caret = self
-            .inline_math_tree_context
-            .as_ref()
-            .and_then(|(target, position)| snapshot.math_tree_caret(target, position));
         Ok(HighlightRectangles {
             block_environment: block_environment_highlight_rects(
                 self.focus_environment_id.as_ref(),
-                &self.inline_focus,
+                self.focus_table_cell.as_ref().map(|cell| &cell.table_id),
                 snapshot,
+            ),
+            table_guidelines: rectangle_values(
+                self.focus_table_cell
+                    .iter()
+                    .flat_map(|cell| snapshot.table_guidelines(cell)),
             ),
             math_block: math_block_highlight_rects(self.math_block_target.as_ref(), snapshot)?,
             math_text: math_text_highlight_rects(self.math_text_context.as_ref(), snapshot),
@@ -568,7 +527,7 @@ impl HighlightState {
                 InlineHighlightContext {
                     range: self.inline_environment.as_ref(),
                     empty_inline_host: self.empty_inline_host,
-                    math_caret: inline_math_caret,
+                    math_tree_context: self.inline_math_tree_context.as_ref(),
                 },
                 self.pending_inline_slot,
                 &self.inline_focus,
@@ -610,6 +569,7 @@ fn current_highlight_state(runtime: &mut DocumentViewRuntime) -> Result<Highligh
         .as_ref()
         .and_then(|_| highlight_session.math_text_input_context());
     let focus_environment_id = current_block_environment_id(highlight_session, &environment_view);
+    let focus_table_cell = highlight_session.focused_table_cell();
     Ok(HighlightState {
         math_block_target,
         inline_environment,
@@ -620,6 +580,7 @@ fn current_highlight_state(runtime: &mut DocumentViewRuntime) -> Result<Highligh
         inline_visual_affinity,
         math_text_context,
         focus_environment_id,
+        focus_table_cell,
     })
 }
 
@@ -822,12 +783,24 @@ impl DocumentViewRuntime {
     pub(super) fn layout_snapshot_json_after_composition_cancel(
         &mut self,
     ) -> Result<String, String> {
+        self.layout_snapshot_json_after_pointer_composition_cancel(None)
+    }
+
+    /// 取消预编辑后发布已映射的拖选锚点，供画布在新的布局代次中延续同一范围。
+    pub(super) fn layout_snapshot_json_after_pointer_composition_cancel(
+        &mut self,
+        anchor: Option<Value>,
+    ) -> Result<String, String> {
         let snapshot = self.layout_snapshot_json()?;
         let mut view: Value = serde_json::from_str(&snapshot)
             .map_err(|error| format!("layout.serialize: {error}"))?;
-        view.as_object_mut()
-            .ok_or_else(|| "layout.invalid_view_object".to_owned())?
-            .insert("compositionCancelled".to_owned(), Value::Bool(true));
+        let fields = view
+            .as_object_mut()
+            .ok_or_else(|| "layout.invalid_view_object".to_owned())?;
+        fields.insert("compositionCancelled".to_owned(), Value::Bool(true));
+        if let Some(anchor) = anchor {
+            fields.insert("dragAnchor".to_owned(), anchor);
+        }
         serde_json::to_string(&view).map_err(|error| format!("layout.serialize: {error}"))
     }
 
@@ -843,7 +816,7 @@ impl DocumentViewRuntime {
         let selection = self.session.selection().clone();
         let has_structure_selection = self.session.has_structure_selection();
         let selected_environment_ids = self.session.selected_block_environments().to_vec();
-        let selected_math_block_ids = self.session.selected_math_blocks().to_vec();
+        let selected_atomic_block_ids = self.session.selected_atomic_blocks().to_vec();
         let structure_text_bounds = self.session.structure_selection_text_bounds();
         let snapshot = if composing {
             self.composition_snapshot
@@ -881,13 +854,13 @@ impl DocumentViewRuntime {
                 "currentStructure".to_owned(),
                 current_structure_state(&self.session),
             );
+        let highlight_rectangles = highlight.rectangles(snapshot)?;
         view.as_object_mut()
             .ok_or_else(|| "layout.invalid_view_object".to_owned())?
             .insert(
                 "tableGuidelines".to_owned(),
-                rectangle_values(snapshot.table_guidelines(&selection.focus)),
+                highlight_rectangles.table_guidelines,
             );
-        let highlight_rectangles = highlight.rectangles(snapshot)?;
         view.as_object_mut()
             .ok_or_else(|| "layout.invalid_view_object".to_owned())?
             .insert(
@@ -942,7 +915,7 @@ impl DocumentViewRuntime {
                         structure_text_bounds.clone(),
                         has_structure_selection,
                         &selected_environment_ids,
-                        &selected_math_block_ids,
+                        &selected_atomic_block_ids,
                         snapshot,
                     )
                 },
@@ -958,7 +931,20 @@ impl DocumentViewRuntime {
             math_tree_geometry_context.as_ref(),
             snapshot,
         )?;
-        if let Some((caret, font_size_centipoints)) = pointer_selection_caret.or(active_math_caret)
+        let boundary = self.session.block_boundary_exit();
+        let boundary_caret = boundary.as_ref().and_then(|(id, side)| {
+            let focus = &selection.focus;
+            let affinity = self.session.selection_visual_affinity();
+            let fallback = snapshot.caret_geometry(focus, affinity)?;
+            let font_size = snapshot.font_size_centipoints_at(focus, affinity)?;
+            Some((
+                snapshot.block_boundary_caret(id, *side, fallback),
+                font_size,
+            ))
+        });
+        if let Some((caret, font_size_centipoints)) = pointer_selection_caret
+            .or(active_math_caret)
+            .or(boundary_caret)
         {
             view.as_object_mut()
                 .ok_or_else(|| "layout.invalid_view_object".to_owned())?
@@ -1087,7 +1073,7 @@ impl DocumentViewRuntime {
         let block_boundary_exit = self.session.block_boundary_exit();
         let has_structure_selection = self.session.has_structure_selection();
         let selected_environment_ids = self.session.selected_block_environments().to_vec();
-        let selected_math_block_ids = self.session.selected_math_blocks().to_vec();
+        let selected_atomic_block_ids = self.session.selected_atomic_blocks().to_vec();
         let structure_text_bounds = self.session.structure_selection_text_bounds();
         // 先确保基础快照与当前代际一致，再以不可变借用做同代校验和几何投影。
         self.base_snapshot()?;
@@ -1100,7 +1086,7 @@ impl DocumentViewRuntime {
             structure_text_bounds,
             has_structure_selection,
             &selected_environment_ids,
-            &selected_math_block_ids,
+            &selected_atomic_block_ids,
             snapshot,
         )?;
         let rectangles = selection_rectangles_with_math(
@@ -1189,12 +1175,11 @@ impl DocumentViewRuntime {
                     .ok_or_else(|| "layout.invalid_caret_font_size".to_owned())?;
                 (caret, font_size_centipoints)
             };
-        let table_guidelines = rectangle_values(snapshot.table_guidelines(&selection.focus));
         let serialized = serde_json::to_string(&serde_json::json!({
             "documentGeneration": snapshot.document_generation.to_string(),
             "fontGeneration": snapshot.font_generation.to_string(),
             "selectionRects": rectangles,
-            "tableGuidelines": table_guidelines,
+            "tableGuidelines": highlight_rectangles.table_guidelines,
             "inputMethodContext": input_method_context,
             (Field::CommandLine.wire_name()): command_line,
             "currentStructure": current_structure,

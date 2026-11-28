@@ -23,10 +23,14 @@ pub enum DocumentNodeKind {
 impl DocumentNodeKind {
     /// 该节点可作为文档级结构范围的原子块单元。
     ///
-    /// Section/Custom 以环境子树参与范围；Equation/Align 以整个公式块参与范围。
-    /// 未来的 Table/Figure 等复杂 Block 在此声明能力后即可复用共享范围协议。
+    /// Section/Custom 以环境子树参与范围；Equation/Align/Table 作为原子块参与范围。
     pub fn is_range_block(self) -> bool {
-        matches!(self, Self::Environment | Self::Equation | Self::Align)
+        self == Self::Environment || self.is_atomic_block()
+    }
+
+    /// 显示公式和表格的外侧边界覆盖整个块。
+    pub fn is_atomic_block(self) -> bool {
+        self.is_math_block() || self == Self::Table
     }
 
     /// 该节点是块级公式（Equation/Align），在结构范围中按原子对象处理。

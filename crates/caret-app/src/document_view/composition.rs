@@ -12,6 +12,8 @@ struct ImeCommitCheckpoint {
     preferred_visual_x_pt: Option<f32>,
     composition_id: Option<u64>,
     next_composition_id: u64,
+    composition_revision: Option<u64>,
+    next_composition_revision: u64,
     preedit_cursor_position_utf16: usize,
     composition_preview_session: Option<caret_engine::SessionCheckpoint>,
     composition_snapshot: Option<caret_engine::DocumentLayoutSnapshot>,
@@ -27,6 +29,8 @@ impl ImeCommitCheckpoint {
             preferred_visual_x_pt: runtime.preferred_visual_x_pt,
             composition_id: runtime.composition_id,
             next_composition_id: runtime.next_composition_id,
+            composition_revision: runtime.composition_revision,
+            next_composition_revision: runtime.next_composition_revision,
             preedit_cursor_position_utf16: runtime.preedit_cursor_position_utf16,
             composition_preview_session: runtime
                 .composition_preview_session
@@ -44,6 +48,8 @@ impl ImeCommitCheckpoint {
         runtime.preferred_visual_x_pt = self.preferred_visual_x_pt;
         runtime.composition_id = self.composition_id;
         runtime.next_composition_id = self.next_composition_id;
+        runtime.composition_revision = self.composition_revision;
+        runtime.next_composition_revision = self.next_composition_revision;
         runtime.preedit_cursor_position_utf16 = self.preedit_cursor_position_utf16;
         runtime.composition_preview_session = self
             .composition_preview_session
@@ -55,7 +61,7 @@ impl ImeCommitCheckpoint {
 }
 
 impl DocumentViewRuntime {
-    /// 一次性安装四个 composition 字段；组合状态只允许以完整形式存在。
+    /// 一次性安装 composition 状态并分配新的预编辑命中代际。
     ///
     /// 预编辑会话、预览快照与组合范围必须与 composition id 同生共死，
     /// 因此安装入口只提供整组写入，不暴露逐字段赋值。
@@ -65,19 +71,26 @@ impl DocumentViewRuntime {
         preview_session: Session,
         snapshot: DocumentLayoutSnapshot,
         range: CompositionRange,
-    ) {
+    ) -> Result<(), String> {
+        let revision = self.next_composition_revision;
+        self.next_composition_revision = revision
+            .checked_add(1)
+            .ok_or_else(|| "ime.composition_revision_exhausted".to_owned())?;
         self.composition_id = Some(id);
+        self.composition_revision = Some(revision);
         self.composition_preview_session = Some(preview_session);
         self.composition_snapshot = Some(snapshot);
         self.composition_range = Some(range);
+        Ok(())
     }
 
-    /// 一次性清空四个 composition 字段；不触发额外信号，也不改动其它布局缓存。
+    /// 一次性清空 composition 状态；不触发额外信号，也不改动其它布局缓存。
     ///
-    /// 清空后各字段与初始状态逐项一致（均为 `None`），调用方负责随后发布
+    /// 清空后当前 composition 字段与初始状态逐项一致（均为 `None`），调用方负责随后发布
     /// 取消快照或增量布局。
     pub(super) fn clear_composition_state(&mut self) {
         self.composition_id = None;
+        self.composition_revision = None;
         self.composition_preview_session = None;
         self.composition_snapshot = None;
         self.composition_range = None;
@@ -410,7 +423,7 @@ impl DocumentViewRuntime {
         self.session
             .install_composition_candidate(candidate)
             .map_err(|error| format!("ime.install_candidate: {error}"))?;
-        self.set_composition_state(id, preview, snapshot, range);
+        self.set_composition_state(id, preview, snapshot, range)?;
         self.preedit_cursor_position_utf16 = cursor_position_utf16;
         #[cfg(test)]
         if FAIL_NEXT_IME_PREVIEW_PUBLISH.with(|fail| fail.replace(false)) {

@@ -34,6 +34,8 @@ Item {
     property var dragRebaseIdentity: null
     property var dragRebasePressPosition: null
     property var dragRebaseCurrentPosition: null
+    property var dragRebaseAnchor: null
+    property string dragStartDomainId: ""
     // 正文拖选直接把焦点变化提交给 Rust 会话，由同一选区投影绘制；公式文本岛仍用片段预览。
     property bool previewOnly: false
 
@@ -158,6 +160,8 @@ Item {
         dragRebaseIdentity = null;
         dragRebasePressPosition = null;
         dragRebaseCurrentPosition = null;
+        dragRebaseAnchor = null;
+        dragStartDomainId = "";
         dragSnapshot = null;
         dragMaps = ({});
         dragAnchor = null;
@@ -174,9 +178,18 @@ Item {
             resetDragPreview();
             return;
         }
+        const anchor = dragRebaseAnchor;
+        const startDomainId = dragStartDomainId;
         resetDragPreview();
         dragSnapshot = currentDragIdentity();
-        updateDragPreview(pressPosition, true);
+        dragStartDomainId = startDomainId;
+        // 预编辑取消可能改变文字位置，已有逻辑锚点时只重新命中活动端。
+        if (anchor !== null) {
+            dragAnchor = anchor;
+            dragAnchorPage = anchor.pageIndex;
+        } else {
+            updateDragPreview(pressPosition, true);
+        }
         updateDragPreview(currentPosition, false);
     }
 
@@ -196,14 +209,19 @@ Item {
 
         let startDomainId = "";
         if (start) {
-            const hit = LayoutViewModel.dragStartDomain(pageHit.pageIndex, pageHit.xPt, pageHit.yPt);
-            if (!hit.valid) {
-                console.warn("Document drag start hit failed:", hit.error);
-                return;
+            if (dragStartDomainId.length > 0) {
+                startDomainId = dragStartDomainId;
+            } else {
+                const hit = LayoutViewModel.dragStartDomain(pageHit.pageIndex, pageHit.xPt, pageHit.yPt);
+                if (!hit.valid) {
+                    console.warn("Document drag hit failed:", hit.error);
+                    return;
+                }
+                startDomainId = hit.domainId;
             }
-            if (hit.domainId === "")
+            if (startDomainId === "")
                 return;
-            startDomainId = hit.domainId;
+            dragStartDomainId = startDomainId;
         } else if (dragAnchor === null) {
             return;
         }
@@ -218,16 +236,36 @@ Item {
         if (pageMap === undefined)
             return;
 
-        const stops = [];
+        let focusCellId = "";
+        let focusCellArea = Number.MAX_VALUE;
+        const cellRegions = pageMap.cellHitRegions || [];
+        for (let index = 0; index < cellRegions.length; ++index) {
+            const region = cellRegions[index];
+            if (pageHit.xPt < region.x0Pt || pageHit.xPt > region.x1Pt || pageHit.yPt < region.y0Pt || pageHit.yPt > region.y1Pt)
+                continue;
+            const area = (region.x1Pt - region.x0Pt) * (region.y1Pt - region.y0Pt);
+            if (area < focusCellArea) {
+                focusCellId = region.cellId;
+                focusCellArea = area;
+            }
+        }
+
+        const domainStops = [];
+        const focusCellStops = [];
         const pageMaps = Object.values(dragMaps);
+        const candidateDomainId = startDomainId.length > 0 ? startDomainId : dragAnchor.domainId;
         for (let mapIndex = 0; mapIndex < pageMaps.length; ++mapIndex) {
             const pageStops = pageMaps[mapIndex].stops || [];
             for (let stopIndex = 0; stopIndex < pageStops.length; ++stopIndex) {
                 const stop = pageStops[stopIndex];
-                if ((startDomainId.length > 0 && stop.domainId === startDomainId) || (startDomainId.length === 0 && dragAnchor !== null && stop.domainId === dragAnchor.domainId))
-                    stops.push(stop);
+                if (stop.domainId !== candidateDomainId)
+                    continue;
+                domainStops.push(stop);
+                if (candidateDomainId === "body" && focusCellId.length > 0 && stop.cellId === focusCellId)
+                    focusCellStops.push(stop);
             }
         }
+        const stops = focusCellStops.length > 0 ? focusCellStops : domainStops;
         if (stops.length === 0)
             return;
         let best = null;
@@ -285,6 +323,7 @@ Item {
             dragRebasePending = true;
             dragRebasePressPosition = selectionDrag.centroid.pressPosition;
             dragRebaseCurrentPosition = selectionDrag.centroid.position;
+            dragRebaseAnchor = result.dragAnchor === undefined ? null : result.dragAnchor;
             dragPreeditCancelInProgress = true;
             canvas.cancelPreedit();
             dragPreeditCancelInProgress = false;

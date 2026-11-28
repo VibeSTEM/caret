@@ -35,6 +35,9 @@ struct GlyphPlacement {
     bool clip_enabled = false;
     qreal clip_y0_pt = 0.0;
     qreal clip_y1_pt = 0.0;
+    bool clip_x_enabled = false;
+    qreal clip_x0_pt = 0.0;
+    qreal clip_x1_pt = 0.0;
 };
 
 /// 下划线等装饰矩形。
@@ -51,6 +54,9 @@ struct GlyphDecoration {
     bool clip_enabled = false;
     qreal clip_y0_pt = 0.0;
     qreal clip_y1_pt = 0.0;
+    bool clip_x_enabled = false;
+    qreal clip_x0_pt = 0.0;
+    qreal clip_x1_pt = 0.0;
 };
 
 /// 线段（kind 0）或矩形（kind 1）绘制项。
@@ -77,6 +83,9 @@ struct GlyphShape {
     bool clip_enabled = false;
     qreal clip_y0_pt = 0.0;
     qreal clip_y1_pt = 0.0;
+    bool clip_x_enabled = false;
+    qreal clip_x0_pt = 0.0;
+    qreal clip_x1_pt = 0.0;
 };
 
 /// 一帧已校验的字形数据；字段与服务端 Rust `PageGlyphFrame` 线格式一一对应。

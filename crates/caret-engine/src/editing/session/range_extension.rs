@@ -7,26 +7,15 @@ use super::super::{
     Affinity, Direction, DocumentRangeEndpoint, EditError, Effect, Pos, Selection, Session,
     StructureSelection,
 };
+use super::block_navigation::{find_block_container_path, find_navigable_sibling};
 use super::document_position::{visual_affinity_for, visual_affinity_for_block_edge};
-use super::math_edit::find_block_path;
-use crate::editing::StoryId;
 use caret_doc::{Block, NodeId};
-use caret_structure::{DocumentNodeKind, block_list_by_environment_ids, find_document_node};
-
-/// 水平逐块导航中紧邻当前文档位置的复杂单元。
-///
-/// 公式对象（Equation/Align）与整棵块环境都按一个文档单元处理；普通段落不在此
-/// 列，遇到段落时继续沿用字素/视觉候选，避免改变纯文本导航。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum AdjacentComplexUnit {
-    Math { block_id: NodeId },
-    Environment { environment_id: NodeId },
-}
+use caret_structure::{DocumentNodeKind, block_list_by_container, find_document_node};
 
 impl Session {
     /// 将结构选区焦点按一个文档单元向指定方向移动。
     ///
-    /// 普通段落内按字素边界移动；跨越块序列时，块环境与 Equation/Align 作为一个
+    /// 普通段落内按字素边界移动；跨越块序列时，复杂块作为一个
     /// 原子对象进入范围。整个调用先完成排序、覆盖与落点校验，再一次性提交状态。
     pub(super) fn extend_structure_selection(
         &mut self,
@@ -58,6 +47,16 @@ impl Session {
             }
             None => DocumentRangeEndpoint::Text(self.selection.anchor.clone()),
         };
+        self.commit_range_between(anchor, focus, visual, extend)
+    }
+
+    pub(super) fn commit_range_between(
+        &mut self,
+        anchor: DocumentRangeEndpoint,
+        focus: DocumentRangeEndpoint,
+        visual: Option<crate::VisualAffinity>,
+        extend: bool,
+    ) -> Result<Effect, EditError> {
         // 跨越 Section 边界时，区域按整棵环境覆盖，几何焦点仍停在候选视觉行。
         let visual_focus = if visual.is_some() && extend {
             Some(self.park_at_range_endpoint(&focus)?)
@@ -66,13 +65,7 @@ impl Session {
         };
         let selection = if visual_focus.is_some() {
             let ancestor_ids = |endpoint: &DocumentRangeEndpoint| {
-                let id = match endpoint {
-                    DocumentRangeEndpoint::InlineMathTree { paragraph_id, .. }
-                    | DocumentRangeEndpoint::InlineMathText { paragraph_id, .. } => paragraph_id,
-                    DocumentRangeEndpoint::Text(position) => &position.paragraph_id,
-                    DocumentRangeEndpoint::BlockEdge { block_id, .. } => block_id,
-                };
-                find_document_node(&self.document, id)
+                find_document_node(&self.document, endpoint.block_container_node_id())
                     .map(|location| location.parent_environment_ids)
                     .ok_or(EditError::InvalidPosition)
             };
@@ -131,11 +124,11 @@ impl Session {
         });
         let previous_selection = self.structure_selection.clone();
         let previous_environments = self.selected_block_environments.clone();
-        let previous_math_blocks = self.selected_math_blocks.clone();
+        let previous_math_blocks = self.selected_atomic_blocks.clone();
         self.install_structure_selection(selection)?;
         let changed = self.structure_selection != previous_selection
             || self.selected_block_environments != previous_environments
-            || self.selected_math_blocks != previous_math_blocks;
+            || self.selected_atomic_blocks != previous_math_blocks;
         self.selection = Selection {
             anchor: caret.clone(),
             focus: caret,
@@ -179,6 +172,9 @@ impl Session {
                         .text_endpoint_clamped(&selection.anchor)
                         .unwrap_or_else(|| focus.clone()),
                 };
+                if anchor.story != focus.story {
+                    return Ok(Effect::default());
+                }
                 self.selection = Selection {
                     anchor,
                     focus: focus.clone(),
@@ -302,22 +298,15 @@ impl Session {
                 Direction::Forward => Ok(Some(block_edge(environment_id, Direction::Forward))),
             };
         }
-        if position.story != StoryId::Body {
-            // 单元格内 Shift+方向键暂不跨 cell 扩展；保持原选区而不是报错。
-            return Ok(None);
-        }
-        let (parent_environment_ids, sibling_index) =
-            find_block_path(&self.document.body, &position.paragraph_id)
+        let (container, sibling_index) =
+            find_block_container_path(&self.document.body, &position.paragraph_id)
                 .ok_or(EditError::InvalidPosition)?;
-        let siblings = block_list_by_environment_ids(&self.document.body, &parent_environment_ids)
+        let parent = container.title_environment_id();
+        let siblings = block_list_by_container(&self.document.body, &container)
             .ok_or(EditError::InvalidPosition)?;
         match direction {
-            Direction::Forward => {
-                self.unit_start_after(siblings, &parent_environment_ids, sibling_index)
-            }
-            Direction::Backward => {
-                self.unit_end_before(siblings, &parent_environment_ids, sibling_index)
-            }
+            Direction::Forward => self.unit_start_after(siblings, parent, sibling_index),
+            Direction::Backward => self.unit_end_before(siblings, parent, sibling_index),
         }
     }
 
@@ -360,9 +349,9 @@ impl Session {
         if !location.kind.is_range_block() {
             return Err(EditError::InvalidPosition);
         }
-        let (parent_environment_ids, sibling_index) =
-            find_block_path(&self.document.body, block_id).ok_or(EditError::InvalidPosition)?;
-        let siblings = block_list_by_environment_ids(&self.document.body, &parent_environment_ids)
+        let sibling_index = location.sibling_index.ok_or(EditError::InvalidPosition)?;
+        let parent = location.container.title_environment_id();
+        let siblings = block_list_by_container(&self.document.body, &location.container)
             .ok_or(EditError::InvalidPosition)?;
         match (side, direction) {
             // 从节点外前向外后移动时整块进入范围，不展开内部子块。
@@ -373,10 +362,10 @@ impl Session {
                 Ok(Some(block_edge(block_id.clone(), Direction::Backward)))
             }
             (Direction::Forward, Direction::Forward) => {
-                self.unit_start_after(siblings, &parent_environment_ids, sibling_index)
+                self.unit_start_after(siblings, parent, sibling_index)
             }
             (Direction::Backward, Direction::Backward) => {
-                self.unit_end_before(siblings, &parent_environment_ids, sibling_index)
+                self.unit_end_before(siblings, parent, sibling_index)
             }
         }
     }
@@ -385,19 +374,16 @@ impl Session {
     fn unit_start_after(
         &self,
         siblings: &[Block],
-        parent_environment_ids: &[NodeId],
+        parent: Option<&NodeId>,
         sibling_index: usize,
     ) -> Result<Option<DocumentRangeEndpoint>, EditError> {
-        let mut cursor = sibling_index + 1;
-        while let Some(block) = siblings.get(cursor) {
-            if matches!(block, Block::ExplicitBreak(_) | Block::Opaque(_)) {
-                cursor += 1;
-                continue;
-            }
+        let block =
+            find_navigable_sibling(siblings, sibling_index + 1, Direction::Forward, |_| true)
+                .map(|(_, block)| block);
+        if let Some(block) = block {
             return Ok(self.block_unit_start(block));
         }
-        Ok(parent_environment_ids
-            .last()
+        Ok(parent
             .cloned()
             .map(|environment_id| block_edge(environment_id, Direction::Forward)))
     }
@@ -406,20 +392,15 @@ impl Session {
     fn unit_end_before(
         &self,
         siblings: &[Block],
-        parent_environment_ids: &[NodeId],
+        parent: Option<&NodeId>,
         sibling_index: usize,
     ) -> Result<Option<DocumentRangeEndpoint>, EditError> {
-        let mut cursor = sibling_index.checked_sub(1);
-        while let Some(index) = cursor {
-            let block = siblings.get(index).ok_or(EditError::InvalidPosition)?;
-            if matches!(block, Block::ExplicitBreak(_) | Block::Opaque(_)) {
-                cursor = index.checked_sub(1);
-                continue;
-            }
+        if let Some((_, block)) = sibling_index.checked_sub(1).and_then(|index| {
+            find_navigable_sibling(siblings, index, Direction::Backward, |_| true)
+        }) {
             return Ok(self.block_unit_end(block));
         }
-        Ok(parent_environment_ids
-            .last()
+        Ok(parent
             .cloned()
             .map(|environment_id| block_edge(environment_id, Direction::Backward)))
     }
@@ -440,147 +421,6 @@ impl Session {
             Block::Paragraph(_) => end,
             _ => start,
         })
-    }
-
-    /// 判断段落同方向紧邻的块是否是 Equation/Align。
-    pub(super) fn paragraph_beside_block_math(
-        &self,
-        position: &Pos,
-        direction: Direction,
-    ) -> Result<bool, EditError> {
-        if position.story != StoryId::Body {
-            return Ok(false);
-        }
-        let Some((parent_environment_ids, sibling_index)) =
-            find_block_path(&self.document.body, &position.paragraph_id)
-        else {
-            return Ok(false);
-        };
-        let siblings = block_list_by_environment_ids(&self.document.body, &parent_environment_ids)
-            .ok_or(EditError::InvalidPosition)?;
-        let neighbour = match direction {
-            Direction::Forward => sibling_index.checked_add(1),
-            Direction::Backward => sibling_index.checked_sub(1),
-        };
-        Ok(matches!(
-            neighbour.and_then(|index| siblings.get(index)),
-            Some(Block::Equation(_) | Block::Align(_))
-        ))
-    }
-
-    /// 返回当前文档位置在方向上紧邻的复杂块单元，允许跨出所在块环境。
-    ///
-    /// 与只检查同级兄弟的 `paragraph_beside_block_math` 不同，这里按文档顺序向上
-    /// 越过块环境边界：环境内部最后一个段落向右的下一单元是环境之后的块，环境
-    /// 标题向左的下一单元是环境之前的块。这样环境外侧停靠/BlockEdge 焦点无需先
-    /// 落回相邻文本段落也能识别紧邻公式。
-    pub(super) fn adjacent_complex_unit(
-        &self,
-        position: &Pos,
-        direction: Direction,
-    ) -> Result<Option<AdjacentComplexUnit>, EditError> {
-        let Some(location) = self.paragraph_index.get(&position.paragraph_id) else {
-            return Ok(None);
-        };
-        let (mut parent_ids, mut index) = if location.is_title {
-            let Some(environment_id) = self
-                .structure_index
-                .title_environment_id(&position.paragraph_id)
-                .cloned()
-            else {
-                return Ok(None);
-            };
-            let Some((outer_parent_ids, environment_index)) =
-                find_block_path(&self.document.body, &environment_id)
-            else {
-                return Ok(None);
-            };
-            match direction {
-                Direction::Forward => {
-                    let siblings =
-                        block_list_by_environment_ids(&self.document.body, &outer_parent_ids)
-                            .ok_or(EditError::InvalidPosition)?;
-                    let Some(Block::Environment(environment)) = siblings.get(environment_index)
-                    else {
-                        return Ok(None);
-                    };
-                    return Ok(classify_adjacent_block(first_navigable_block(
-                        &environment.children,
-                        Direction::Forward,
-                    )));
-                }
-                Direction::Backward => (outer_parent_ids, environment_index),
-            }
-        } else {
-            let Some(path) = find_block_path(&self.document.body, &position.paragraph_id) else {
-                return Ok(None);
-            };
-            path
-        };
-        loop {
-            let siblings = block_list_by_environment_ids(&self.document.body, &parent_ids)
-                .ok_or(EditError::InvalidPosition)?;
-            match direction {
-                Direction::Forward => {
-                    let mut cursor = index + 1;
-                    while let Some(block) = siblings.get(cursor) {
-                        if !matches!(block, Block::ExplicitBreak(_) | Block::Opaque(_)) {
-                            return Ok(classify_adjacent_block(Some(block)));
-                        }
-                        cursor += 1;
-                    }
-                }
-                Direction::Backward => {
-                    let mut cursor = index;
-                    while let Some(candidate) = cursor.checked_sub(1) {
-                        cursor = candidate;
-                        let block = siblings.get(candidate).ok_or(EditError::InvalidPosition)?;
-                        if !matches!(block, Block::ExplicitBreak(_) | Block::Opaque(_)) {
-                            return Ok(classify_adjacent_block(Some(block)));
-                        }
-                    }
-                }
-            }
-            // 同级块序列到头：越过父环境外后/外前继续查找。
-            let Some(environment_id) = parent_ids.last().cloned() else {
-                return Ok(None);
-            };
-            let Some((outer_parent_ids, environment_index)) =
-                find_block_path(&self.document.body, &environment_id)
-            else {
-                return Ok(None);
-            };
-            parent_ids = outer_parent_ids;
-            index = environment_index;
-        }
-    }
-}
-
-/// 取块序列方向上第一个可导航块；跳过不产生身份的显式换行与不透明块。
-fn first_navigable_block(blocks: &[Block], direction: Direction) -> Option<&Block> {
-    let mut blocks = blocks.iter();
-    match direction {
-        Direction::Forward => {
-            blocks.find(|block| !matches!(block, Block::ExplicitBreak(_) | Block::Opaque(_)))
-        }
-        Direction::Backward => blocks
-            .rev()
-            .find(|block| !matches!(block, Block::ExplicitBreak(_) | Block::Opaque(_))),
-    }
-}
-
-fn classify_adjacent_block(block: Option<&Block>) -> Option<AdjacentComplexUnit> {
-    match block {
-        Some(Block::Equation(equation)) => Some(AdjacentComplexUnit::Math {
-            block_id: equation.id.clone(),
-        }),
-        Some(Block::Align(align)) => Some(AdjacentComplexUnit::Math {
-            block_id: align.id.clone(),
-        }),
-        Some(Block::Environment(environment)) => Some(AdjacentComplexUnit::Environment {
-            environment_id: environment.id.clone(),
-        }),
-        _ => None,
     }
 }
 

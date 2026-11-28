@@ -14,6 +14,22 @@
 
 namespace caret {
 
+bool DocumentCanvas::event(QEvent* event) {
+    if (event->type() == QEvent::ShortcutOverride && m_preedit_text.isEmpty()) {
+        auto* key_event = static_cast<QKeyEvent*>(event);
+        const Qt::KeyboardModifiers modifiers = key_event->modifiers() & ~Qt::KeypadModifier;
+        const int key = key_event->key();
+        if (keyboard::isTableShapeInsert(modifiers, key) ||
+            keyboard::isDeleteTableRow(modifiers, key) ||
+            keyboard::isDeleteTableColumn(modifiers, key)) {
+            // 表格编辑组合键交给焦点画布处理，避免窗口级快捷键抢占。
+            key_event->accept();
+            return true;
+        }
+    }
+    return QQuickItem::event(event);
+}
+
 void DocumentCanvas::keyPressEvent(QKeyEvent* event) {
     const Qt::KeyboardModifiers modifiers = event->modifiers();
     const Qt::KeyboardModifiers semantic_modifiers = modifiers & ~Qt::KeypadModifier;

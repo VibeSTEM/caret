@@ -21,6 +21,9 @@ const ENVELOPE_SCHEMA: u32 = 1;
 const RETENTION: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
+mod coordinator;
+pub use coordinator::*;
+
 /// 恢复副本负载种类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

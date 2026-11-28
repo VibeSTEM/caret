@@ -10,7 +10,7 @@ use super::super::{
     MathCaretCoordinate, MathCaretLocalPosition, MathEditTarget, MathTextPosition,
     MathTreePosition, Pos, Session, TextMap,
 };
-use crate::editing::paragraph_ops::compare_positions;
+use crate::editing::paragraph_ops::compare_document_positions;
 use crate::editing::position::compare_affinity;
 use caret_doc::NodeId;
 use caret_structure::{
@@ -292,7 +292,7 @@ impl Session {
                 {
                     return Err(EditError::InvalidPosition);
                 }
-                compare_positions(&self.document.body, &self.paragraph_index, left, right)
+                compare_document_positions(&self.document.body, &self.paragraph_index, left, right)
             }
             _ => Err(EditError::InvalidPosition),
         }
@@ -472,7 +472,7 @@ impl Session {
     ) -> Result<Ordering, EditError> {
         match (left, right) {
             (HostCaretLocalPosition::Paragraph(left), HostCaretLocalPosition::Paragraph(right)) => {
-                compare_positions(&self.document.body, &self.paragraph_index, left, right)
+                compare_document_positions(&self.document.body, &self.paragraph_index, left, right)
             }
             (HostCaretLocalPosition::Math(left), HostCaretLocalPosition::Math(right)) => {
                 if !matches!(&left.target, MathEditTarget::Block { align: true, .. }) {
@@ -546,14 +546,16 @@ impl Session {
                                 && location.paragraph_id.as_ref() == Some(&position.paragraph_id)
                         }
                         HostCaretKind::Block => {
-                            location.kind == DocumentNodeKind::Environment
-                                && find_document_node(&self.document, &position.paragraph_id)
-                                    .is_some_and(|paragraph_location| {
-                                        paragraph_location
-                                            .parent_environment_ids
-                                            .iter()
-                                            .any(|ancestor_id| ancestor_id == host_id)
-                                    })
+                            (location.kind == DocumentNodeKind::Table
+                                && matches!(&position.story, crate::StoryId::TableCell { table_id, .. } if table_id == host_id))
+                                || (location.kind == DocumentNodeKind::Environment
+                                    && find_document_node(&self.document, &position.paragraph_id)
+                                        .is_some_and(|paragraph_location| {
+                                            paragraph_location
+                                                .parent_environment_ids
+                                                .iter()
+                                                .any(|ancestor_id| ancestor_id == host_id)
+                                        }))
                         }
                     };
                     if !valid_paragraph_host {

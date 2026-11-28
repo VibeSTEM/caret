@@ -5,20 +5,23 @@
 
 use super::super::text_map::TextMap;
 use super::super::{
-    Affinity, Command, Direction, EditError, Effect, HostCaretPosition, Pos, PositionMap,
-    Selection, StoryId,
+    Affinity, Command, Direction, DocumentRangeEndpoint, EditError, Effect, HostCaretPosition, Pos,
+    PositionMap, Selection, StoryId,
 };
 use super::Session;
 use super::history::{self, DocumentEditSnapshot, DocumentPatch, SessionHistoryState};
 use crate::editing::paragraph_ops::BlockContainerPath;
 use crate::editing::paragraph_ops::{
-    compare_positions, paragraph_at_location, paragraph_parent_path,
+    block_list_in_container, compare_positions, paragraph_at_location,
+    paragraph_parent_container_path, paragraph_parent_path,
 };
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, NodeId, Paragraph, Run, SoftBreak, TextFlow,
 };
 use caret_layout::VisualAffinity;
-use caret_structure::{StructureIndex, StructureKind, StructurePosition};
+use caret_structure::{
+    ContainerStep, StructureIndex, StructureKind, StructurePosition, find_document_node,
+};
 use std::{collections::BTreeMap, sync::Arc};
 
 #[path = "structure/environment_mutations.rs"]
@@ -27,13 +30,31 @@ mod environment_mutations;
 #[path = "structure/selection.rs"]
 mod selection;
 
-struct StructureEditBeforeState {
+pub(super) struct StructureEditBeforeState {
     inline_range: Option<Box<super::StructureSelection>>,
     selection: Selection,
     anchor_visual_affinity: VisualAffinity,
     visual_affinity: VisualAffinity,
     state_id: u64,
     host_caret_position: Option<HostCaretPosition<Pos>>,
+}
+
+fn block_range(block_id: NodeId, forward: bool) -> (DocumentRangeEndpoint, DocumentRangeEndpoint) {
+    let (anchor_side, focus_side) = if forward {
+        (Direction::Backward, Direction::Forward)
+    } else {
+        (Direction::Forward, Direction::Backward)
+    };
+    (
+        DocumentRangeEndpoint::BlockEdge {
+            block_id: block_id.clone(),
+            side: anchor_side,
+        },
+        DocumentRangeEndpoint::BlockEdge {
+            block_id,
+            side: focus_side,
+        },
+    )
 }
 
 impl Session {
@@ -61,7 +82,24 @@ impl Session {
         );
     }
 
-    fn finalize_structure_edit_with_boundary(
+    /// 记录结构编辑前的选区和宿主停靠，供历史准确恢复。
+    pub(super) fn capture_structure_edit_before_state(&self) -> StructureEditBeforeState {
+        StructureEditBeforeState {
+            inline_range: self
+                .structure_selection
+                .as_ref()
+                .filter(|range| range.anchor.is_inline_math() || range.focus.is_inline_math())
+                .cloned()
+                .map(Box::new),
+            selection: self.selection.clone(),
+            anchor_visual_affinity: self.selection_anchor_visual_affinity,
+            visual_affinity: self.selection_visual_affinity,
+            state_id: self.history_state_id,
+            host_caret_position: self.host_caret_position.clone(),
+        }
+    }
+
+    pub(super) fn finalize_structure_edit_with_boundary(
         &mut self,
         updated_paragraph_index: super::super::paragraph_ops::ParagraphIndex,
         patch: DocumentPatch,
@@ -386,7 +424,7 @@ impl Session {
             return Ok(Effect::default());
         };
         let Some((container, block_index)) =
-            super::math_edit::find_block_container_path(&self.document.body, &block_id)
+            super::block_navigation::find_block_container_path(&self.document.body, &block_id)
         else {
             return Err(EditError::InvalidPosition);
         };
@@ -481,6 +519,16 @@ impl Session {
         {
             return Ok(effect);
         }
+        if let Command::MoveStructure(direction) = &command
+            && self.block_boundary_exit().is_some_and(|(id, _)| {
+                self.structure_index
+                    .get(&id)
+                    .is_some_and(|entry| entry.kind == StructureKind::Table)
+            })
+            && let Some(effect) = self.move_from_block_boundary_stop(*direction)?
+        {
+            return Ok(effect);
+        }
         if matches!(&command, Command::ExitStructure)
             && self.selection.anchor != self.selection.focus
         {
@@ -533,103 +581,15 @@ impl Session {
                 Direction::Backward => environment.range.paragraph_ordinals.start == ordinal,
             };
             if at_boundary {
-                if let Some(adjacent_id) = self.structure_index.adjacent_paragraph(
-                    &self.selection.focus.paragraph_id,
-                    *direction == Direction::Forward,
-                ) {
-                    let is_repeating_exit =
-                        self.host_caret_position.as_ref().is_some_and(|position| {
-                            position.kind() == super::super::HostCaretKind::Block
-                                && position.as_outside().is_some_and(
-                                    |(active_id, active_direction)| {
-                                        active_id == &environment.id
-                                            && active_direction == *direction
-                                    },
-                                )
-                        });
-                    if is_repeating_exit {
-                        let story = self
-                            .structure_index
-                            .title_environment_id(adjacent_id)
-                            .cloned()
-                            .map_or(StoryId::Body, StoryId::EnvironmentTitle);
-                        let mut next = Pos {
-                            story,
-                            paragraph_id: adjacent_id.clone(),
-                            offset: 0,
-                            affinity: Affinity::Downstream,
-                        };
-                        if *direction == Direction::Backward {
-                            next.offset = self.text_map_for(&next)?.text.len();
-                            next.affinity = Affinity::Upstream;
-                        }
-                        self.selection = Selection {
-                            anchor: next.clone(),
-                            focus: next,
-                        };
-                        self.selection_visual_affinity = match self.selection.focus.affinity {
-                            Affinity::Upstream => VisualAffinity::Upstream,
-                            Affinity::Downstream => VisualAffinity::Downstream,
-                        };
-                        self.clear_host_caret_position();
-                        return Ok(Effect {
-                            selection_changed: true,
-                            ..Effect::default()
-                        });
-                    }
-                }
-                if let Some(position) = self.host_caret_position.clone()
-                    && position.kind() == super::super::HostCaretKind::Block
-                    && let Some(active_environment_id) =
-                        position.as_outside().map(|(id, _)| id.clone())
-                    && active_environment_id == environment.id
+                let environment_id = environment.id.clone();
+                if self
+                    .block_boundary_exit()
+                    .is_some_and(|(id, _)| id == environment_id)
+                    && let Some(effect) = self.move_from_block_boundary_stop(*direction)?
                 {
-                    let transition = position.horizontal_transition(
-                        *direction == Direction::Forward,
-                        true,
-                        true,
-                    );
-                    match transition {
-                        super::super::HostCaretTransition::MoveOutside => {
-                            return Ok(Effect::default());
-                        }
-                        super::super::HostCaretTransition::EnterStart
-                        | super::super::HostCaretTransition::EnterEnd => {
-                            self.clear_host_caret_position();
-                            self.selection.focus.affinity = match direction {
-                                Direction::Forward => Affinity::Downstream,
-                                Direction::Backward => Affinity::Upstream,
-                            };
-                            self.selection.anchor = self.selection.focus.clone();
-                            self.selection_visual_affinity = match self.selection.focus.affinity {
-                                Affinity::Upstream => VisualAffinity::Upstream,
-                                Affinity::Downstream => VisualAffinity::Downstream,
-                            };
-                            return Ok(Effect {
-                                selection_changed: true,
-                                ..Effect::default()
-                            });
-                        }
-                        _ => return Ok(Effect::default()),
-                    }
+                    return Ok(effect);
                 }
-                self.set_host_caret_position(Some(HostCaretPosition::outside(
-                    environment.id.clone(),
-                    *direction,
-                )));
-                self.selection.focus.affinity = match direction {
-                    Direction::Backward => Affinity::Upstream,
-                    Direction::Forward => Affinity::Downstream,
-                };
-                self.selection.anchor = self.selection.focus.clone();
-                self.selection_visual_affinity = match self.selection.focus.affinity {
-                    Affinity::Upstream => VisualAffinity::Upstream,
-                    Affinity::Downstream => VisualAffinity::Downstream,
-                };
-                return Ok(Effect {
-                    selection_changed: true,
-                    ..Effect::default()
-                });
+                return Ok(self.park_at_block_environment_edge(environment_id, *direction));
             }
             return Ok(Effect::default());
         }
@@ -671,7 +631,7 @@ impl Session {
                 Command::MoveStructure(direction) => *direction,
                 _ => Direction::Forward,
             };
-            if self.enter_adjacent_table(direction)? {
+            if self.park_beside_adjacent_atomic_block(direction, false)? {
                 return Ok(Effect {
                     selection_changed: true,
                     ..Effect::default()
@@ -715,6 +675,97 @@ impl Session {
             selection_changed: true,
             ..Effect::default()
         })
+    }
+
+    /// 垂直布局候选已到单元格外时，按环境的首末段落边界停靠，不要求字节光标位于行首尾。
+    pub(super) fn exit_block_environment_at_vertical_edge(
+        &mut self,
+        direction: Direction,
+    ) -> Result<Option<Effect>, EditError> {
+        if self.selection.anchor != self.selection.focus {
+            return Ok(None);
+        }
+        let focus = self.selection.focus.clone();
+        let ordinal = self
+            .structure_index
+            .paragraph_ordinal(&focus.paragraph_id)
+            .ok_or(EditError::InvalidPosition)?;
+        let environment = self
+            .structure_index
+            .at(&StructurePosition {
+                paragraph_id: focus.paragraph_id.clone(),
+                offset_utf8: focus.offset,
+            })
+            .into_iter()
+            .rfind(|entry| entry.kind.is_block_environment());
+        let Some(environment) = environment else {
+            return Ok(None);
+        };
+        let at_boundary = match direction {
+            Direction::Forward => environment.range.paragraph_ordinals.end == ordinal + 1,
+            Direction::Backward => environment.range.paragraph_ordinals.start == ordinal,
+        };
+        let is_title = self
+            .paragraph_index
+            .get(&focus.paragraph_id)
+            .is_some_and(|location| location.is_title);
+        if !at_boundary
+            || (direction == Direction::Backward
+                && !is_title
+                && self.block_environment_title(&environment.id).is_some())
+            || self.has_adjacent_navigable_block(&focus.paragraph_id, direction)?
+        {
+            return Ok(None);
+        }
+        Ok(Some(self.park_at_block_environment_edge(
+            environment.id.clone(),
+            direction,
+        )))
+    }
+
+    fn has_adjacent_navigable_block(
+        &self,
+        paragraph_id: &NodeId,
+        direction: Direction,
+    ) -> Result<bool, EditError> {
+        let location = self
+            .paragraph_index
+            .get(paragraph_id)
+            .ok_or(EditError::InvalidPosition)?;
+        let Some((container, index)) =
+            paragraph_parent_container_path(&self.document.body, location)
+        else {
+            return Ok(false);
+        };
+        let blocks = block_list_in_container(&self.document.body, &container)
+            .ok_or(EditError::InvalidPosition)?;
+        let neighbour = match direction {
+            Direction::Backward => index.checked_sub(1),
+            Direction::Forward => index.checked_add(1),
+        };
+        Ok(neighbour
+            .is_some_and(|start| self.find_caret_sibling(blocks, start, direction).is_some()))
+    }
+
+    fn park_at_block_environment_edge(
+        &mut self,
+        environment_id: NodeId,
+        direction: Direction,
+    ) -> Effect {
+        self.set_host_caret_position(Some(HostCaretPosition::outside(environment_id, direction)));
+        self.selection.focus.affinity = match direction {
+            Direction::Backward => Affinity::Upstream,
+            Direction::Forward => Affinity::Downstream,
+        };
+        self.selection.anchor = self.selection.focus.clone();
+        self.selection_visual_affinity = match self.selection.focus.affinity {
+            Affinity::Upstream => VisualAffinity::Upstream,
+            Affinity::Downstream => VisualAffinity::Downstream,
+        };
+        Effect {
+            selection_changed: true,
+            ..Effect::default()
+        }
     }
 
     /// 末尾容器没有外部段落时，在容器后创建一个可继续编辑的正文段落。
@@ -806,8 +857,11 @@ impl Session {
         })
     }
 
-    /// 将选区逐级扩展到当前段落、标题范围或外层块环境。
+    /// 将选区逐级扩展到包含当前范围的段落、标题范围或块宿主。
     fn expand_structure_selection(&mut self) -> Result<Effect, EditError> {
+        if let Some(selection) = self.structure_selection.as_ref() {
+            return self.expand_existing_structure_selection(selection.focus.clone());
+        }
         let focus = self.selection.focus.clone();
         let stack = self.structure_index.at(&StructurePosition {
             paragraph_id: focus.paragraph_id.clone(),
@@ -833,17 +887,17 @@ impl Session {
                 .map(|entry| entry.range.paragraph_ordinals.clone()),
         );
 
-        let (current_start, current_end) = if compare_positions(
+        let forward = !compare_positions(
             &self.document.body,
             &self.paragraph_index,
             &self.selection.anchor,
             &self.selection.focus,
         )?
-        .is_gt()
-        {
-            (&self.selection.focus, &self.selection.anchor)
-        } else {
+        .is_gt();
+        let (current_start, current_end) = if forward {
             (&self.selection.anchor, &self.selection.focus)
+        } else {
+            (&self.selection.focus, &self.selection.anchor)
         };
 
         for range in ranges {
@@ -876,13 +930,6 @@ impl Session {
                 continue;
             }
 
-            let forward = !compare_positions(
-                &self.document.body,
-                &self.paragraph_index,
-                &self.selection.anchor,
-                &self.selection.focus,
-            )?
-            .is_gt();
             self.selection = if forward {
                 Selection {
                     anchor: start,
@@ -904,6 +951,44 @@ impl Session {
                 selection_changed: true,
                 ..Effect::default()
             });
+        }
+        if let Some(cell) = self.focused_table_cell() {
+            let (anchor, focus) = block_range(cell.table_id, forward);
+            return self.commit_range_between(anchor, focus, None, true);
+        }
+        Ok(Effect::default())
+    }
+
+    fn expand_existing_structure_selection(
+        &mut self,
+        focus: DocumentRangeEndpoint,
+    ) -> Result<Effect, EditError> {
+        let (start, end) = self.ordered_structure_selection()?;
+        let forward = &focus == end;
+        // 焦点借用的段落可能在选区之外，父链须从实际端点所在的块容器解析。
+        let location = find_document_node(&self.document, focus.block_container_node_id())
+            .ok_or(EditError::InvalidPosition)?;
+        let mut container = location.container;
+        while let Some(step) = container.last_step() {
+            let block_id = match step {
+                ContainerStep::Environment(id) => id,
+                ContainerStep::TableCell(cell) => &cell.table_id,
+            };
+            let (before, after) = block_range(block_id.clone(), true);
+            let start_order = self.compare_range_endpoints(&before, start)?;
+            let end_order = self.compare_range_endpoints(&after, end)?;
+            if start_order.is_le()
+                && end_order.is_ge()
+                && (start_order.is_lt() || end_order.is_gt())
+            {
+                let (anchor, focus) = if forward {
+                    (before, after)
+                } else {
+                    (after, before)
+                };
+                return self.commit_range_between(anchor, focus, None, true);
+            }
+            container.pop();
         }
         Ok(Effect::default())
     }
@@ -994,13 +1079,8 @@ pub(super) fn environment_has_content_at(
     blocks: &[Block],
     environment_id: &NodeId,
 ) -> Result<bool, EditError> {
-    let (parent_ids, sibling_index) = super::math_edit::find_block_path(blocks, environment_id)
+    let block = super::block_navigation::find_block_by_id(blocks, environment_id)
         .ok_or(EditError::InvalidPosition)?;
-    let siblings =
-        block_list_by_parent_ids(blocks, &parent_ids).ok_or(EditError::InvalidPosition)?;
-    let Some(block) = siblings.get(sibling_index) else {
-        return Err(EditError::InvalidPosition);
-    };
     match block {
         Block::Environment(environment) => environment_has_content(environment),
         _ => Ok(true),

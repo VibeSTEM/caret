@@ -149,6 +149,8 @@ impl ParleyParagraphLayout {
             return None;
         }
         let target_line = line_index.checked_add_signed(line_delta)?;
+        // 空段落的定行命中总有插入点，纵向移动仍须确认目标行存在。
+        self.paragraph.lines.get(target_line)?;
         let hit = self.cursor_from_point_on_line(x, target_line)?;
         Some((hit.cursor, x))
     }

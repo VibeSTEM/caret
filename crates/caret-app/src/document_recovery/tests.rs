@@ -1,6 +1,10 @@
 //! 恢复 envelope 往返、非法路径与过期清理测试。
 
-use super::{DocumentRecoveryStorage, RecoveryKind};
+use super::{
+    CheckedRecoverySave, DocumentRecoveryCoordinator, DocumentRecoveryStorage, RecoveryKind,
+    RecoverySnapshotIdentity,
+};
+use crate::document_lifecycle::DocumentLifecycleService;
 use crate::document_session::DocumentSessionService;
 use core::mem::DropGuard;
 use std::fs;
@@ -469,5 +473,184 @@ fn expiry_cleanup_skips_entries_while_any_process_holds_the_recovery_lease()
 
     assert_eq!(storage.purge_expired(u64::MAX)?, 1);
     assert!(!envelope_path.exists());
+    Ok(())
+}
+
+#[test]
+fn recovery_coordinator_serializes_binding_revision_and_rejects_expired_updates()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (root, _cleanup) = recovery_fixture()?;
+    let storage = DocumentRecoveryStorage::new(root.join("recovery"));
+    let path = PathBuf::from("/documents/draft.cdoc");
+    let id = storage.store(RecoveryKind::LocalDocument, &path, None, b"first")?;
+    let coordinator = DocumentRecoveryCoordinator;
+    let gate = coordinator.gate(&id, 0)?;
+
+    let update = coordinator.update_snapshot(
+        &storage,
+        &gate,
+        &id,
+        RecoverySnapshotIdentity::new(&path, None, 0, 1),
+        false,
+        b"current",
+    );
+    assert!(update.error.is_empty());
+    assert!(!update.superseded);
+    let (_, payload) = storage.load(&id)?;
+    assert_eq!(payload, b"current");
+
+    coordinator.mark_rebind_pending(&gate, 3);
+    let stale = coordinator.update_snapshot(
+        &storage,
+        &gate,
+        &id,
+        RecoverySnapshotIdentity::new(&path, None, 0, 2),
+        true,
+        b"stale",
+    );
+    assert!(stale.superseded);
+    assert_eq!(stale.error, "document.stale_recovery_completion");
+    let (_, payload) = storage.load(&id)?;
+    assert_eq!(payload, b"current");
+    assert!(gate.is_rebind_pending());
+    assert_eq!(gate.target_revision(), 3);
+    Ok(())
+}
+
+#[test]
+fn recovery_completion_rejects_replaced_session_and_accepts_failed_rebind()
+-> Result<(), Box<dyn std::error::Error>> {
+    let coordinator = DocumentRecoveryCoordinator;
+    let mut session = DocumentSessionService::new_blank()?;
+    let session_generation = session.session_generation();
+    assert!(session.set_recovery_id(
+        session_generation,
+        "completion-test".to_owned(),
+        "/documents/draft.cdoc".to_owned(),
+        None,
+    ));
+    let gate = coordinator.gate("completion-test", 0)?;
+    let mut lifecycle = DocumentLifecycleService::new(session_generation);
+    lifecycle.set_recovery_enabled(true);
+    coordinator.mark_rebind_pending(&gate, 5);
+    let mut runtime_binding_generation = 0;
+
+    assert_eq!(
+        coordinator.update_finished(
+            &session,
+            &mut lifecycle,
+            &gate,
+            &mut runtime_binding_generation,
+            session_generation.saturating_add(1),
+            4,
+            "completion-test",
+            0,
+            0,
+            false,
+            Duration::from_secs(1),
+        ),
+        Err("document.stale_recovery_completion")
+    );
+    assert_eq!(runtime_binding_generation, 0);
+    assert!(gate.is_rebind_pending());
+    assert!(
+        coordinator
+            .update_finished(
+                &session,
+                &mut lifecycle,
+                &gate,
+                &mut runtime_binding_generation,
+                session_generation,
+                5,
+                "completion-test",
+                0,
+                0,
+                false,
+                Duration::from_secs(2),
+            )
+            .is_ok()
+    );
+    assert_eq!(runtime_binding_generation, 0);
+    assert!(gate.is_rebind_pending());
+    Ok(())
+}
+
+#[test]
+fn checked_conflict_save_creates_then_reuses_the_session_recovery_item()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (root, _cleanup) = recovery_fixture()?;
+    let target = root.join("draft.cdoc");
+    fs::write(&target, b"local baseline")?;
+    let baseline = crate::document_session::content_digest(b"local baseline");
+    fs::write(&target, b"external edit")?;
+    let document_storage = crate::document_storage::DocumentStorage;
+    let recovery_storage = DocumentRecoveryStorage::new(root.join("recovery"));
+    let coordinator = DocumentRecoveryCoordinator;
+
+    let first = coordinator.save_checked(
+        &document_storage,
+        Some(&recovery_storage),
+        CheckedRecoverySave {
+            target: &target,
+            bytes: b"first local snapshot",
+            baseline_digest: &baseline,
+            queued_digest: None,
+            recovery_id: None,
+            binding_generation: 0,
+            document_revision: 0,
+        },
+    );
+    assert!(first.conflict);
+    assert!(first.replace_allowed);
+    assert!(first.recovery_created);
+    assert!(first.error.is_none());
+    let id = first.recovery_id.ok_or("missing recovery id")?;
+
+    let mut session = DocumentSessionService::new_blank()?;
+    let session_generation = session.session_generation();
+    let mut lifecycle = DocumentLifecycleService::new(session_generation);
+    let mut lease = None;
+    let mut binding_generation = 0;
+    let mut gate = None;
+    coordinator.bind_session(
+        &recovery_storage,
+        &mut session,
+        &mut lifecycle,
+        &mut lease,
+        &mut binding_generation,
+        &mut gate,
+        session_generation,
+        0,
+        0,
+        id.clone(),
+        &target,
+        Some(baseline.clone()),
+        Duration::ZERO,
+    )?;
+    assert!(lease.is_some());
+    assert!(gate.is_some());
+
+    let second = coordinator.save_checked(
+        &document_storage,
+        Some(&recovery_storage),
+        CheckedRecoverySave {
+            target: &target,
+            bytes: b"newer local snapshot",
+            baseline_digest: &baseline,
+            queued_digest: None,
+            recovery_id: Some(&id),
+            binding_generation,
+            document_revision: 1,
+        },
+    );
+    assert!(second.conflict);
+    assert!(!second.recovery_created);
+    assert_eq!(second.recovery_id.as_deref(), Some(id.as_str()));
+    assert!(second.error.is_none());
+    assert_eq!(fs::read(&target)?, b"external edit");
+    drop(lease);
+    let (_, payload) = recovery_storage.load(&id)?;
+    assert_eq!(payload, b"newer local snapshot");
+    coordinator.forget_gate(&id);
     Ok(())
 }

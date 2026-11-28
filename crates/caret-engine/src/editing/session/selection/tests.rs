@@ -8,7 +8,8 @@ use crate::editing::session::math_edit::{
 use crate::editing::{Affinity, DocumentRangeEndpoint, EditorKey, StructureSelection};
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, Equation, MathContent, MathFlow,
-    MathNode, MathNodeKind, MathTree, NodeId, Paragraph, ParagraphContent, Run, TextFlow,
+    MathNode, MathNodeKind, MathTree, NodeId, Paragraph, ParagraphContent, Run, Table, TableCell,
+    TableRow, TextFlow,
 };
 use std::collections::BTreeMap;
 
@@ -116,7 +117,7 @@ fn pointer_plain_text_cross_paragraph_range_stays_normal_selection() {
     assert!(session.structure_selection_range().is_none());
     assert_eq!(session.selection().anchor, anchor);
     assert_eq!(session.selection().focus, focus);
-    assert_eq!(session.selected_math_blocks(), &[]);
+    assert_eq!(session.selected_atomic_blocks(), &[]);
 }
 
 #[test]
@@ -149,7 +150,7 @@ fn pointer_range_across_equation_promotes_and_delete_removes_it_atomically() {
 
     assert!(session.has_structure_selection());
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
     let (anchor, focus) = session
@@ -197,7 +198,7 @@ fn pointer_range_across_equation_promotes_and_delete_removes_it_atomically() {
         })
         .collect::<String>();
     assert_eq!(merged_text, "beforeafter");
-    assert!(session.selected_math_blocks().is_empty());
+    assert!(session.selected_atomic_blocks().is_empty());
     assert!(!session.has_structure_selection());
     assert!(session.can_undo());
 
@@ -211,6 +212,484 @@ fn pointer_range_across_equation_promotes_and_delete_removes_it_atomically() {
             .iter()
             .any(|block| matches!(block, Block::Equation(equation) if equation.id == equation_id))
     );
+}
+
+#[test]
+fn pointer_range_promotes_the_table_at_the_first_diverging_cell()
+-> Result<(), Box<dyn std::error::Error>> {
+    let nested_text = paragraph_with_text("nested");
+    let same_outer_cell = paragraph_with_text("same outer cell");
+    let next_outer_cell = paragraph_with_text("next outer cell");
+    let nested_id = nested_text.id.clone();
+    let same_outer_id = same_outer_cell.id.clone();
+    let next_outer_id = next_outer_cell.id.clone();
+    let table = |id: &NodeId, cells: Vec<Vec<Block>>| {
+        Block::Table(Table {
+            id: id.clone(),
+            rows: vec![TableRow {
+                id: NodeId::generate(),
+                cells: cells
+                    .into_iter()
+                    .map(|blocks| TableCell {
+                        id: NodeId::generate(),
+                        blocks,
+                    })
+                    .collect(),
+            }],
+        })
+    };
+    let inner_id = NodeId::generate();
+    let outer_id = NodeId::generate();
+    let inner = table(&inner_id, vec![vec![Block::Paragraph(nested_text)]]);
+    let mut document = Document::blank();
+    document.body = vec![table(
+        &outer_id,
+        vec![
+            vec![inner, Block::Paragraph(same_outer_cell)],
+            vec![Block::Paragraph(next_outer_cell)],
+        ],
+    )];
+    let mut session = Session::new(document.clone())?;
+    let position = |session: &Session, paragraph_id: &NodeId| -> Result<Pos, crate::EditError> {
+        Ok(Pos {
+            story: session
+                .story_for_paragraph(paragraph_id)
+                .ok_or(crate::EditError::InvalidPosition)?,
+            paragraph_id: paragraph_id.clone(),
+            offset: 1,
+            affinity: Affinity::Downstream,
+        })
+    };
+    let anchor = position(&session, &nested_id)?;
+    for (focus, expected_table) in [(&same_outer_id, &inner_id), (&next_outer_id, &outer_id)] {
+        session.set_pointer_selection_range(
+            anchor.clone(),
+            position(&session, focus)?,
+            VisualAffinity::Downstream,
+            VisualAffinity::Downstream,
+        )?;
+        assert_eq!(
+            session.selected_atomic_blocks(),
+            std::slice::from_ref(expected_table)
+        );
+        assert_eq!(session.document(), &document);
+    }
+    Ok(())
+}
+
+#[test]
+fn pointer_text_to_inline_math_tree_across_table_cells_promotes_table_range() {
+    let left = paragraph_with_text("left");
+    let left_id = left.id.clone();
+    let math_id = NodeId::generate();
+    let mut right = Paragraph::empty(NodeId::generate());
+    right
+        .inlines
+        .push(ParagraphContent::Math(caret_doc::InlineMath {
+            id: math_id.clone(),
+            math_tree: MathTree {
+                schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+                root: MathFlow {
+                    id: NodeId::generate(),
+                    content: vec![MathContent::Math(MathNode {
+                        id: NodeId::generate(),
+                        kind: MathNodeKind::Group,
+                        text: None,
+                        attributes: BTreeMap::new(),
+                        children: vec![MathFlow {
+                            id: NodeId::generate(),
+                            content: vec![MathContent::Text(caret_doc::TextFlow {
+                                runs: vec![Run {
+                                    text: "x".to_owned(),
+                                    language: None,
+                                    props: BTreeMap::new(),
+                                    extra: BTreeMap::new(),
+                                }],
+                                extra: BTreeMap::new(),
+                            })],
+                            extra: BTreeMap::new(),
+                        }],
+                        extra: BTreeMap::new(),
+                    })],
+                    extra: BTreeMap::new(),
+                },
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        }));
+    let right_id = right.id.clone();
+    let outside_math_id = NodeId::generate();
+    let mut outside = Paragraph::empty(NodeId::generate());
+    outside
+        .inlines
+        .push(ParagraphContent::Math(caret_doc::InlineMath {
+            id: outside_math_id.clone(),
+            math_tree: MathTree {
+                schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+                root: MathFlow {
+                    id: NodeId::generate(),
+                    content: vec![MathContent::Math(MathNode {
+                        id: NodeId::generate(),
+                        kind: MathNodeKind::Symbol,
+                        text: Some("y".to_owned()),
+                        attributes: BTreeMap::new(),
+                        children: Vec::new(),
+                        extra: BTreeMap::new(),
+                    })],
+                    extra: BTreeMap::new(),
+                },
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        }));
+    let outside_id = outside.id.clone();
+    let middle = paragraph_with_text("middle");
+    let middle_id = middle.id.clone();
+    let row_id = NodeId::generate();
+    let left_cell_id = NodeId::generate();
+    let right_cell_id = NodeId::generate();
+    let table = Table {
+        id: NodeId::generate(),
+        rows: vec![TableRow {
+            id: row_id.clone(),
+            cells: vec![
+                TableCell {
+                    id: left_cell_id.clone(),
+                    blocks: vec![Block::Paragraph(left)],
+                },
+                TableCell {
+                    id: right_cell_id,
+                    blocks: vec![Block::Paragraph(right)],
+                },
+            ],
+        }],
+    };
+    let table_id = table.id.clone();
+    let left_end = Pos {
+        story: StoryId::TableCell {
+            table_id: table_id.clone(),
+            row_id,
+            cell_id: left_cell_id,
+        },
+        paragraph_id: left_id,
+        offset: "left".len(),
+        affinity: Affinity::Upstream,
+    };
+    let mut session = Session::new(Document {
+        body: vec![
+            Block::Table(table),
+            Block::Paragraph(middle),
+            Block::Paragraph(outside),
+        ],
+        ..Document::blank()
+    })
+    .unwrap_or_else(|error| panic!("session creation failed: {error}"));
+    let tree_end = DocumentRangeEndpoint::InlineMathTree {
+        paragraph_id: right_id.clone(),
+        position: MathTreePosition {
+            host: MathPositionHost::InlineMath {
+                owner_id: math_id.clone(),
+            },
+            path: MathSequencePath::root(),
+            offset: 1,
+            affinity: MathPositionAffinity::Downstream,
+        },
+        entry_direction: Direction::Forward,
+        entry_math_forward: true,
+    };
+    let math_text = DocumentRangeEndpoint::InlineMathText {
+        paragraph_id: right_id.clone(),
+        math_id: math_id.clone(),
+        position: crate::MathTextPosition::new(
+            crate::MathTextFlowPath::from_interaction_path(
+                vec![
+                    caret_doc::MathPathStep::Content(0),
+                    caret_doc::MathPathStep::Operand(0),
+                    caret_doc::MathPathStep::Content(0),
+                ],
+                None,
+            ),
+            1,
+            MathPositionAffinity::Downstream,
+        ),
+        entry_direction: Direction::Forward,
+        entry_math_forward: true,
+    };
+    let outside_tree_end = DocumentRangeEndpoint::InlineMathTree {
+        paragraph_id: outside_id,
+        position: MathTreePosition {
+            host: MathPositionHost::InlineMath {
+                owner_id: outside_math_id,
+            },
+            path: MathSequencePath::root(),
+            offset: 1,
+            affinity: MathPositionAffinity::Downstream,
+        },
+        entry_direction: Direction::Forward,
+        entry_math_forward: true,
+    };
+
+    session
+        .set_pointer_inline_math_selection(
+            StructureSelection {
+                anchor: DocumentRangeEndpoint::Text(left_end.clone()),
+                focus: tree_end.clone(),
+            },
+            VisualAffinity::Upstream,
+            VisualAffinity::Downstream,
+        )
+        .unwrap_or_else(|error| panic!("cross-cell drag failed: {error}"));
+
+    assert_eq!(
+        session.selected_atomic_blocks(),
+        std::slice::from_ref(&table_id)
+    );
+    assert_eq!(
+        session
+            .structure_selection_range()
+            .map(|(anchor, focus)| (anchor.clone(), focus.clone())),
+        Some((
+            DocumentRangeEndpoint::BlockEdge {
+                block_id: table_id.clone(),
+                side: Direction::Backward,
+            },
+            DocumentRangeEndpoint::BlockEdge {
+                block_id: table_id.clone(),
+                side: Direction::Forward,
+            },
+        ))
+    );
+
+    let previous_range = session
+        .structure_selection_range()
+        .map(|(anchor, focus)| (anchor.clone(), focus.clone()));
+    let previous_generation = session.document_generation();
+    let invalid_math_endpoint = DocumentRangeEndpoint::InlineMathTree {
+        paragraph_id: right_id.clone(),
+        position: MathTreePosition {
+            host: MathPositionHost::InlineMath {
+                owner_id: NodeId::generate(),
+            },
+            path: MathSequencePath::root(),
+            offset: 0,
+            affinity: MathPositionAffinity::Downstream,
+        },
+        entry_direction: Direction::Forward,
+        entry_math_forward: true,
+    };
+    assert!(
+        session
+            .set_pointer_inline_math_selection(
+                StructureSelection {
+                    anchor: DocumentRangeEndpoint::Text(left_end.clone()),
+                    focus: invalid_math_endpoint,
+                },
+                VisualAffinity::Upstream,
+                VisualAffinity::Downstream,
+            )
+            .is_err()
+    );
+    assert_eq!(
+        session
+            .structure_selection_range()
+            .map(|(anchor, focus)| (anchor.clone(), focus.clone())),
+        previous_range
+    );
+    assert_eq!(session.document_generation(), previous_generation);
+
+    session
+        .set_pointer_inline_math_selection(
+            StructureSelection {
+                anchor: tree_end,
+                focus: DocumentRangeEndpoint::Text(left_end.clone()),
+            },
+            VisualAffinity::Downstream,
+            VisualAffinity::Upstream,
+        )
+        .unwrap_or_else(|error| panic!("reverse cross-cell drag failed: {error}"));
+    assert_eq!(
+        session
+            .structure_selection_range()
+            .map(|(anchor, focus)| (anchor.clone(), focus.clone())),
+        Some((
+            DocumentRangeEndpoint::BlockEdge {
+                block_id: table_id.clone(),
+                side: Direction::Forward,
+            },
+            DocumentRangeEndpoint::BlockEdge {
+                block_id: table_id.clone(),
+                side: Direction::Backward,
+            },
+        ))
+    );
+
+    session
+        .set_pointer_inline_math_selection(
+            StructureSelection {
+                anchor: DocumentRangeEndpoint::Text(left_end.clone()),
+                focus: math_text,
+            },
+            VisualAffinity::Upstream,
+            VisualAffinity::Downstream,
+        )
+        .unwrap_or_else(|error| panic!("math-text cross-cell drag failed: {error}"));
+    assert_eq!(
+        session.selected_atomic_blocks(),
+        std::slice::from_ref(&table_id)
+    );
+
+    session
+        .set_pointer_inline_math_selection(
+            StructureSelection {
+                anchor: DocumentRangeEndpoint::Text(left_end.clone()),
+                focus: outside_tree_end.clone(),
+            },
+            VisualAffinity::Upstream,
+            VisualAffinity::Downstream,
+        )
+        .unwrap_or_else(|error| panic!("table-to-outside-math drag failed: {error}"));
+    assert_eq!(
+        session
+            .structure_selection_range()
+            .map(|(anchor, focus)| (anchor.clone(), focus.clone())),
+        Some((
+            DocumentRangeEndpoint::BlockEdge {
+                block_id: table_id.clone(),
+                side: Direction::Backward,
+            },
+            outside_tree_end.clone(),
+        ))
+    );
+    assert_eq!(
+        session.selected_atomic_blocks(),
+        std::slice::from_ref(&table_id)
+    );
+    let selected = session
+        .selected_text()
+        .unwrap_or_else(|error| panic!("selected text failed: {error}"));
+    assert!(selected.contains("middle"), "selected text: {selected:?}");
+    session
+        .run(Command::Delete(Direction::Forward))
+        .unwrap_or_else(|error| panic!("cross-table range delete failed: {error}"));
+    assert!(
+        !session
+            .document()
+            .body
+            .iter()
+            .any(|block| { matches!(block, Block::Table(table) if table.id == table_id) })
+    );
+    assert!(!session.document().body.iter().any(|block| {
+        matches!(block, Block::Paragraph(paragraph) if paragraph.id == middle_id
+            && paragraph.inlines.iter().any(|inline| matches!(inline, ParagraphContent::Text(flow)
+                if flow.runs.iter().any(|run| run.text.contains("middle")))))
+    }));
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("cross-table range undo failed: {error}"));
+    assert!(
+        session
+            .document()
+            .body
+            .iter()
+            .any(|block| { matches!(block, Block::Table(table) if table.id == table_id) })
+    );
+    assert!(session.document().body.iter().any(|block| {
+        matches!(block, Block::Paragraph(paragraph) if paragraph.id == middle_id
+            && paragraph.inlines.iter().any(|inline| matches!(inline, ParagraphContent::Text(flow)
+                if flow.runs.iter().any(|run| run.text.contains("middle")))))
+    }));
+
+    session
+        .set_pointer_inline_math_selection(
+            StructureSelection {
+                anchor: outside_tree_end.clone(),
+                focus: DocumentRangeEndpoint::Text(left_end.clone()),
+            },
+            VisualAffinity::Downstream,
+            VisualAffinity::Upstream,
+        )
+        .unwrap_or_else(|error| panic!("outside-math-to-table drag failed: {error}"));
+    assert_eq!(
+        session
+            .structure_selection_range()
+            .map(|(anchor, focus)| (anchor.clone(), focus.clone())),
+        Some((
+            outside_tree_end,
+            DocumentRangeEndpoint::BlockEdge {
+                block_id: table_id.clone(),
+                side: Direction::Backward,
+            },
+        ))
+    );
+    assert_eq!(
+        session.selected_atomic_blocks(),
+        std::slice::from_ref(&table_id)
+    );
+
+    let (right_before, _) = session
+        .inline_math_pointer_bounds(
+            &crate::editing::session::math_edit::MathEditTarget::Inline {
+                paragraph_id: right_id,
+                math_id,
+            },
+        )
+        .unwrap_or_else(|error| panic!("inline math bounds failed: {error}"));
+    session
+        .set_pointer_selection_range(
+            left_end.clone(),
+            right_before.clone(),
+            VisualAffinity::Upstream,
+            VisualAffinity::Downstream,
+        )
+        .unwrap_or_else(|error| panic!("text cross-cell drag failed: {error}"));
+    assert_eq!(
+        session.selected_atomic_blocks(),
+        std::slice::from_ref(&table_id)
+    );
+    session
+        .set_pointer_selection_range(
+            left_end.clone(),
+            left_end.clone(),
+            VisualAffinity::Upstream,
+            VisualAffinity::Upstream,
+        )
+        .unwrap_or_else(|error| panic!("cell caret setup failed: {error}"));
+    session
+        .run(Command::UpdateComposition {
+            id: 87,
+            preedit: "候选".to_owned(),
+        })
+        .unwrap_or_else(|error| panic!("composition setup failed: {error}"));
+    let composition_generation = session.document_generation();
+    let invalid_left = Pos {
+        offset: left_end.offset + 1,
+        ..left_end.clone()
+    };
+    assert!(
+        session
+            .set_pointer_selection_range(
+                invalid_left,
+                right_before.clone(),
+                VisualAffinity::Upstream,
+                VisualAffinity::Downstream,
+            )
+            .is_err()
+    );
+    assert_eq!(
+        session.composition().map(|composition| composition.id),
+        Some(87)
+    );
+    assert_eq!(session.document_generation(), composition_generation);
+    let effect = session
+        .set_pointer_selection_range(
+            left_end,
+            right_before,
+            VisualAffinity::Upstream,
+            VisualAffinity::Downstream,
+        )
+        .unwrap_or_else(|error| panic!("composition cross-cell drag failed: {error}"));
+    assert!(effect.composition_changed);
+    assert!(session.composition().is_none());
 }
 
 #[test]
@@ -295,7 +774,7 @@ fn mixed_inline_math_range_deletes_block_covered_only_by_structure_projection() 
         )
         .unwrap_or_else(|error| panic!("mixed selection setup failed: {error}"));
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
 
@@ -525,7 +1004,7 @@ fn plain_right_collapses_structure_selection_to_its_document_end()
 
     assert!(effect.selection_changed);
     assert!(!session.has_structure_selection());
-    assert!(session.selected_math_blocks().is_empty());
+    assert!(session.selected_atomic_blocks().is_empty());
     assert_eq!(session.selection().anchor, paragraph_end(&after));
     assert_eq!(session.selection().focus, paragraph_end(&after));
     assert_ne!(session.selection().focus, jumped_candidate);
@@ -650,7 +1129,7 @@ fn vertical_extend_from_block_edge_anchor_keeps_the_covered_equation()
     );
     session.install_structure_selection(block_edge_equation_selection(&equation_id))?;
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
     let generation = crate::editing::NavigationGeneration {
@@ -703,7 +1182,7 @@ fn vertical_extend_from_block_edge_anchor_keeps_the_covered_equation()
     );
     assert!(session.has_structure_selection());
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
     assert_eq!(session.selection().focus, focus);
@@ -766,7 +1245,7 @@ fn visual_line_edge_extend_from_block_edge_anchor_keeps_the_covered_equation()
 
         assert!(session.has_structure_selection());
         assert_eq!(
-            session.selected_math_blocks(),
+            session.selected_atomic_blocks(),
             std::slice::from_ref(&equation_id)
         );
         assert_eq!(session.selection().focus, focus);
@@ -858,7 +1337,7 @@ fn block_at_document_start_keeps_covered_equation_when_anchor_has_no_paragraph()
         // 块前没有段落时锚点无法投影到所求侧：退回文档单元扩展而不是丢失公式覆盖。
         assert!(session.has_structure_selection());
         assert_eq!(
-            session.selected_math_blocks(),
+            session.selected_atomic_blocks(),
             std::slice::from_ref(&equation_id)
         );
         assert_eq!(session.selection().focus.paragraph_id, after.id);
