@@ -6,79 +6,35 @@
 use super::{
     DocumentRuntime, PreparedDocument, bridge, next_prepared_document_ticket, prepared_documents,
 };
+use caret_app::document_recovery::DocumentRecoveryCoordinator;
+pub(crate) use caret_app::document_recovery::RecoveryUpdateGate;
 use caret_app::document_session::DocumentSessionService;
 use caret_app::document_storage::DocumentStorage;
-use std::collections::HashMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 
-pub(crate) struct RecoveryUpdateGate {
-    operation: Mutex<()>,
-    pub(super) pending: AtomicBool,
-    target_revision: AtomicU64,
-    pub(super) binding_generation: AtomicU64,
-}
+const RECOVERY_COORDINATOR: DocumentRecoveryCoordinator = DocumentRecoveryCoordinator;
 
-impl RecoveryUpdateGate {
-    fn new(binding_generation: u64) -> Self {
-        Self {
-            operation: Mutex::new(()),
-            pending: AtomicBool::new(false),
-            target_revision: AtomicU64::new(0),
-            binding_generation: AtomicU64::new(binding_generation),
-        }
-    }
-}
-
-fn recovery_update_gates() -> &'static Mutex<HashMap<String, Arc<RecoveryUpdateGate>>> {
-    static GATES: OnceLock<Mutex<HashMap<String, Arc<RecoveryUpdateGate>>>> = OnceLock::new();
-    GATES.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn recovery_update_gate(id: &str) -> Result<Arc<RecoveryUpdateGate>, String> {
-    let mut gates = recovery_update_gates()
-        .lock()
-        .map_err(|_| "recovery.update_gate_unavailable".to_owned())?;
-    Ok(gates
-        .entry(id.to_owned())
-        .or_insert_with(|| Arc::new(RecoveryUpdateGate::new(0)))
-        .clone())
-}
-
-fn existing_recovery_update_gate(id: &str) -> Result<Arc<RecoveryUpdateGate>, String> {
-    recovery_update_gates()
-        .lock()
-        .map_err(|_| "recovery.update_gate_unavailable".to_owned())?
-        .get(id)
-        .cloned()
-        .ok_or_else(|| "recovery.stale_identity".to_owned())
+#[cfg(test)]
+fn existing_recovery_update_gate(id: &str) -> Result<std::sync::Arc<RecoveryUpdateGate>, String> {
+    RECOVERY_COORDINATOR.existing_gate(id)
 }
 
 /// 只在恢复文件已成功删除后解除注册；在途任务仍持有原 gate。
 pub(super) fn forget_recovery_gate(id: &str) {
-    if let Ok(mut gates) = recovery_update_gates().lock() {
-        gates.remove(id);
-    }
+    RECOVERY_COORDINATOR.forget_gate(id);
 }
 
 pub(super) fn recovery_gate_for_runtime(
     id: &str,
     binding_generation: u64,
-) -> Result<Arc<RecoveryUpdateGate>, String> {
-    let gate = recovery_update_gate(id)?;
-    if !gate.pending.load(Ordering::Acquire) {
-        gate.binding_generation
-            .store(binding_generation, Ordering::Release);
-    }
-    Ok(gate)
+) -> Result<std::sync::Arc<RecoveryUpdateGate>, String> {
+    RECOVERY_COORDINATOR.gate(id, binding_generation)
 }
 
 pub(super) fn mark_recovery_rebind_pending(runtime: &DocumentRuntime, document_generation: u64) {
     if let Some(gate) = runtime.recovery_update_gate.as_ref() {
-        gate.target_revision
-            .store(document_generation, Ordering::Relaxed);
-        gate.pending.store(true, Ordering::Release);
+        RECOVERY_COORDINATOR.mark_rebind_pending(gate, document_generation);
     }
 }
 
@@ -86,11 +42,8 @@ pub(super) fn advance_pending_recovery_revision(
     runtime: &DocumentRuntime,
     document_generation: u64,
 ) {
-    if let Some(gate) = runtime.recovery_update_gate.as_ref()
-        && gate.pending.load(Ordering::Acquire)
-    {
-        gate.target_revision
-            .store(document_generation, Ordering::Release);
+    if let Some(gate) = runtime.recovery_update_gate.as_ref() {
+        RECOVERY_COORDINATOR.advance_pending_revision(gate, document_generation);
     }
 }
 
@@ -116,14 +69,6 @@ fn recovery_process_lease()
     static LEASE: OnceLock<Mutex<Option<caret_app::document_recovery::RecoveryProcessLease>>> =
         OnceLock::new();
     LEASE.get_or_init(|| Mutex::new(None))
-}
-
-fn pending_recovery_leases()
--> &'static Mutex<HashMap<String, caret_app::document_recovery::RecoverySessionLease>> {
-    static LEASES: OnceLock<
-        Mutex<HashMap<String, caret_app::document_recovery::RecoverySessionLease>>,
-    > = OnceLock::new();
-    LEASES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// 成功保存后清理关联恢复项；删除失败时保留绑定供下一次编辑刷新。
@@ -341,80 +286,36 @@ fn update_recovery_document_with_binding(
     rebind_requested: bool,
     bytes: Vec<u8>,
 ) -> bridge::RecoveryUpdateResult {
-    let fail = |binding_generation, error: String| bridge::RecoveryUpdateResult {
+    let fail = |binding_generation, error| bridge::RecoveryUpdateResult {
         binding_generation,
         superseded: false,
         error,
     };
-    let superseded = |binding_generation| bridge::RecoveryUpdateResult {
-        binding_generation,
-        superseded: true,
-        error: "document.stale_recovery_completion".to_owned(),
-    };
-    let gate = match existing_recovery_update_gate(&id) {
+    let gate = match RECOVERY_COORDINATOR.existing_gate(&id) {
         Ok(gate) => gate,
         Err(error) => return fail(captured_binding_generation, error),
     };
-    let _operation = match gate.operation.lock() {
-        Ok(guard) => guard,
-        Err(_) => {
-            return fail(
-                captured_binding_generation,
-                "recovery.update_gate_unavailable".to_owned(),
-            );
-        }
-    };
-    let pending = gate.pending.load(Ordering::Acquire);
-    let target_revision = gate.target_revision.load(Ordering::Acquire);
-    let mut binding_generation = gate.binding_generation.load(Ordering::Acquire);
-    if pending {
-        if !rebind_requested || document_generation != target_revision {
-            return superseded(binding_generation);
-        }
-        let storage = match recovery_storage_for_cleanup() {
-            Ok(storage) => storage,
-            Err(error) => return fail(binding_generation, error),
-        };
-        match storage.bind_session(
-            &id,
-            Path::new(&original_path),
-            (!baseline_digest.is_empty()).then_some(baseline_digest.clone()),
-            document_generation,
-        ) {
-            Ok(new_generation) => {
-                binding_generation = new_generation;
-                gate.binding_generation
-                    .store(new_generation, Ordering::Release);
-                gate.pending.store(false, Ordering::Release);
-            }
-            Err(error) => return fail(binding_generation, error.to_string()),
-        }
-    } else if captured_binding_generation != binding_generation
-        && !(rebind_requested && target_revision == document_generation)
-    {
-        return superseded(binding_generation);
-    }
     let storage = match recovery_storage_for_cleanup() {
         Ok(storage) => storage,
-        Err(error) => return fail(binding_generation, error),
+        Err(error) => return fail(captured_binding_generation, error),
     };
-    match storage.update_if_identity_matches(
+    let outcome = RECOVERY_COORDINATOR.update_snapshot(
+        &storage,
+        &gate,
         &id,
-        caret_app::document_recovery::RecoveryKind::LocalDocument,
         caret_app::document_recovery::RecoverySnapshotIdentity::new(
             Path::new(&original_path),
             (!baseline_digest.is_empty()).then_some(baseline_digest.as_str()),
-            binding_generation,
+            captured_binding_generation,
             document_generation,
         ),
+        rebind_requested,
         &bytes,
-    ) {
-        Ok(()) => bridge::RecoveryUpdateResult {
-            binding_generation,
-            superseded: false,
-            error: String::new(),
-        },
-        Err(error) => fail(binding_generation, error.to_string()),
+    );
+    bridge::RecoveryUpdateResult {
+        binding_generation: outcome.binding_generation,
+        superseded: outcome.superseded,
+        error: outcome.error,
     }
 }
 
@@ -525,85 +426,35 @@ pub(crate) fn write_document_file_checked(
     document_generation: u64,
 ) -> bridge::DocumentWriteResult {
     let target = Path::new(&path);
-    let recovery_baseline_digest = (!baseline_digest.is_empty()).then_some(baseline_digest.clone());
-    let result = |conflict, replace_allowed, recovery_id, recovery_created, error| {
-        bridge::DocumentWriteResult {
-            conflict,
-            replace_allowed,
-            recovery_id,
-            recovery_created,
-            error,
-        }
-    };
-    match DocumentStorage.save_snapshot_if_unchanged_or_queued(
-        target,
-        &bytes,
-        &baseline_digest,
-        (!queued_digest.is_empty()).then_some(queued_digest.as_str()),
-    ) {
-        Ok(()) => result(false, false, String::new(), false, String::new()),
-        Err(
-            error @ (caret_app::document_storage::DocumentStorageError::ExternalConflict
-            | caret_app::document_storage::DocumentStorageError::ExternalTargetUnavailable(
-                _,
-            )),
-        ) => {
-            let replace_allowed = matches!(
-                error,
-                caret_app::document_storage::DocumentStorageError::ExternalConflict
-            );
-            let recovery_created = recovery_id.is_empty();
-            let stored = recovery_storage()
-                .lock()
-                .ok()
-                .and_then(|storage| storage.as_ref().cloned())
-                .ok_or_else(|| "recovery.storage_unavailable".to_owned())
-                .and_then(|storage| {
-                    if recovery_id.is_empty() {
-                        storage
-                            .store_for_session(target, recovery_baseline_digest.clone(), &bytes)
-                            .and_then(|(id, lease)| match pending_recovery_leases().lock() {
-                                Ok(mut leases) => {
-                                    leases.insert(id.clone(), lease);
-                                    Ok(id)
-                                }
-                                Err(_) => {
-                                    let _ = storage.remove_leased(&lease);
-                                    Err(caret_app::document_recovery::RecoveryError::Busy)
-                                }
-                            })
-                            .map_err(|error| error.to_string())
-                    } else {
-                        let update = update_recovery_document_with_binding(
-                            recovery_id.clone(),
-                            target.to_string_lossy().into_owned(),
-                            baseline_digest.clone(),
-                            binding_generation,
-                            document_generation,
-                            false,
-                            bytes.clone(),
-                        );
-                        if update.error.is_empty() {
-                            Ok(recovery_id)
-                        } else {
-                            Err(update.error)
-                        }
-                    }
-                });
-            match stored {
-                Ok(id) => result(true, replace_allowed, id, recovery_created, String::new()),
-                Err(error) => result(true, false, String::new(), false, error),
-            }
-        }
-        Err(error) => result(false, false, String::new(), false, error.to_string()),
+    let recovery_storage = recovery_storage()
+        .lock()
+        .ok()
+        .and_then(|storage| storage.as_ref().cloned());
+    let outcome = RECOVERY_COORDINATOR.save_checked(
+        &DocumentStorage,
+        recovery_storage.as_ref(),
+        caret_app::document_recovery::CheckedRecoverySave {
+            target,
+            bytes: &bytes,
+            baseline_digest: &baseline_digest,
+            queued_digest: (!queued_digest.is_empty()).then_some(queued_digest.as_str()),
+            recovery_id: (!recovery_id.is_empty()).then_some(recovery_id.as_str()),
+            binding_generation,
+            document_revision: document_generation,
+        },
+    );
+    bridge::DocumentWriteResult {
+        conflict: outcome.conflict,
+        replace_allowed: outcome.replace_allowed,
+        recovery_id: outcome.recovery_id.unwrap_or_default(),
+        recovery_created: outcome.recovery_created,
+        error: outcome.error.unwrap_or_default(),
     }
 }
 
 /// 只释放尚未绑定的新租约，不删除可供恢复的条目。
 pub(crate) fn cancel_pending_recovery_lease(id: String) {
-    if let Ok(mut leases) = pending_recovery_leases().lock() {
-        leases.remove(&id);
-    }
+    RECOVERY_COORDINATOR.cancel_pending_lease(&id);
 }
 
 /// 将写前冲突生成的恢复副本绑定至当前会话，后续编辑可更新同一条目。
@@ -617,85 +468,40 @@ pub(crate) fn set_document_recovery_id(
     baseline_digest: String,
 ) -> String {
     let baseline_digest = (!baseline_digest.is_empty()).then_some(baseline_digest);
-    let binding_unchanged = runtime.runtime.as_ref().is_ok_and(|session| {
-        session.recovery_binding_matches(&id, &original_path, baseline_digest.as_deref())
-    });
-    if !runtime
-        .runtime
-        .as_ref()
-        .is_ok_and(|session| session.session_generation() == session_generation)
-        || runtime.recovery_binding_generation != expected_binding_generation
-    {
-        return "error:document.stale_recovery_completion".to_owned();
-    }
-    let lease = if runtime
-        .recovery_lease
-        .as_ref()
-        .is_some_and(|lease| lease.id() == id)
-    {
-        None
-    } else if let Some(lease) = pending_recovery_leases()
-        .lock()
-        .ok()
-        .and_then(|mut leases| leases.remove(&id))
-    {
-        Some(lease)
-    } else {
-        let storage = match recovery_storage_for_cleanup() {
-            Ok(storage) => storage,
-            Err(error) => return error,
-        };
-        match storage.acquire_session_lease(&id) {
-            Ok(lease) => Some(lease),
-            Err(error) => return error.to_string(),
-        }
-    };
-    let binding_generation = if binding_unchanged {
-        runtime.recovery_binding_generation
-    } else {
-        let storage = match recovery_storage_for_cleanup() {
-            Ok(storage) => storage,
-            Err(error) => return error,
-        };
-        match storage.bind_session(
-            &id,
-            Path::new(&original_path),
-            baseline_digest.clone(),
-            source_revision,
-        ) {
-            Ok(generation) => generation,
-            Err(error) => return error.to_string(),
-        }
-    };
-    let update_gate = match recovery_gate_for_runtime(&id, binding_generation) {
-        Ok(gate) => gate,
+    let storage = match recovery_storage_for_cleanup() {
+        Ok(storage) => storage,
         Err(error) => return error,
     };
     let session = match &mut runtime.runtime {
         Ok(session) => session,
         Err(error) => return format!("error:{error}"),
     };
-    if !session.set_recovery_id(session_generation, id, original_path, baseline_digest) {
-        return "error:document.stale_recovery_completion".to_owned();
-    }
-    if let Some(lease) = lease {
-        runtime.recovery_lease = Some(lease);
-    }
-    runtime.recovery_update_gate = Some(update_gate);
-    runtime.lifecycle.set_recovery_enabled(true);
-    if let Ok(session) = &runtime.runtime {
-        let current_revision = session.document_generation();
-        if !binding_unchanged {
-            runtime.recovery_binding_generation = binding_generation;
-            runtime.lifecycle.recovery_binding_changed();
-        }
-        if current_revision > source_revision {
-            runtime
-                .lifecycle
-                .edited(current_revision, true, runtime.monotonic_origin.elapsed());
-        }
-    }
-    String::new()
+    RECOVERY_COORDINATOR
+        .bind_session(
+            &storage,
+            session,
+            &mut runtime.lifecycle,
+            &mut runtime.recovery_lease,
+            &mut runtime.recovery_binding_generation,
+            &mut runtime.recovery_update_gate,
+            session_generation,
+            source_revision,
+            expected_binding_generation,
+            id,
+            Path::new(&original_path),
+            baseline_digest,
+            runtime.monotonic_origin.elapsed(),
+        )
+        .map_or_else(
+            |error| {
+                if error == "document.stale_recovery_completion" {
+                    format!("error:{error}")
+                } else {
+                    error
+                }
+            },
+            |_| String::new(),
+        )
 }
 
 /// 用户确认替换冲突版本前，先把当前外部原始字节存入恢复区再原子写回。
@@ -764,8 +570,8 @@ pub(crate) fn mark_document_saved_json(
 #[cfg(test)]
 mod tests {
     use super::{
-        cancel_pending_recovery_lease, configure_document_recovery, discard_document_recovery,
-        discard_recovery, export_recovery, mark_document_saved_json, pending_recovery_leases,
+        RECOVERY_COORDINATOR, cancel_pending_recovery_lease, configure_document_recovery,
+        discard_document_recovery, discard_recovery, export_recovery, mark_document_saved_json,
         prepare_recovery_document, recovery_entries_json, recovery_storage_for_cleanup,
         set_document_recovery_id, update_recovery_document, update_recovery_document_for_snapshot,
         write_document_file_checked, write_document_file_replace_external,
@@ -792,11 +598,11 @@ mod tests {
         let stored = storage.store_for_session(Path::new("document.cdoc"), None, b"snapshot");
         assert!(stored.is_ok());
         let Ok((id, lease)) = stored else { return };
-        let registry = pending_recovery_leases().lock();
-        assert!(registry.is_ok());
-        let Ok(mut registry) = registry else { return };
-        registry.insert(id.clone(), lease);
-        drop(registry);
+        assert!(
+            RECOVERY_COORDINATOR
+                .register_pending_lease(&storage, lease)
+                .is_ok()
+        );
 
         cancel_pending_recovery_lease(id.clone());
 
@@ -1135,10 +941,7 @@ mod tests {
             .bind_session(&rollover_id, &rollover_path, None, u64::MAX - 1)
             .unwrap_or_default();
         rollover_runtime.recovery_binding_generation = old_binding_generation;
-        if let Some(gate) = rollover_runtime.recovery_update_gate.as_ref() {
-            gate.binding_generation
-                .store(old_binding_generation, Ordering::Release);
-        }
+        let _ = RECOVERY_COORDINATOR.gate(&rollover_id, old_binding_generation);
         assert!(
             update_recovery_document(
                 rollover_id.clone(),
@@ -1280,7 +1083,7 @@ mod tests {
         let Some(queued_gate) = queued_gate else {
             return;
         };
-        let Ok(_held_gate) = queued_gate.operation.lock() else {
+        let Ok(_held_gate) = queued_gate.lock_operation() else {
             return;
         };
         assert!(
@@ -1346,8 +1149,7 @@ mod tests {
         let (release_gate_tx, release_gate_rx) = std::sync::mpsc::channel();
         let slow_worker = std::thread::spawn(move || {
             let _operation = gate
-                .operation
-                .lock()
+                .lock_operation()
                 .unwrap_or_else(|_| panic!("gate lock available"));
             gate_held_tx
                 .send(())
@@ -1492,13 +1294,11 @@ mod tests {
             retry_runtime
                 .recovery_update_gate
                 .as_ref()
-                .is_some_and(|gate| gate.pending.load(Ordering::Acquire)),
+                .is_some_and(|gate| gate.is_rebind_pending()),
             retry_runtime
                 .recovery_update_gate
                 .as_ref()
-                .map_or(u64::MAX, |gate| gate
-                    .target_revision
-                    .load(Ordering::Acquire)),
+                .map_or(u64::MAX, |gate| gate.target_revision()),
             retry_deadline,
         );
         // 快照排队后、worker 取得 gate 前发生编辑，旧快照必须被拒绝并重新排期。

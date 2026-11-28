@@ -3,7 +3,7 @@
 - 状态：done
 - 依赖：018、019、029
 - 优先级：P2
-- 创建 / 更新：2026-10-28 / 2026-11-22
+- 创建 / 更新：2026-10-28 / 2026-11-28
 
 ## 目标与背景
 
@@ -85,6 +85,12 @@
 | 2026-11-21 | 独立最终评审（完整分支 diff，只读） | 037 验收证据范围、测试真实性、文档与索引一致性 | P1 未发现；指出 nightly 证据覆盖 main 产品代码、11 个新增 Qt 用例尚未在 PR 三平台 CI 运行，因此不能在此之前把 037 标为 done；完成摘要与自动化验收决策存在措辞矛盾。已在验证记录与本摘要中澄清，状态保持 in-progress 直到 PR CI 全绿。 |
 | 2026-11-22 | GitHub Actions Nightly [44923637913](https://github.com/VibeSTEM/caret/actions/runs/44923637913)（分支 `yuki/task-077-math-slot-caret`）；PR CI [44923633762](https://github.com/VibeSTEM/caret/actions/runs/44923633762) | 新增 Qt 用例在 macOS/Windows/Ubuntu 全量 workspace 测试执行；PR CI 覆盖 Linux 检查 | 通过：三平台 `full workspace tests` 全部 success（含新增 11 项 Qt 用例）；PR CI 全部通过。首轮 Windows 因新增光标测试断言了平台相关的正文行顶失败，改为只断言槽位布局盒包含关系后，本 run 三平台通过。 |
 | 2026-11-21 | 覆盖矩阵复核（见决策记录） | 037 各验收项均可追溯到 Rust/Qt 自动化用例；无法自动化的部分如实记录 | 已完成；残留限制见下方“未覆盖范围”。 |
+
+## 2026-11-28 恢复协调下沉
+
+`caret-app` 的恢复协调服务处理写入冲突时的恢复副本创建和复用、进程内串行写入、待接管的租约和过期完成回报。CXX 桥接传递保存请求和会话句柄，转换应用服务错误及截止时间。这些职责沿用独立的 `DocumentRecoveryStorage` 与 `DocumentLifecycleService`。
+
+应用层回归验证首次冲突创建、后续冲突复用同一副本、外部文件保护和过期完成拒绝。独立评审发现的租约注册失败清理已修复，并由最终复核确认。全量验证见 [106](106-table-shared-host-interaction.md#brooks-health-后续优化)。
 
 ## 风险与回退
 

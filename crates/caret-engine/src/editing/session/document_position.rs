@@ -80,6 +80,13 @@ impl Session {
             side: direction,
         };
         let caret = match self.paragraph_beside_block(block_id, direction)? {
+            Some(position)
+                if self.selection.anchor == self.selection.focus
+                    && self.selection.focus.paragraph_id == position.paragraph_id
+                    && self.selection.focus.offset == position.offset =>
+            {
+                self.selection.focus.clone()
+            }
             Some(position) => position,
             None => self
                 .text_endpoint_clamped(&endpoint)

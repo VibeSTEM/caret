@@ -17,7 +17,7 @@ mod tests;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TableLayoutOptions {
     /// 表格外框可用的最大宽度，单位为 pt；必须有限且为正。
-    /// 列轨道宽度会扣除两侧边框、内边距与列间隙后再等分。
+    /// 内容列宽会扣除左右外边框、每格左右内边距与显式列间隙后再等分。
     pub available_width_pt: f64,
     /// 列数；必须大于零。
     pub column_count: usize,
@@ -25,7 +25,7 @@ pub struct TableLayoutOptions {
     pub cell_padding_pt: f64,
     /// 表格外边线宽度，计入左右内缩；必须有限且非负。
     pub border_width_pt: f64,
-    /// 相邻列之间的间隙，单位为 pt；必须有限且非负。
+    /// 相邻单元格内边距之间的额外间隙，单位为 pt；必须有限且非负。
     pub column_gap_pt: f64,
     /// 每列的最小宽度，单位为 pt；必须有限且非负。
     pub minimum_column_width_pt: f64,
@@ -208,13 +208,26 @@ pub struct TableRowGeometry {
 pub struct TableGridLayout {
     pub width_pt: f64,
     pub height_pt: f64,
-    /// 各列轨道的 `(左边缘 x, 宽度)`，单位为 pt。
+    /// 各列内容区的 `(左边缘 x, 宽度)`，单位为 pt。
     pub columns: Vec<(f64, f64)>,
     /// 各横线的 y 坐标，单位为 pt；首尾为表格上下边线。
     pub horizontal_rule_positions: Vec<f64>,
     /// 各竖线的 x 坐标，单位为 pt；首尾为表格左右边线。
     pub vertical_rule_positions: Vec<f64>,
     pub rows: Vec<TableRowGeometry>,
+}
+
+impl TableGridLayout {
+    /// 返回行范围的上下网格线坐标，单位为 pt。范围为空或超出网格时返回 `None`。
+    pub fn row_rule_bounds_pt(&self, rows: std::ops::Range<usize>) -> Option<[f64; 2]> {
+        if rows.is_empty() || rows.end > self.rows.len() {
+            return None;
+        }
+        Some([
+            *self.horizontal_rule_positions.get(rows.start)?,
+            *self.horizontal_rule_positions.get(rows.end)?,
+        ])
+    }
 }
 
 /// 表格网格输入或几何无效时拒绝产生部分结果。
@@ -245,7 +258,8 @@ impl From<caret_grid_layout::GridLayoutError> for TableLayoutError {
 
 /// 按等分列宽与自然行高计算表格网格几何。
 ///
-/// 列宽取 `(可用宽度 - 两侧边线内缩 - 列间隙) / 列数` 与最小列宽的较大值；
+/// 列宽取 `(可用宽度 - 两侧边线 - 每格左右内边距 - 显式列间隙) / 列数`
+/// 与最小列宽的较大值。
 /// 行高为行内单元格内容高度的最大值加上下内边距，且不低于调用方给出的最小行度量。
 /// 单元格内容按顶部对齐；跨单元格的首基线对齐由后续切片决定，不在 v1 几何中表达。
 pub fn layout_table_grid(
@@ -286,7 +300,8 @@ pub fn layout_table_grid(
         column_alignments: vec![HorizontalAlignment::Left; options.column_count],
         vertical_rules: Vec::new(),
         horizontal_rules: Vec::new(),
-        column_gap: options.column_gap_pt,
+        // 列轨道间距包括相邻两格的内边距和显式列间隙。
+        column_gap: 2.0 * options.cell_padding_pt + options.column_gap_pt,
         row_gap: 0.0,
         minimum_row_ascent: options.minimum_row_ascent_pt,
         minimum_row_descent: options.minimum_row_descent_pt,
@@ -341,7 +356,7 @@ pub fn layout_table_grid(
         });
     }
 
-    let width_pt = 2.0 * options.border_width_pt + 2.0 * options.cell_padding_pt + grid.width;
+    let width_pt = 2.0 * horizontal_inset + grid.width;
     let height_pt = 2.0 * vertical_inset + grid.height;
     let columns = grid
         .columns
@@ -363,7 +378,7 @@ pub fn layout_table_grid(
         columns
             .iter()
             .take(columns.len().saturating_sub(1))
-            .map(|(x, width)| x + width + options.column_gap_pt / 2.0),
+            .map(|(x, width)| x + width + options.cell_padding_pt + options.column_gap_pt / 2.0),
     );
     vertical_rule_positions.push(width_pt);
     let result = TableGridLayout {
@@ -405,14 +420,14 @@ pub fn layout_table_grid(
 
 /// 计算 v1 等分列宽；调用方可用于在测量单元格内容前确定每段可用宽度。
 ///
-/// 结果与 [`layout_table_grid`] 内部使用的列宽一致：可用宽度扣除列间隙后等分，
-/// 再与最小列宽取较大值。
+/// 结果与 [`layout_table_grid`] 内部使用的列宽一致：可用宽度扣除边框、每格内边距
+/// 和显式列间隙后等分，再与最小列宽取较大值。
 pub fn table_column_width_pt(options: &TableLayoutOptions) -> Result<f64, TableLayoutError> {
     options.validate()?;
     let gaps = options.column_gap_pt * (options.column_count.saturating_sub(1) as f64);
-    let available = options.available_width_pt
-        - 2.0 * (options.border_width_pt + options.cell_padding_pt)
-        - gaps;
+    let cell_padding = 2.0 * options.cell_padding_pt * options.column_count as f64;
+    let available =
+        options.available_width_pt - 2.0 * options.border_width_pt - cell_padding - gaps;
     if !available.is_finite() {
         return Err(TableLayoutError::NonFiniteResult);
     }

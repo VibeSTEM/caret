@@ -45,6 +45,7 @@ pub struct PageGlyphPlacement {
     pub baseline_y_pt: f64,
     pub pixel_phase: [f32; 2],
     pub line_clip_y_pt: Option<[f64; 2]>,
+    pub line_clip_x_pt: Option<[f64; 2]>,
 }
 
 /// 页面栅格快照；图片去重，文本顺序保留在 placements 中。
@@ -145,6 +146,7 @@ impl PageGlyphRasterizer {
                     baseline_y_pt: glyph.baseline_y_pt,
                     pixel_phase: phase,
                     line_clip_y_pt: run.line_clip_y_pt,
+                    line_clip_x_pt: run.line_clip_x_pt,
                 });
             }
         }
@@ -183,8 +185,10 @@ pub struct PageGlyphRun {
     pub paint_order: u64,
     pub paragraph_id: NodeId,
     pub line_index: usize,
-    /// Exactly 行距要求逐行裁切时的页面局部 y 范围；还需与页面裁切取交集。
+    /// 页面局部 y 裁切范围，合并 Exactly 行框和单元格内容区，单位为 pt。
     pub line_clip_y_pt: Option<[f64; 2]>,
+    /// 单元格内容区的页面局部 x 范围，单位为 pt。
+    pub line_clip_x_pt: Option<[f64; 2]>,
     pub font: GlyphFontData,
     pub font_size_pt: f32,
     /// Parley 字体实例的 F2Dot14 规范化轴坐标原始位值。
@@ -214,6 +218,7 @@ pub struct PageGlyphDecoration {
     pub height_pt: f64,
     pub color: Option<[u8; 4]>,
     pub line_clip_y_pt: Option<[f64; 2]>,
+    pub line_clip_x_pt: Option<[f64; 2]>,
 }
 
 /// 数学排版产生的线段或矩形；坐标使用页面局部 pt，颜色缺省时由画布前景色补齐。
@@ -231,6 +236,7 @@ pub struct PageMathShape {
     pub stroke: Option<[u8; 4]>,
     pub stroke_width_pt: f64,
     pub line_clip_y_pt: Option<[f64; 2]>,
+    pub line_clip_x_pt: Option<[f64; 2]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -315,10 +321,22 @@ impl DocumentLayoutSnapshot {
             for line_index in line_range.clone() {
                 let caret_line = &paragraph.layout.paragraph.lines[line_index];
                 let line_height_pt = f64::from(caret_line.metrics.height_pt);
-                let line_clip_y_pt = caret_line
+                let mut line_clip_y_pt = caret_line
                     .metrics
                     .clip_ink_to_line_height
                     .then_some([page_line_top_pt, page_line_top_pt + line_height_pt]);
+                let cell_clip = paragraph
+                    .line_locations
+                    .get(line_index)
+                    .and_then(Option::as_ref)
+                    .and_then(|location| location.clip);
+                let line_clip_x_pt = cell_clip.map(|clip| [clip.x0_pt, clip.x1_pt]);
+                if let Some(clip) = cell_clip {
+                    line_clip_y_pt = Some(intersect_line_clip(
+                        line_clip_y_pt,
+                        [clip.y0_pt, clip.y1_pt],
+                    ));
+                }
                 let raw_top_pt = f64::from(
                     *paragraph
                         .layout
@@ -341,7 +359,9 @@ impl DocumentLayoutSnapshot {
                     return Err(PageGlyphError::InvalidLineGeometry);
                 }
                 // 空段由 Caret 合成不可见行框，Parley 可以没有对应的绘制行。
-                if paragraph.text.is_empty() {
+                if paragraph.text.is_empty()
+                    || line_clip_y_pt.is_some_and(|[top, bottom]| top >= bottom)
+                {
                     page_line_top_pt += line_height_pt;
                     continue;
                 }
@@ -372,6 +392,7 @@ impl DocumentLayoutSnapshot {
                         height_pt,
                         color,
                         line_clip_y_pt,
+                        line_clip_x_pt,
                     });
                     next_paint_order += 1;
                 }
@@ -400,6 +421,7 @@ impl DocumentLayoutSnapshot {
                                 paragraph_id: &paragraph.id,
                                 line_index,
                                 line_clip_y_pt: projection.drawing_clip(),
+                                line_clip_x_pt: projection.clip_x_pt,
                                 row_clips: &math_layout.row_clips,
                                 object_x_pt,
                                 baseline_y_pt: object_baseline_y_pt,
@@ -426,6 +448,7 @@ impl DocumentLayoutSnapshot {
                             paragraph_id: &paragraph.id,
                             line_index,
                             line_clip_y_pt,
+                            line_clip_x_pt,
                             foreground: None,
                         },
                     )? {
@@ -436,69 +459,34 @@ impl DocumentLayoutSnapshot {
                 page_line_top_pt += line_height_pt;
             }
         }
-        for fragment in &page.layout.math_fragments {
+        for projection in self.math_projections_on_page(page_index) {
+            if !matches!(
+                self.math_host(&projection.math_id).map(|host| &host.target),
+                Some(crate::MathEditTarget::Block { .. })
+            ) {
+                continue;
+            }
             let layout = self
                 .math_blocks
-                .get(&fragment.math_id)
+                .get(&projection.math_id)
                 .ok_or(PageGlyphError::MissingMathBlock)?;
             let text_layouts = self
-                .math_text_layouts_for_block(&fragment.math_id)
+                .math_text_layouts_for_block(&projection.math_id)
                 .ok_or(PageGlyphError::MissingMathBlock)?;
-            let projection = self
-                .math_projection(page_index, &fragment.math_id)
-                .ok_or(PageGlyphError::MissingMathBlock)?;
-            let object_x_pt = projection.object_x_pt;
-            let baseline_y_pt = projection.baseline_y_pt;
-            if !object_x_pt.is_finite()
-                || !baseline_y_pt.is_finite()
-                || !fragment.width_pt.is_finite()
-                || !fragment.height_pt.is_finite()
-            {
+            if !projection.object_x_pt.is_finite() || !projection.baseline_y_pt.is_finite() {
                 return Err(PageGlyphError::InvalidLineGeometry);
             }
             append_math_items(
                 &layout.items,
                 text_layouts,
                 MathItemHost {
-                    paragraph_id: &fragment.math_id,
+                    paragraph_id: &projection.math_id,
                     line_index: 0,
                     line_clip_y_pt: projection.drawing_clip(),
+                    line_clip_x_pt: projection.clip_x_pt,
                     row_clips: &layout.row_clips,
-                    object_x_pt,
-                    baseline_y_pt,
-                },
-                MathItemOutput {
-                    runs: &mut runs,
-                    decorations: &mut decorations,
-                    shapes: &mut shapes,
-                },
-                &mut next_paint_order,
-            )?;
-        }
-        for placement in &page.table_math_placements {
-            let layout = self
-                .math_blocks
-                .get(&placement.math_id)
-                .ok_or(PageGlyphError::MissingMathBlock)?;
-            let text_layouts = self
-                .math_text_layouts_for_block(&placement.math_id)
-                .ok_or(PageGlyphError::MissingMathBlock)?;
-            let projection = self
-                .math_projection(page_index, &placement.math_id)
-                .ok_or(PageGlyphError::MissingMathBlock)?;
-            if !placement.object_x_pt.is_finite() || !placement.baseline_y_pt.is_finite() {
-                return Err(PageGlyphError::InvalidLineGeometry);
-            }
-            append_math_items(
-                &layout.items,
-                text_layouts,
-                MathItemHost {
-                    paragraph_id: &placement.math_id,
-                    line_index: 0,
-                    line_clip_y_pt: projection.drawing_clip(),
-                    row_clips: &layout.row_clips,
-                    object_x_pt: placement.object_x_pt,
-                    baseline_y_pt: placement.baseline_y_pt,
+                    object_x_pt: projection.object_x_pt,
+                    baseline_y_pt: projection.baseline_y_pt,
                 },
                 MathItemOutput {
                     runs: &mut runs,
@@ -530,6 +518,7 @@ struct MathItemHost<'a> {
     paragraph_id: &'a NodeId,
     line_index: usize,
     line_clip_y_pt: Option<[f64; 2]>,
+    line_clip_x_pt: Option<[f64; 2]>,
     row_clips: &'a [caret_math::layout::MathRowClip],
     object_x_pt: f64,
     baseline_y_pt: f64,
@@ -539,6 +528,12 @@ struct MathItemOutput<'a> {
     runs: &'a mut Vec<PageGlyphRun>,
     decorations: &'a mut Vec<PageGlyphDecoration>,
     shapes: &'a mut Vec<PageMathShape>,
+}
+
+fn intersect_line_clip(existing: Option<[f64; 2]>, next: [f64; 2]) -> [f64; 2] {
+    existing.map_or(next, |[top, bottom]| {
+        [top.max(next[0]), bottom.min(next[1])]
+    })
 }
 
 fn append_math_items(
@@ -559,11 +554,12 @@ fn append_math_items(
                 host.baseline_y_pt + row_clip.y0,
                 host.baseline_y_pt + row_clip.y1,
             ];
-            line_clip_y_pt = Some(match line_clip_y_pt {
-                Some(existing) => [existing[0].max(clip[0]), existing[1].min(clip[1])],
-                None => clip,
-            });
+            line_clip_y_pt = Some(intersect_line_clip(line_clip_y_pt, clip));
         }
+        if line_clip_y_pt.is_some_and(|[top, bottom]| top >= bottom) {
+            continue;
+        }
+        let line_clip_x_pt = host.line_clip_x_pt;
         let color_bytes = |color: Option<caret_math::layout::MathColor>| {
             color.map(|color| [color.red, color.green, color.blue, color.alpha])
         };
@@ -590,6 +586,7 @@ fn append_math_items(
                     paragraph_id: host.paragraph_id.clone(),
                     line_index: host.line_index,
                     line_clip_y_pt,
+                    line_clip_x_pt,
                     font: math_font_data(),
                     font_size_pt,
                     normalized_coords: Vec::new(),
@@ -629,6 +626,7 @@ fn append_math_items(
                     height_pt: *height,
                     color: color_bytes(*color),
                     line_clip_y_pt,
+                    line_clip_x_pt,
                 });
                 *next_paint_order += 1;
             }
@@ -664,6 +662,7 @@ fn append_math_items(
                     stroke: color_bytes(*color),
                     stroke_width_pt: *thickness,
                     line_clip_y_pt,
+                    line_clip_x_pt,
                 });
                 *next_paint_order += 1;
             }
@@ -702,6 +701,7 @@ fn append_math_items(
                     stroke: color_bytes(*stroke),
                     stroke_width_pt: *stroke_width,
                     line_clip_y_pt,
+                    line_clip_x_pt,
                 });
                 *next_paint_order += 1;
             }
@@ -774,6 +774,7 @@ fn append_math_items(
                                             .then_some(decoration.brush)
                                     }),
                                     line_clip_y_pt,
+                                    line_clip_x_pt,
                                 });
                                 *next_paint_order += 1;
                             }
@@ -787,6 +788,7 @@ fn append_math_items(
                                 paragraph_id: host.paragraph_id,
                                 line_index: host.line_index,
                                 line_clip_y_pt,
+                                line_clip_x_pt,
                                 foreground,
                             },
                         )? {
@@ -808,10 +810,10 @@ struct PageGlyphRunOrigin<'a> {
     paragraph_id: &'a NodeId,
     line_index: usize,
     line_clip_y_pt: Option<[f64; 2]>,
+    line_clip_x_pt: Option<[f64; 2]>,
     foreground: Option<[u8; 4]>,
 }
 
-/// 将正文或数学文本岛的同类 Parley glyph run 转为页面快照。
 // v1 表格边框使用中性灰，在浅色与深色纸张上都可见；主题化边框属后续切片。
 const TABLE_BORDER_COLOR: [u8; 4] = [112, 112, 112, 255];
 const TABLE_BORDER_WIDTH_PT: f64 = 0.5;
@@ -829,21 +831,15 @@ fn append_table_borders(
         let grid = table_layouts
             .get(&fragment.table_id)
             .ok_or(PageGlyphError::InvalidLineGeometry)?;
-        let Some(first_row) = grid.rows.get(fragment.row_range.start) else {
-            return Err(PageGlyphError::InvalidLineGeometry);
-        };
-        let Some(last_row) = grid.rows.get(fragment.row_range.end.saturating_sub(1)) else {
-            return Err(PageGlyphError::InvalidLineGeometry);
-        };
-        if fragment.row_range.start >= fragment.row_range.end {
-            return Err(PageGlyphError::InvalidLineGeometry);
-        }
+        let [top, bottom] = grid
+            .row_rule_bounds_pt(fragment.row_range.clone())
+            .ok_or(PageGlyphError::InvalidLineGeometry)?;
         let origin_x_pt = page.margin_left_pt + f64::from(fragment.x_offset_pt);
         let origin_y_pt = page.margin_top_pt + f64::from(fragment.y_offset_pt);
         let x0_pt = origin_x_pt;
         let x1_pt = origin_x_pt + grid.width_pt;
-        let y0_pt = origin_y_pt + first_row.top_pt;
-        let y1_pt = origin_y_pt + last_row.top_pt + last_row.height_pt;
+        let y0_pt = origin_y_pt + top;
+        let y1_pt = origin_y_pt + bottom;
         if !x0_pt.is_finite()
             || !x1_pt.is_finite()
             || !y0_pt.is_finite()
@@ -866,6 +862,7 @@ fn append_table_borders(
                 stroke: Some(TABLE_BORDER_COLOR),
                 stroke_width_pt: TABLE_BORDER_WIDTH_PT,
                 line_clip_y_pt: None,
+                line_clip_x_pt: None,
             });
             *next_paint_order += 1;
         };
@@ -882,6 +879,7 @@ fn append_table_borders(
     Ok(())
 }
 
+/// 将正文或数学文本岛的 Parley glyph run 转为页面快照。
 fn page_run_from_positioned_glyphs(
     item: &PositionedGlyphLayoutItem<'_, [u8; 4]>,
     origin: PageGlyphRunOrigin<'_>,
@@ -917,6 +915,7 @@ fn page_run_from_positioned_glyphs(
         paragraph_id: origin.paragraph_id.clone(),
         line_index: origin.line_index,
         line_clip_y_pt: origin.line_clip_y_pt,
+        line_clip_x_pt: origin.line_clip_x_pt,
         font: run.font().clone(),
         font_size_pt,
         normalized_coords: run

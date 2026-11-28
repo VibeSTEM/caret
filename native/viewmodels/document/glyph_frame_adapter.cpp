@@ -30,10 +30,15 @@ namespace {
 
 /// canvas 侧的 `glyph_frame_wire` 校验刻意与这里保留两份：caret_viewmodels 与
 /// caret_canvas 是互不链接的 N2 target，这里校验 Rust FFI 结构体，canvas 校验
-/// QVariant 线格式，信任边界与输入域不同；但行级裁剪范围规则必须保持一致。
-bool valid_clip_fields(bool clip_enabled, double clip_y0_pt, double clip_y1_pt) {
-    return !clip_enabled || (std::isfinite(clip_y0_pt) && std::isfinite(clip_y1_pt) &&
-                             clip_y0_pt >= 0.0 && clip_y1_pt > clip_y0_pt);
+/// QVariant 线格式，信任边界与输入域不同；但字形 x/y 裁剪范围规则必须保持一致。
+bool valid_clip_fields(bool clip_enabled, double clip_y0_pt, double clip_y1_pt, bool clip_x_enabled,
+                       double clip_x0_pt, double clip_x1_pt) {
+    const bool valid_y = !clip_enabled || (std::isfinite(clip_y0_pt) && std::isfinite(clip_y1_pt) &&
+                                           clip_y0_pt >= 0.0 && clip_y1_pt > clip_y0_pt);
+    const bool valid_x =
+        !clip_x_enabled || (std::isfinite(clip_x0_pt) && std::isfinite(clip_x1_pt) &&
+                            clip_x0_pt >= 0.0 && clip_x1_pt > clip_x0_pt);
+    return valid_x && valid_y;
 }
 
 } // namespace
@@ -86,8 +91,9 @@ QVariantMap glyph_frame_adapter::to_variant_map(const ffi::PageGlyphFrame& frame
             !std::isfinite(placement.pixel_phase_y) || placement.pixel_phase_x < 0.0F ||
             placement.pixel_phase_x >= 1.0F || placement.pixel_phase_y < 0.0F ||
             placement.pixel_phase_y >= 1.0F ||
-            !valid_clip_fields(placement.clip_enabled, placement.clip_y0_pt,
-                               placement.clip_y1_pt)) {
+            !valid_clip_fields(placement.clip_enabled, placement.clip_y0_pt, placement.clip_y1_pt,
+                               placement.clip_x_enabled, placement.clip_x0_pt,
+                               placement.clip_x1_pt)) {
             return {{QStringLiteral("valid"), false},
                     {QStringLiteral("error"), QStringLiteral("layout.glyphs_invalid_placement")}};
         }
@@ -103,6 +109,9 @@ QVariantMap glyph_frame_adapter::to_variant_map(const ffi::PageGlyphFrame& frame
             {QStringLiteral("clipEnabled"), placement.clip_enabled},
             {QStringLiteral("clipY0Pt"), placement.clip_y0_pt},
             {QStringLiteral("clipY1Pt"), placement.clip_y1_pt},
+            {QStringLiteral("clipXEnabled"), placement.clip_x_enabled},
+            {QStringLiteral("clipX0Pt"), placement.clip_x0_pt},
+            {QStringLiteral("clipX1Pt"), placement.clip_x1_pt},
         });
     }
     QVariantList decorations;
@@ -112,7 +121,8 @@ QVariantMap glyph_frame_adapter::to_variant_map(const ffi::PageGlyphFrame& frame
             !std::isfinite(decoration.width_pt) || !std::isfinite(decoration.height_pt) ||
             decoration.width_pt <= 0.0 || decoration.height_pt <= 0.0 ||
             !valid_clip_fields(decoration.clip_enabled, decoration.clip_y0_pt,
-                               decoration.clip_y1_pt)) {
+                               decoration.clip_y1_pt, decoration.clip_x_enabled,
+                               decoration.clip_x0_pt, decoration.clip_x1_pt)) {
             return {{QStringLiteral("valid"), false},
                     {QStringLiteral("error"), QStringLiteral("layout.glyphs_invalid_decoration")}};
         }
@@ -129,6 +139,9 @@ QVariantMap glyph_frame_adapter::to_variant_map(const ffi::PageGlyphFrame& frame
             {QStringLiteral("clipEnabled"), decoration.clip_enabled},
             {QStringLiteral("clipY0Pt"), decoration.clip_y0_pt},
             {QStringLiteral("clipY1Pt"), decoration.clip_y1_pt},
+            {QStringLiteral("clipXEnabled"), decoration.clip_x_enabled},
+            {QStringLiteral("clipX0Pt"), decoration.clip_x0_pt},
+            {QStringLiteral("clipX1Pt"), decoration.clip_x1_pt},
         });
     }
     QVariantList shapes;
@@ -141,7 +154,8 @@ QVariantMap glyph_frame_adapter::to_variant_map(const ffi::PageGlyphFrame& frame
             (shape.kind == 1 && (shape.width_pt <= 0.0 || shape.height_pt <= 0.0)) ||
             !std::isfinite(shape.x_pt) || !std::isfinite(shape.y_pt) ||
             !std::isfinite(shape.dx_pt) || !std::isfinite(shape.dy_pt) ||
-            !valid_clip_fields(shape.clip_enabled, shape.clip_y0_pt, shape.clip_y1_pt)) {
+            !valid_clip_fields(shape.clip_enabled, shape.clip_y0_pt, shape.clip_y1_pt,
+                               shape.clip_x_enabled, shape.clip_x0_pt, shape.clip_x1_pt)) {
             return {{QStringLiteral("valid"), false},
                     {QStringLiteral("error"), QStringLiteral("layout.glyphs_invalid_shape")}};
         }
@@ -168,6 +182,9 @@ QVariantMap glyph_frame_adapter::to_variant_map(const ffi::PageGlyphFrame& frame
             {QStringLiteral("clipEnabled"), shape.clip_enabled},
             {QStringLiteral("clipY0Pt"), shape.clip_y0_pt},
             {QStringLiteral("clipY1Pt"), shape.clip_y1_pt},
+            {QStringLiteral("clipXEnabled"), shape.clip_x_enabled},
+            {QStringLiteral("clipX0Pt"), shape.clip_x0_pt},
+            {QStringLiteral("clipX1Pt"), shape.clip_x1_pt},
         });
     }
     return {{QStringLiteral("valid"), true},

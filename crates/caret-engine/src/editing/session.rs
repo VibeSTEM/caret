@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
+mod block_navigation;
 mod block_rows;
 mod checkpoint;
 mod clipboard;
@@ -94,7 +95,7 @@ pub struct Session {
     math_edit: Option<MathEdit>,
     host_caret_position: Option<HostCaretPosition<Pos>>,
     selected_block_environments: Vec<NodeId>,
-    selected_math_blocks: Vec<NodeId>,
+    selected_atomic_blocks: Vec<NodeId>,
     structure_selection: Option<StructureSelection>,
     last_committed_composition: Option<u64>,
     text_map_cache: VecDeque<(NodeId, StoryId, TextMap)>,
@@ -122,7 +123,7 @@ impl Session {
             math_edit: self.math_edit.clone(),
             host_caret_position: self.host_caret_position.clone(),
             selected_block_environments: self.selected_block_environments.clone(),
-            selected_math_blocks: self.selected_math_blocks.clone(),
+            selected_atomic_blocks: self.selected_atomic_blocks.clone(),
             structure_selection: self.structure_selection.clone(),
             last_committed_composition: self.last_committed_composition,
             text_map_cache: self.text_map_cache.clone(),
@@ -167,7 +168,7 @@ impl Session {
             math_edit: None,
             host_caret_position: None,
             selected_block_environments: Vec::new(),
-            selected_math_blocks: Vec::new(),
+            selected_atomic_blocks: Vec::new(),
             structure_selection: None,
             last_committed_composition: None,
             text_map_cache: VecDeque::new(),
@@ -495,7 +496,9 @@ impl Session {
                 | HostCaretPosition::After {
                     host_id,
                     kind: HostCaretKind::Block,
-                } if math_edit::find_block_path(&self.document.body, host_id).is_some() => {
+                } if block_navigation::find_block_container_path(&self.document.body, host_id)
+                    .is_some() =>
+                {
                     return Some(match &position {
                         HostCaretPosition::Before { .. } => HostCaretPosition::Before {
                             host_id: host_id.clone(),
@@ -675,6 +678,7 @@ impl Session {
                     entry.kind,
                     caret_structure::StructureKind::Section
                         | caret_structure::StructureKind::Custom
+                        | caret_structure::StructureKind::Table
                 )
             })
             .map(|entry| HostCaretPosition::Inside {
@@ -694,9 +698,9 @@ impl Session {
         &self.selected_block_environments
     }
 
-    /// 返回当前结构选区覆盖的 Equation/Align 块，按文档顺序排列。
-    pub fn selected_math_blocks(&self) -> &[NodeId] {
-        &self.selected_math_blocks
+    /// 返回当前结构选区覆盖的原子块，按文档顺序排列。
+    pub fn selected_atomic_blocks(&self) -> &[NodeId] {
+        &self.selected_atomic_blocks
     }
 
     /// 当前是否存在结构选区；包含两端为块外侧边界的范围。
@@ -734,10 +738,51 @@ impl Session {
             .map(|selection| (&selection.anchor, &selection.focus))
     }
 
+    /// 以指针命中的文档级端点安装结构范围，并在成功时原子取消预编辑。
+    ///
+    /// 失败会保留原范围与预编辑；端点须有效且覆盖至少一个可选结构块。
+    pub fn set_pointer_structure_selection(
+        &mut self,
+        selection: StructureSelection,
+        anchor_visual_affinity: VisualAffinity,
+        focus_visual_affinity: VisualAffinity,
+    ) -> Result<Effect, EditError> {
+        if let Some(id) = self.composition.as_ref().map(|composition| composition.id) {
+            let mut candidate = self.clone_preserving_identity();
+            let cancel = candidate.cancel_composition(id)?;
+            let mut effect = candidate.set_pointer_structure_selection(
+                selection,
+                anchor_visual_affinity,
+                focus_visual_affinity,
+            )?;
+            effect.composition_changed |= cancel.composition_changed;
+            *self = candidate;
+            return Ok(effect);
+        }
+        self.ensure_math_edit_revision_current()?;
+        if self.has_uncommitted_math_source_draft() {
+            return Err(EditError::InvalidMath(
+                "resolve or cancel the incomplete math source draft before dragging a selection"
+                    .to_owned(),
+            ));
+        }
+        self.install_structure_selection(selection)?;
+        self.clear_math_edit();
+        self.clear_host_caret_position();
+        self.selection_anchor_visual_affinity = anchor_visual_affinity;
+        self.selection_visual_affinity = focus_visual_affinity;
+        self.pending_inline_style.clear();
+        self.advance_history_merge_epoch();
+        Ok(Effect {
+            selection_changed: true,
+            ..Effect::default()
+        })
+    }
+
     /// 清除结构选区及其派生列表；单值选择从多值派生，不单独维护。
     pub(super) fn clear_structure_selection_state(&mut self) {
         self.selected_block_environments.clear();
-        self.selected_math_blocks.clear();
+        self.selected_atomic_blocks.clear();
         self.structure_selection = None;
     }
 
@@ -785,7 +830,7 @@ impl Session {
         math_blocks: Vec<NodeId>,
     ) {
         self.selected_block_environments = environments;
-        self.selected_math_blocks = math_blocks;
+        self.selected_atomic_blocks = math_blocks;
         self.structure_selection = Some(selection);
     }
 
@@ -824,12 +869,12 @@ impl Session {
         };
         let previous_selection = self.structure_selection.clone();
         let previous_environments = self.selected_block_environments.clone();
-        let previous_math_blocks = self.selected_math_blocks.clone();
+        let previous_math_blocks = self.selected_atomic_blocks.clone();
         // 目标与范围均有效后，才切换离开公式编辑状态。
         self.install_structure_selection(selection)?;
         let changed = self.structure_selection != previous_selection
             || self.selected_block_environments != previous_environments
-            || self.selected_math_blocks != previous_math_blocks;
+            || self.selected_atomic_blocks != previous_math_blocks;
         self.clear_math_edit();
         self.clear_host_caret_position();
         Ok(Effect {
@@ -1136,10 +1181,12 @@ impl Session {
                 _ => {}
             }
         }
-        // IME 预览不改变文档，必须保留结构范围供最终 CommitComposition 作为一次替换消费。
+        // IME 提交和逐级扩选都依赖当前结构范围。
         if !matches!(
             &command,
-            Command::SetSelection(_) | Command::UpdateComposition { .. }
+            Command::SetSelection(_)
+                | Command::UpdateComposition { .. }
+                | Command::ExpandStructureSelection
         ) {
             self.clear_structure_selection_state();
         }
@@ -1600,7 +1647,9 @@ impl Session {
                     host_id,
                     kind: HostCaretKind::Block,
                 } => {
-                    if math_edit::find_block_path(&next_document.body, host_id).is_none() {
+                    if block_navigation::find_block_container_path(&next_document.body, host_id)
+                        .is_none()
+                    {
                         return Err(EditError::InvalidPosition);
                     }
                 }

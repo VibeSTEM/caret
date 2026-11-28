@@ -1,9 +1,9 @@
 # 084 — 行内与数学内容形状及容器边界
 
-- 状态：planned
+- 状态：implemented
 - 依赖：025、032、081、082
 - 优先级：P1
-- 创建 / 更新：2026-11-10 / 2026-11-10
+- 创建 / 更新：2026-11-10 / 2026-11-28
 
 ## 目标与背景
 
@@ -50,22 +50,22 @@
 
 ## 验收标准
 
-- [ ] 对 TextFlow、Run、InlineEnvironment 和 MathFlow，允许树形与等价条件可由模型文档直接判定，不依赖命令历史猜测。
-- [ ] 合并/规范化不得丢文字、ID、属性、扩展数据、选区方向或 Undo/Redo 信息；无法证明安全时完整拒绝并保持状态。
-- [ ] 数学根流、必需槽、可选槽和 Placeholder 的空态语义各自明确；只合并经过证明等价的形状。
-- [ ] Body、Align rows/cells、Section/Custom children 等容器的最小数量逐类定义；允许空态时可经稳定边界进入或创建内容，不产生无法编辑的伪内部位置，否则返回明确错误。
-- [ ] 等价树形经不同合法编辑历史后，方向键、选择、输入、退格和删除不会多出重复停靠或改变按键步数；不要求其持久化树逐字段一致。
-- [ ] 读、规范化、保存、失败、撤销和重做路径有固定夹具与行为覆盖；所有未实现外部验收明确标记。
-- [ ] 权威架构文档只保留最终规则；验证与独立评审按仓库标准通过。
+- [x] [文档树](../architecture/editor/document-model/document-structure.md#内容形状与空容器)定义 TextFlow、Run、InlineEnvironment 和 MathFlow 的合法形状与等价判定。
+- [x] 打开和保存保留合法树及身份。局部编辑按既定归并规则处理文本，回归比较完整文档、方向与 Undo/Redo 状态。
+- [x] 数学根流、必需槽、可选槽及 Placeholder 按各自空态契约编辑。两种可入的空显示公式根均保留身份和历史。
+- [x] Body、Align rows/cells、Section/Custom children 和 Table cell blocks 的最小数量与编辑入口逐类记录。缺少必要编辑落点时有明确错误。
+- [x] 逻辑字素的导航和编辑结果与 Run 或 TextFlow 拆分无关。带语义身份的包装保留单独的交互边界。
+- [x] 持久化、编辑、校验失败与撤销重做由固定夹具和文档模型回归覆盖。
+- [x] 权威架构文档只保留最终规则；验证与独立评审按仓库标准通过。
 
 ## 验证计划与结果
 
 | 日期 | 环境 / 命令 | 预期 | 实际结果 |
 | --- | --- | --- | --- |
-| — | `caret-doc` 内容形状/反序列化夹具 | 合法形状无损保留或按契约规范化，非法形状明确拒绝 | 未执行 |
-| — | `caret-engine` 三态导航、格式树与 Undo/Redo 测试 | 等价树不改变可达 caret 步数 | 未执行 |
-| — | `cargo format --check`、`cargo lint --check`、相关 crate 测试 | 代码、分层和跨层消费者一致 | 未执行 |
-| — | Terra/medium 与 Sol/medium 独立评审 | 形状、身份与空态规则没有遗漏 | 未执行 |
+| 2026-11-28 | `caret-doc` 的 `.cdoc` 内容形状回归 | 合法形状和身份往返 | 通过。覆盖相邻 TextFlow、默认与带语言的空 Run、空环境、空 MathFlow、显式 Placeholder 和缺少行或 cell 的 Align。 |
+| 2026-11-28 | `caret-engine` 字素、格式和数学宿主回归 | 等价文本不增加停靠，输入和历史保留身份 | 通过。正文矩阵测试跨 Run 与跨 TextFlow 的组合附标、中插继承 underline、反向范围及完整文档和选区 Undo/Redo。空 Equation/Align cell 的根流和显式 Placeholder 可进入并输入，根 ID 保留。 |
+| 2026-11-28 | `cargo format --check`、`cargo lint --check`、`cargo test --locked --offline --workspace` | 代码、分层和跨层消费者一致 | 通过。完整 lint 9/9，workspace 2126 项通过、1 项忽略，原生 CTest 20/20。 |
+| 2026-11-28 | Terra/medium 与 Sol/medium 独立评审 | 形状、身份与空态规则没有遗漏 | 通过。复核真实 `.cdoc` 形状往返、字素停靠及空公式根进入和历史恢复。 |
 
 ## 风险与回退
 
@@ -75,6 +75,8 @@
 
 - 2026-11-10：从 Issue #129 的规范形、空公式槽和空容器发现拆分；拒绝把视觉为空直接当成可合并，也不向已完成的 021 追加工作。
 
+- 2026-11-28：默认空 Run 原先会切断前后同属性范围，导致逻辑光标在同一位置重复停靠。属性范围收集现在跳过完全默认的空 Run，保留持久化形状和带元数据的运行项。容器最小值、存储空态与编辑入口分别记录在[文档树](../architecture/editor/document-model/document-structure.md#内容形状与空容器)。
+
 ## 完成摘要
 
-未完成。
+已记录内容形状与容器的存储、编辑边界。不同合法文本形状使用同一字素导航，空公式流和显式占位符分别保持身份及历史。最终验证与本轮外部合入状态见 [106](106-table-shared-host-interaction.md#brooks-health-后续优化)。

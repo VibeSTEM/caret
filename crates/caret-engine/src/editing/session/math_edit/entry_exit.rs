@@ -164,32 +164,6 @@ impl Session {
         }
     }
 
-    /// 连续显示公式之间按块顺序移动公式焦点，不经过旧正文选区。
-    fn math_edit_beside_block(
-        &mut self,
-        block_id: &NodeId,
-        direction: Direction,
-    ) -> Result<Option<MathEdit>, EditError> {
-        let Some((container, index)) = find_block_container_path(&self.document.body, block_id)
-        else {
-            return Err(EditError::InvalidPosition);
-        };
-        let neighbour = match direction {
-            Direction::Forward => index.checked_add(1),
-            Direction::Backward => index.checked_sub(1),
-        };
-        let Some(neighbour) = neighbour else {
-            return Ok(None);
-        };
-        let Some(block) = caret_structure::block_list_by_container(&self.document.body, &container)
-            .ok_or(EditError::InvalidPosition)?
-            .get(neighbour)
-        else {
-            return Ok(None);
-        };
-        self.math_edit_for_block(block, direction)
-    }
-
     pub(in crate::editing::session) fn math_edit_at_block(
         &self,
         block_id: &NodeId,
@@ -206,181 +180,6 @@ impl Session {
             return Err(EditError::InvalidPosition);
         };
         self.math_edit_for_block(block, entry_direction)
-    }
-
-    /// 统一仲裁数学块外侧停靠点的反向重入与同向越过。
-    pub(in crate::editing::session) fn move_from_math_block_boundary_stop(
-        &mut self,
-        direction: Direction,
-    ) -> Result<Option<Effect>, EditError> {
-        let Some(position) = self.host_caret_position.clone() else {
-            return Ok(None);
-        };
-        if position.kind() != HostCaretKind::Block {
-            return Ok(None);
-        }
-        let Some((block_id, exit_direction)) = position.as_outside() else {
-            return Ok(None);
-        };
-        let entry_direction = match exit_direction {
-            Direction::Backward => Direction::Forward,
-            Direction::Forward => Direction::Backward,
-        };
-        let transition =
-            position.horizontal_transition(direction == Direction::Forward, false, false);
-        let Some(target_edit) = self.math_edit_at_block(block_id, entry_direction)? else {
-            return Ok(None);
-        };
-        if matches!(
-            transition,
-            HostCaretTransition::EnterStart | HostCaretTransition::EnterEnd
-        ) {
-            self.clear_host_caret_position();
-            self.set_math_edit(Some(target_edit));
-            self.advance_history_merge_epoch();
-            return Ok(Some(Effect {
-                selection_changed: true,
-                ..Effect::default()
-            }));
-        }
-
-        let next_edit = self.math_edit_beside_block(block_id, direction)?;
-        if let Some(next_edit) = next_edit {
-            self.set_math_edit(Some(next_edit));
-            self.clear_host_caret_position();
-            self.advance_history_merge_epoch();
-            return Ok(Some(Effect {
-                selection_changed: true,
-                ..Effect::default()
-            }));
-        }
-        if let Some(position) = self.environment_beside_block(block_id, direction)? {
-            self.set_math_exit_selection(position);
-            self.clear_host_caret_position();
-            self.advance_history_merge_epoch();
-            return Ok(Some(Effect {
-                selection_changed: true,
-                ..Effect::default()
-            }));
-        }
-        if let Some(position) = self.paragraph_beside_block(block_id, direction)? {
-            let empty_inline_host = self
-                .text_map_for(&position)?
-                .empty_inline_environment_stack_at(position.offset, position.affinity)
-                .last()
-                .and_then(|span| span.id.clone());
-            let visual_affinity = match position.affinity {
-                Affinity::Upstream => VisualAffinity::Upstream,
-                Affinity::Downstream => VisualAffinity::Downstream,
-            };
-            self.selection = Selection {
-                anchor: position.clone(),
-                focus: position.clone(),
-            };
-            self.selection_visual_affinity = visual_affinity;
-            self.set_host_caret_position(empty_inline_host.map(
-                |host_id| match position.affinity {
-                    Affinity::Upstream => HostCaretPosition::Before {
-                        host_id,
-                        kind: HostCaretKind::Inline,
-                    },
-                    Affinity::Downstream => HostCaretPosition::After {
-                        host_id,
-                        kind: HostCaretKind::Inline,
-                    },
-                },
-            ));
-            self.advance_history_merge_epoch();
-            return Ok(Some(Effect {
-                selection_changed: true,
-                ..Effect::default()
-            }));
-        }
-        Ok(Some(Effect::default()))
-    }
-
-    /// 紧邻块环境在方向上的可编辑入口；没有内部段落的空环境返回 `None`。
-    ///
-    /// 复杂块逐块移动时，公式外侧停靠不能跳过相邻环境直接落到后面的段落：前进取
-    /// 环境标题起点（无标题取首个后代段落起点），后退取最后一个后代段落终点
-    /// （无子项取标题终点）。
-    fn environment_beside_block(
-        &self,
-        block_id: &NodeId,
-        direction: Direction,
-    ) -> Result<Option<Pos>, EditError> {
-        let (container, sibling_index) = find_block_container_path(&self.document.body, block_id)
-            .ok_or(EditError::InvalidPosition)?;
-        let siblings = caret_structure::block_list_by_container(&self.document.body, &container)
-            .ok_or(EditError::InvalidPosition)?;
-        let neighbour = match direction {
-            Direction::Forward => sibling_index.checked_add(1),
-            Direction::Backward => sibling_index.checked_sub(1),
-        };
-        let Some(Block::Environment(environment)) = neighbour.and_then(|index| siblings.get(index))
-        else {
-            return Ok(None);
-        };
-        Ok(block_environment_entry(environment, direction))
-    }
-
-    /// 从非文本/块外侧焦点消费紧邻复杂单元。
-    ///
-    /// 公式对象先停到对应外侧边界，下一次按键再进入 MathEdit；块环境直接进入其
-    /// 方向入口（标题起点/最后后代段落终点）。返回 false 表示无法定位入口，由
-    /// 调用方保持原有候选路径。
-    pub(in crate::editing::session) fn stop_or_enter_adjacent_complex_unit(
-        &mut self,
-        unit: &AdjacentComplexUnit,
-        direction: Direction,
-    ) -> Result<bool, EditError> {
-        match unit {
-            AdjacentComplexUnit::Math { block_id } => {
-                let opposite = match direction {
-                    Direction::Backward => Direction::Forward,
-                    Direction::Forward => Direction::Backward,
-                };
-                // 与其它块外侧停靠路径一致：落点、双侧可视亲和性与共享宿主一起写入；
-                // 只写 host 会让 IME/绘制与 selection 折叠位置不同步。极端形态下
-                // 找不到同侧文本落点时保持原候选路径，不把导航按键升级为错误。
-                let Ok((caret, host)) = self.park_beside_block_host(block_id, opposite) else {
-                    return Ok(false);
-                };
-                let visual_affinity = visual_affinity_for_block_edge(opposite);
-                self.selection = Selection {
-                    anchor: caret.clone(),
-                    focus: caret,
-                };
-                self.selection_visual_affinity = visual_affinity;
-                self.selection_anchor_visual_affinity = visual_affinity;
-                self.set_host_caret_position(Some(host));
-                self.advance_history_merge_epoch();
-                Ok(true)
-            }
-            AdjacentComplexUnit::Environment { environment_id } => {
-                let Some((container, index)) =
-                    find_block_container_path(&self.document.body, environment_id)
-                else {
-                    return Ok(false);
-                };
-                let siblings =
-                    caret_structure::block_list_by_container(&self.document.body, &container)
-                        .ok_or(EditError::InvalidPosition)?;
-                let Some(Block::Environment(environment)) = siblings.get(index) else {
-                    return Ok(false);
-                };
-                let Some(position) = block_environment_entry(environment, direction) else {
-                    return Ok(false);
-                };
-                if position == self.selection.focus {
-                    return Ok(false);
-                }
-                self.set_math_exit_selection(position);
-                self.clear_host_caret_position();
-                self.advance_history_merge_epoch();
-                Ok(true)
-            }
-        }
     }
 
     fn math_edit_for_block(
@@ -441,39 +240,6 @@ impl Session {
             branch,
             self.current_math_edit_revision(),
         )))
-    }
-
-    /// 块公式前（向后）或后（向前）的同级正文段落边缘。
-    pub(in crate::editing::session) fn paragraph_beside_block(
-        &self,
-        block_id: &NodeId,
-        direction: Direction,
-    ) -> Result<Option<Pos>, EditError> {
-        let (container, index) = find_block_container_path(&self.document.body, block_id)
-            .ok_or(EditError::InvalidPosition)?;
-        let siblings = caret_structure::block_list_by_container(&self.document.body, &container)
-            .ok_or(EditError::InvalidPosition)?;
-        let neighbour = match direction {
-            Direction::Forward => index.checked_add(1),
-            Direction::Backward => index.checked_sub(1),
-        };
-        let Some(Block::Paragraph(paragraph)) = neighbour.and_then(|index| siblings.get(index))
-        else {
-            return Ok(None);
-        };
-        let offset = match direction {
-            Direction::Forward => 0,
-            Direction::Backward => TextMap::new(paragraph)?.text.len(),
-        };
-        Ok(Some(Pos {
-            story: paragraph_ops::story_for_container(&container),
-            paragraph_id: paragraph.id.clone(),
-            offset,
-            affinity: match direction {
-                Direction::Forward => Affinity::Upstream,
-                Direction::Backward => Affinity::Downstream,
-            },
-        }))
     }
 }
 
@@ -877,7 +643,7 @@ impl Session {
             }
             return Ok(None);
         }
-        if current.story != StoryId::Body || target.story != StoryId::Body {
+        if current.story != target.story {
             return Ok(None);
         }
 
@@ -928,42 +694,17 @@ impl Session {
         Ok(Some(direction))
     }
 
-    /// 返回当前停靠点关联的公式块，供 app 在生成视觉导航候选前委托 Session 仲裁。
-    pub fn math_block_boundary_exit(&self) -> Option<(NodeId, Direction)> {
-        let position = self.host_caret_position.as_ref()?;
-        if position.kind() != HostCaretKind::Block {
-            return None;
-        }
-        let (block_id, direction) = position.as_outside()?;
-        let (container, index) = find_block_container_path(&self.document.body, block_id)?;
-        matches!(
-            caret_structure::block_list_by_container(&self.document.body, &container)?.get(index),
-            Some(Block::Equation(_) | Block::Align(_))
-        )
-        .then(|| (block_id.clone(), direction))
-    }
-
     /// 仅当当前正文焦点紧邻受支持的公式对象时进入该公式。
     pub(in crate::editing::session) fn enter_adjacent_math_if_present(
         &mut self,
         direction: Direction,
     ) -> Result<bool, EditError> {
-        self.enter_adjacent_math_with_inline(direction, true, true, true)
+        self.enter_adjacent_math(direction, true)
     }
 
-    /// 仅当正文焦点位于文档块边界且相邻块是显示公式时进入该公式。
-    pub(in crate::editing::session) fn enter_adjacent_block_math_if_present(
+    fn enter_adjacent_math(
         &mut self,
         direction: Direction,
-    ) -> Result<bool, EditError> {
-        self.enter_adjacent_math_with_inline(direction, false, false, true)
-    }
-
-    fn enter_adjacent_math_with_inline(
-        &mut self,
-        direction: Direction,
-        include_inline: bool,
-        require_text_edge: bool,
         stop_before_entering: bool,
     ) -> Result<bool, EditError> {
         if self.selection.anchor != self.selection.focus
@@ -978,7 +719,6 @@ impl Session {
         let paragraph = self.paragraph_for(&focus)?;
         let object_len = OBJECT_REPLACEMENT.len_utf8();
         if self.block_boundary_exit().is_none()
-            && include_inline
             && inline_math_slots(paragraph)?
                 .iter()
                 .any(|(start, _)| match direction {
@@ -986,15 +726,14 @@ impl Session {
                     Direction::Backward => start + object_len == focus.offset,
                 })
         {
-            self.enter_math_with_constraints(direction, true, true)?;
+            self.enter_math_at_text_edge(direction)?;
             return Ok(self.math_edit.is_some());
         }
-        let at_edge = !require_text_edge
-            || match direction {
-                Direction::Forward => focus.offset == TextMap::new(paragraph)?.text.len(),
-                Direction::Backward => focus.offset == 0,
-            };
-        if !at_edge || focus.story != StoryId::Body {
+        let at_edge = match direction {
+            Direction::Forward => focus.offset == TextMap::new(paragraph)?.text.len(),
+            Direction::Backward => focus.offset == 0,
+        };
+        if !at_edge {
             return Ok(false);
         }
         let Some(location) = self.paragraph_index.get(&focus.paragraph_id) else {
@@ -1105,21 +844,16 @@ impl Session {
                 ..Effect::default()
             });
         }
-        if self.enter_adjacent_math_with_inline(direction, true, true, false)? {
+        if self.enter_adjacent_math(direction, false)? {
             return Ok(Effect {
                 selection_changed: true,
                 ..Effect::default()
             });
         }
-        self.enter_math_with_constraints(direction, true, true)
+        self.enter_math_at_text_edge(direction)
     }
 
-    fn enter_math_with_constraints(
-        &mut self,
-        direction: Direction,
-        include_inline: bool,
-        require_text_edge: bool,
-    ) -> Result<Effect, EditError> {
+    fn enter_math_at_text_edge(&mut self, direction: Direction) -> Result<Effect, EditError> {
         let focus = self.selection.focus.clone();
         if self.selection.anchor != focus
             || self.has_structure_selection()
@@ -1130,16 +864,12 @@ impl Session {
         }
         let paragraph = self.paragraph_for(&focus)?.clone();
         let object_len = OBJECT_REPLACEMENT.len_utf8();
-        let slot = if include_inline {
-            inline_math_slots(&paragraph)?
-                .into_iter()
-                .find(|(start, _)| match direction {
-                    Direction::Forward => *start == focus.offset,
-                    Direction::Backward => start + object_len == focus.offset,
-                })
-        } else {
-            None
-        };
+        let slot = inline_math_slots(&paragraph)?
+            .into_iter()
+            .find(|(start, _)| match direction {
+                Direction::Forward => *start == focus.offset,
+                Direction::Backward => start + object_len == focus.offset,
+            });
         if let Some(position) = self.host_caret_position.clone() {
             let can_enter_adjacent_inline_math = slot.is_some()
                 && position.kind() == HostCaretKind::Inline
@@ -1192,13 +922,11 @@ impl Session {
                 ..Effect::default()
             });
         }
-        let text_len = TextMap::new(&paragraph)?.text.len();
-        let at_edge = !require_text_edge
-            || match direction {
-                Direction::Forward => focus.offset == text_len,
-                Direction::Backward => focus.offset == 0,
-            };
-        if !at_edge || focus.story != StoryId::Body {
+        let at_edge = match direction {
+            Direction::Forward => focus.offset == TextMap::new(&paragraph)?.text.len(),
+            Direction::Backward => focus.offset == 0,
+        };
+        if !at_edge {
             return Ok(Effect::default());
         }
         let Some(location) = self.paragraph_index.get(&focus.paragraph_id).cloned() else {
@@ -1219,71 +947,14 @@ impl Session {
         let Some(neighbour) = neighbour else {
             return Ok(Effect::default());
         };
-        let (block_id, align, cursor, branch) = {
-            let block =
-                caret_structure::block_list_by_container_mut(&mut self.document.body, &container)
-                    .ok_or(EditError::InvalidPosition)?
-                    .get_mut(neighbour)
-                    .ok_or(EditError::InvalidPosition)?;
-            match block {
-                Block::Equation(equation) => {
-                    let (cursor, branch) = math_tree_edge_position(
-                        &equation.math_tree,
-                        MathPositionHost::Equation {
-                            owner_id: equation.id.clone(),
-                        },
-                        direction,
-                        None,
-                    )?;
-                    (equation.id.clone(), false, cursor, branch)
-                }
-                Block::Align(value) => {
-                    let cell = match direction {
-                        Direction::Forward => {
-                            value.rows.iter().enumerate().find_map(|(row_index, row)| {
-                                row.cells.first().map(|cell| (row_index, 0, &row.id, cell))
-                            })
-                        }
-                        Direction::Backward => {
-                            value
-                                .rows
-                                .iter()
-                                .enumerate()
-                                .rev()
-                                .find_map(|(row_index, row)| {
-                                    let cell_index = row.cells.len().checked_sub(1)?;
-                                    Some((
-                                        row_index,
-                                        cell_index,
-                                        &row.id,
-                                        row.cells.get(cell_index)?,
-                                    ))
-                                })
-                        }
-                    };
-                    let (row_index, cell_index, row_id, cell) =
-                        cell.ok_or(EditError::InvalidPosition)?;
-                    let (cursor, branch) = math_tree_edge_position(
-                        cell,
-                        MathPositionHost::AlignCell {
-                            row_id: row_id.clone(),
-                            cell_id: cell.root.id.clone(),
-                        },
-                        direction,
-                        Some((row_index, cell_index)),
-                    )?;
-                    (value.id.clone(), true, cursor, branch)
-                }
-                _ => return Ok(Effect::default()),
-            }
+        let block = caret_structure::block_list_by_container(&self.document.body, &container)
+            .ok_or(EditError::InvalidPosition)?
+            .get(neighbour)
+            .ok_or(EditError::InvalidPosition)?;
+        let Some(edit) = self.math_edit_for_block(block, direction)? else {
+            return Ok(Effect::default());
         };
-        let target = MathEditTarget::Block { block_id, align };
-        self.set_math_edit(Some(MathEdit::entering(
-            target.clone(),
-            cursor,
-            branch,
-            self.current_math_edit_revision(),
-        )));
+        self.set_math_edit(Some(edit));
         self.advance_history_merge_epoch();
         Ok(Effect {
             selection_changed: true,

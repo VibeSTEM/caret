@@ -45,6 +45,7 @@ pub(super) type ShapedParagraphs = (
 );
 
 pub(super) struct ShapedTableCell {
+    pub(super) cell_id: NodeId,
     /// 与单元格块序列等长的内容引用；段落/公式按文档顺序排列。
     pub(super) blocks: Vec<ShapedCellBlock>,
     /// 指向本次布局 `paragraphs` 向量的索引。
@@ -317,6 +318,7 @@ impl DocumentLayoutService {
                     blocks: measured_blocks,
                 });
                 shaped_cells.push(ShapedTableCell {
+                    cell_id: cell.id.clone(),
                     blocks: cell_blocks,
                     paragraphs: cell_paragraphs,
                     math_blocks,
@@ -386,20 +388,39 @@ pub(super) fn expand_table_fragments(
                         content_x_pt + grid_cell.content_width_pt,
                         origin_y_pt + grid_row.top_pt + grid_row.height_pt,
                     ];
-                    // 命中裁剪使用包含边框与内边距的网格单元格矩形；caret/选区仍用内容盒。
-                    // grid.columns 记录内容轨道，向外扩出水平内缩得到单元格框。
-                    let horizontal_inset_pt = shaped.grid.columns.first().map_or(0.0, |(x, _)| *x);
-                    let hit_clip = shaped.grid.columns.get(cell_index).map_or(
-                        clip,
-                        |(column_x, column_width)| {
-                            [
-                                origin_x_pt + column_x - horizontal_inset_pt,
-                                origin_y_pt + grid_row.top_pt,
-                                origin_x_pt + column_x + column_width + horizontal_inset_pt,
-                                origin_y_pt + grid_row.top_pt + grid_row.height_pt,
-                            ]
-                        },
-                    );
+                    // 命中裁剪覆盖由网格规则定义的单元格外框；caret/选区仍用内容盒。
+                    let hit_clip = match (
+                        shaped.grid.vertical_rule_positions.get(cell_index),
+                        shaped.grid.vertical_rule_positions.get(cell_index + 1),
+                        shaped.grid.horizontal_rule_positions.get(row_index),
+                        shaped.grid.horizontal_rule_positions.get(row_index + 1),
+                    ) {
+                        (Some(&x0), Some(&x1), Some(&y0), Some(&y1)) => [
+                            origin_x_pt + x0,
+                            origin_y_pt + y0,
+                            origin_x_pt + x1,
+                            origin_y_pt + y1,
+                        ],
+                        _ => clip,
+                    };
+                    let hit_x0 = hit_clip[0].clamp(0.0, page.width_pt);
+                    let hit_y0 = hit_clip[1].clamp(0.0, page.height_pt);
+                    let hit_x1 = hit_clip[2].clamp(0.0, page.width_pt);
+                    let hit_y1 = hit_clip[3].clamp(0.0, page.height_pt);
+                    if [hit_x0, hit_y0, hit_x1, hit_y1]
+                        .into_iter()
+                        .all(f64::is_finite)
+                        && hit_x1 > hit_x0
+                        && hit_y1 > hit_y0
+                    {
+                        page.table_cell_hit_regions.push(super::PageCellHitRegion {
+                            cell_id: shaped_cell.cell_id.clone(),
+                            x0_pt: hit_x0,
+                            y0_pt: hit_y0,
+                            x1_pt: hit_x1,
+                            y1_pt: hit_y1,
+                        });
+                    }
                     let host = caret_layout::FragmentHost::TableCell {
                         table_id: fragment.table_id.clone(),
                         row_index,
@@ -464,6 +485,7 @@ pub(super) fn expand_table_fragments(
                                 }
                                 page.table_math_placements.push(TableMathPlacement {
                                     math_id: math.math_id.clone(),
+                                    cell_id: shaped_cell.cell_id.clone(),
                                     object_x_pt: content_x_pt + f64::from(math.x_offset_pt),
                                     width_pt: math.layout.width,
                                     ascent_pt: math.layout.ascent,

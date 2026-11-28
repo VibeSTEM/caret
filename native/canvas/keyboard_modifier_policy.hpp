@@ -43,14 +43,16 @@ namespace caret::keyboard {
     return modifiers == Qt::AltModifier && key == Qt::Key_T;
 }
 
-/// 插入行/列：Windows/Linux 为 Alt+方向键，macOS 为 Control+Option+Shift+方向键。
+/// 插入行/列：Windows/Linux 的 Alt+方向键，或各平台物理 Control+Alt+Shift+方向键。
 [[nodiscard]] constexpr bool isTableShapeInsert(Qt::KeyboardModifiers modifiers, int key) {
     const bool arrow =
         key == Qt::Key_Up || key == Qt::Key_Down || key == Qt::Key_Left || key == Qt::Key_Right;
+    const auto physical_control_combo =
+        physicalControlModifier() | Qt::AltModifier | Qt::ShiftModifier;
 #ifdef Q_OS_MACOS
-    return modifiers == (physicalControlModifier() | Qt::AltModifier | Qt::ShiftModifier) && arrow;
+    return arrow && modifiers == physical_control_combo;
 #else
-    return modifiers == Qt::AltModifier && arrow;
+    return arrow && (modifiers == Qt::AltModifier || modifiers == physical_control_combo);
 #endif
 }
 

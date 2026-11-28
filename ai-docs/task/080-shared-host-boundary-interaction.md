@@ -3,7 +3,7 @@
 - 状态：done
 - 依赖：071、074、077、081、082、083、091
 - 优先级：P1
-- 创建 / 更新：2026-11-09 / 2026-11-21
+- 创建 / 更新：2026-11-09 / 2026-11-28
 
 ## 目标与背景
 
@@ -89,6 +89,31 @@ Caret 的 Block/Inline 编辑目前分散管理焦点位置、边界移动、选
 - Math 内部局部选区与独立 Math 形状、跨文档主题模板迁移、QML 用户可见剪贴板错误、混合文本中的显示公式识别、选区外 Opaque 剪枝、粘贴全量重排性能，均由任务 105 跟进；091 v1 对这些路径显式拒绝或安全回退。
 - 覆盖率门槛证据来自 Nightly [#44865061216](https://github.com/VibeSTEM/caret/actions/runs/44865061216)（main@`2c851b15`；本分支无产品代码差异，仅新增 C++ 测试与记录），不是本分支自身运行的 coverage。
 - 两轮分域评审为会话内只读 subagent 报告，未在 PR 评论中独立存档；最终评审为未参与实现的只读 diff 评审。
+
+## 2026-11-27 共享宿主复查
+
+本次复查沿 [106](106-table-shared-host-interaction.md) 扩展到 Paragraph、Section/Custom、Equation、Align、Table 与 InlineMath，检查块位置、相邻块、结构选区、事务与页面投影。SingleLine/MultiLine 仍是结构展示分类。编辑入口由块身份、真实容器路径和局部坐标决定。
+
+[106 复查](106-table-shared-host-interaction.md#brooks-lint-复查修复)补齐了可导航同级块查找、已有结构范围按父容器扩选，以及正文和行内数学端点的跨格提升。
+
+```mermaid
+graph TD
+    QML["Qt / QML 画布"] --> App["caret-app 交互快照"]
+    App --> Session["caret-engine Session"]
+    App --> Geometry["caret-engine 布局投影"]
+    Session --> Position["caret-structure 文档顺序与容器"]
+    Session --> Adapter["各宿主的局部入口和编辑事务"]
+    Geometry --> Placement["段落、块、网格分页几何"]
+```
+
+- Table 原先在多处绕过 BlockEdge，边缘会直接落到相邻段落，跨 Story 候选会提前被丢弃。相邻块、进出顺序、原子选区与删除现在使用共享块位置。表格适配保留换格和行列结构规则。
+- 公式导航文件原先持有环境入口和相邻块遍历。共享 Session 模块现在负责遍历与停靠。Environment 提供标题/子块入口，Equation 和 Align 提供公式局部光标，Table 提供单元格块序列。
+- 结构删除原先通过环境 ID 链定位块，经过单元格时可能丢失物理容器。节点删除使用完整路径校验身份，覆盖父块时一次移除整个子树。格内公式、环境与表格本体使用同一块范围补丁。
+- 格内显示公式原先跳过公式行基线和行裁切的生成，并走独立 glyph 循环。正文及格内 Equation/Align 现在消费同一页投影，格内投影携带单元格裁切。原子块选区向同一布局接口请求矩形。
+
+2026-11-28 复核覆盖块外输入法临时段落到真实块边界的映射、输入法取消后续拖、纯公式格同代命中和格内环境退出。整表与格内剪贴板使用现有 Blocks 片段，验收见 [012](012-impl-table.md)。正文 TextFlow 拆分与空公式宿主的文件往返、停靠和历史保全见 [084](084-document-content-shapes-and-boundaries.md)。
+
+[088](088-unify-empty-inline-math-hit-slot.md) 将空公式命中、普通空格式与待输入格式的插入槽收敛到同一布局投影。页面和单元格内容区使用同一槽位裁切，右格点击不会进入左格空公式。
 
 ## 风险与回退
 

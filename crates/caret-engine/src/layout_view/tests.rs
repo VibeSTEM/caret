@@ -215,6 +215,7 @@ fn page_with_paragraphs(paragraph_ids: &[NodeId]) -> PageLayoutSnapshot {
         margin_top_pt: 50.0,
         margin_right_pt: 50.0,
         margin_bottom_pt: 50.0,
+        table_cell_hit_regions: Vec::new(),
         table_math_placements: Vec::new(),
         layout: caret_layout::PageLayout {
             fragments: paragraph_ids

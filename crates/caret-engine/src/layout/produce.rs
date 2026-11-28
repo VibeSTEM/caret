@@ -795,6 +795,7 @@ impl PageGeometries {
                 margin_right_pt: margins_pt[2],
                 margin_bottom_pt: margins_pt[3],
                 layout,
+                table_cell_hit_regions: Vec::new(),
                 table_math_placements: Vec::new(),
             })
             .collect();
@@ -945,65 +946,44 @@ fn collect_math_projections(
     let mut projections = Vec::new();
     for (page_index, page) in pages.iter().enumerate() {
         for fragment in &page.layout.math_fragments {
-            if math_blocks.contains_key(&fragment.math_id) {
-                projections.push(MathPageProjection {
-                    math_id: fragment.math_id.clone(),
-                    page_index,
-                    object_x_pt: page.margin_left_pt + f64::from(fragment.x_offset_pt),
-                    clip_x_pt: None,
-                    baseline_y_pt: page.margin_top_pt
+            let baseline_y_pt = page.margin_top_pt
+                + f64::from(fragment.y_offset_pt)
+                + f64::from(fragment.baseline_pt);
+            let (row_clips, row_baselines) = math_blocks
+                .get(&fragment.math_id)
+                .map(|layout| project_math_rows(layout, baseline_y_pt))
+                .unwrap_or_default();
+            projections.push(MathPageProjection {
+                math_id: fragment.math_id.clone(),
+                cell_id: None,
+                page_index,
+                object_x_pt: page.margin_left_pt + f64::from(fragment.x_offset_pt),
+                clip_x_pt: None,
+                baseline_y_pt,
+                caret_line_top_pt: page.margin_top_pt + f64::from(fragment.y_offset_pt),
+                caret_baseline_y_pt: page.margin_top_pt
+                    + f64::from(fragment.y_offset_pt)
+                    + f64::from(fragment.caret_baseline_pt),
+                caret_height_pt: f64::from(fragment.caret_height_pt),
+                clip_y_pt: fragment.clip_ink_to_line_height.then_some([
+                    page.margin_top_pt + f64::from(fragment.y_offset_pt),
+                    page.margin_top_pt
                         + f64::from(fragment.y_offset_pt)
-                        + f64::from(fragment.baseline_pt),
-                    caret_line_top_pt: page.margin_top_pt + f64::from(fragment.y_offset_pt),
-                    caret_baseline_y_pt: page.margin_top_pt
-                        + f64::from(fragment.y_offset_pt)
-                        + f64::from(fragment.caret_baseline_pt),
-                    caret_height_pt: f64::from(fragment.caret_height_pt),
-                    clip_y_pt: fragment.clip_ink_to_line_height.then_some([
-                        page.margin_top_pt + f64::from(fragment.y_offset_pt),
-                        page.margin_top_pt
-                            + f64::from(fragment.y_offset_pt)
-                            + f64::from(fragment.height_pt),
-                    ]),
-                    row_clips: math_blocks
-                        .get(&fragment.math_id)
-                        .into_iter()
-                        .flat_map(|layout| &layout.row_clips)
-                        .filter_map(|clip| {
-                            Some(MathPageRowClip {
-                                row_id: clip.row_id.clone()?,
-                                y0_pt: page.margin_top_pt
-                                    + f64::from(fragment.y_offset_pt)
-                                    + f64::from(fragment.baseline_pt)
-                                    + clip.y0,
-                                y1_pt: page.margin_top_pt
-                                    + f64::from(fragment.y_offset_pt)
-                                    + f64::from(fragment.baseline_pt)
-                                    + clip.y1,
-                            })
-                        })
-                        .collect(),
-                    row_baselines: math_blocks
-                        .get(&fragment.math_id)
-                        .into_iter()
-                        .flat_map(|layout| &layout.row_baselines)
-                        .map(|row| MathPageRowBaseline {
-                            baseline_y_pt: page.margin_top_pt
-                                + f64::from(fragment.y_offset_pt)
-                                + f64::from(fragment.baseline_pt)
-                                + row.baseline,
-                        })
-                        .collect(),
-                    inline_index: None,
-                });
-            }
+                        + f64::from(fragment.height_pt),
+                ]),
+                row_clips,
+                row_baselines,
+                inline_index: None,
+            });
         }
         for placement in &page.table_math_placements {
-            if !math_blocks.contains_key(&placement.math_id) {
-                continue;
-            }
+            let (row_clips, row_baselines) = math_blocks
+                .get(&placement.math_id)
+                .map(|layout| project_math_rows(layout, placement.baseline_y_pt))
+                .unwrap_or_default();
             projections.push(MathPageProjection {
                 math_id: placement.math_id.clone(),
+                cell_id: Some(placement.cell_id.clone()),
                 page_index,
                 object_x_pt: placement.object_x_pt,
                 baseline_y_pt: placement.baseline_y_pt,
@@ -1012,8 +992,8 @@ fn collect_math_projections(
                 caret_height_pt: placement.caret_height_pt,
                 clip_y_pt: placement.clip_y_pt,
                 clip_x_pt: placement.clip_x_pt,
-                row_clips: Vec::new(),
-                row_baselines: Vec::new(),
+                row_clips,
+                row_baselines,
                 inline_index: None,
             });
         }
@@ -1058,9 +1038,13 @@ fn collect_math_projections(
                         };
                         projections.push(MathPageProjection {
                             math_id: math_id.clone(),
+                            cell_id: paragraph
+                                .container
+                                .innermost_cell()
+                                .map(|cell| cell.cell_id.clone()),
                             page_index,
                             object_x_pt: line_x + f64::from(inline_box.x),
-                            clip_x_pt: None,
+                            clip_x_pt: location.clip.map(|clip| [clip.x0_pt, clip.x1_pt]),
                             baseline_y_pt,
                             caret_line_top_pt: line_top,
                             caret_baseline_y_pt: line_top
@@ -1088,6 +1072,31 @@ fn collect_math_projections(
         }
     }
     projections
+}
+
+fn project_math_rows(
+    layout: &caret_math::layout::MathLayout,
+    baseline_y_pt: f64,
+) -> (Vec<MathPageRowClip>, Vec<MathPageRowBaseline>) {
+    let row_clips = layout
+        .row_clips
+        .iter()
+        .filter_map(|clip| {
+            Some(MathPageRowClip {
+                row_id: clip.row_id.clone()?,
+                y0_pt: baseline_y_pt + clip.y0,
+                y1_pt: baseline_y_pt + clip.y1,
+            })
+        })
+        .collect();
+    let row_baselines = layout
+        .row_baselines
+        .iter()
+        .map(|row| MathPageRowBaseline {
+            baseline_y_pt: baseline_y_pt + row.baseline,
+        })
+        .collect();
+    (row_clips, row_baselines)
 }
 
 fn collect_environment_ranges(

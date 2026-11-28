@@ -2272,6 +2272,39 @@ fn table_envelope_body() -> Value {
 }
 
 #[test]
+fn cdoc_preserves_distinct_empty_host_and_text_flow_shapes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut document = Document::blank();
+    document.body = serde_json::from_value(serde_json::json!([
+        {"type": "paragraph", "id": "text", "inlines": [
+            {"type": "text", "runs": [{"text": "e"}, {"text": ""}]},
+            {"type": "text", "runs": [{"text": "\u{301}"}, {"text": "", "language": "ja"}]}
+        ]},
+        {"type": "environment", "scope": "block", "id": "empty-environment", "kind": "custom", "children": []},
+        {"type": "equation", "id": "empty-flow", "mathTree": {
+            "schemaVersion": crate::MATH_TREE_SCHEMA_VERSION,
+            "root": {"id": "empty-root", "content": []}
+        }},
+        {"type": "equation", "id": "explicit-placeholder", "mathTree": {
+            "schemaVersion": crate::MATH_TREE_SCHEMA_VERSION,
+            "root": {"id": "placeholder-root", "content": [
+                {"type": "math", "id": "placeholder", "kind": "placeholder"}
+            ]}
+        }},
+        {"type": "align", "id": "no-rows", "rows": []},
+        {"type": "align", "id": "no-cells", "rows": [{"id": "empty-row", "cells": []}]}
+    ]))?;
+    let file = CdocFile::new(document.clone())?;
+    let OpenedDocument::Editable(reopened) = open(&file.to_bytes()?)? else {
+        return Err(
+            "valid empty and split host shapes must reopen without a preview downgrade".into(),
+        );
+    };
+    assert_eq!(reopened.document(), &document);
+    Ok(())
+}
+
+#[test]
 fn table_capability_is_declared_and_round_trips_through_cdoc()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut document = Document::blank();

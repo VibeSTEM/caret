@@ -3,8 +3,8 @@ use super::super::super::{
     NavigationCandidate, NavigationGeneration, Pos, Selection, Session, StoryId,
 };
 use caret_doc::{
-    Block, BlockEnvironment, Document, InlineEnvironment, InlineEnvironmentKind, NodeId,
-    ParagraphContent, Run, TextFlow,
+    Block, BlockEnvironment, BlockEnvironmentKind, Document, InlineEnvironment,
+    InlineEnvironmentKind, NodeId, ParagraphContent, Run, Table, TableCell, TableRow, TextFlow,
 };
 use std::collections::BTreeMap;
 
@@ -1164,6 +1164,242 @@ fn paragraph_with_run_text(text: &str) -> caret_doc::Paragraph {
     paragraph
 }
 
+#[test]
+fn down_from_nested_environment_edge_completes_environment_then_moves_same_table_column() {
+    let nested = paragraph_with_run_text("inside");
+    let nested_id = nested.id.clone();
+    let environment_id = NodeId::generate();
+    let table_id = NodeId::generate();
+    let row_ids = [NodeId::generate(), NodeId::generate()];
+    let target_id = NodeId::generate();
+    let table = Table {
+        id: table_id.clone(),
+        rows: vec![
+            TableRow {
+                id: row_ids[0].clone(),
+                cells: vec![
+                    TableCell {
+                        id: NodeId::generate(),
+                        blocks: vec![Block::Environment(BlockEnvironment {
+                            id: environment_id.clone(),
+                            kind: BlockEnvironmentKind::Custom,
+                            definition_id: None,
+                            props: BTreeMap::new(),
+                            title: None,
+                            children: vec![Block::Paragraph(nested)],
+                            extra: BTreeMap::new(),
+                        })],
+                    },
+                    TableCell {
+                        id: NodeId::generate(),
+                        blocks: vec![Block::Paragraph(paragraph_with_run_text("other"))],
+                    },
+                ],
+            },
+            TableRow {
+                id: row_ids[1].clone(),
+                cells: vec![
+                    TableCell {
+                        id: NodeId::generate(),
+                        blocks: vec![Block::Paragraph({
+                            let mut target = paragraph_with_run_text("target");
+                            target.id = target_id.clone();
+                            target
+                        })],
+                    },
+                    TableCell {
+                        id: NodeId::generate(),
+                        blocks: vec![Block::Paragraph(paragraph_with_run_text("other row"))],
+                    },
+                ],
+            },
+        ],
+    };
+    let mut document = Document::blank();
+    document.body = vec![Block::Table(table)];
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("nested table session failed: {error}"));
+    let nested_end = Pos {
+        story: StoryId::TableCell {
+            table_id: table_id.clone(),
+            row_id: row_ids[0].clone(),
+            cell_id: match &session.document().body[0] {
+                Block::Table(table) => table.rows[0].cells[0].id.clone(),
+                _ => unreachable!(),
+            },
+        },
+        paragraph_id: nested_id,
+        offset: "inside".len(),
+        affinity: Affinity::Downstream,
+    };
+    session
+        .run(Command::SetSelection(Some(super::super::Selection {
+            anchor: nested_end.clone(),
+            focus: nested_end,
+        })))
+        .unwrap_or_else(|error| panic!("nested environment caret setup failed: {error}"));
+    let down = || {
+        Command::EditorKey(EditorKey::DownArrow {
+            candidate: None,
+            extend: false,
+            structure: false,
+        })
+    };
+
+    session.run(down()).unwrap_or_else(|error| {
+        panic!("down should complete nested environment boundary: {error}")
+    });
+    assert_eq!(
+        session.block_boundary_exit(),
+        Some((environment_id.clone(), Direction::Forward))
+    );
+    session
+        .run(down())
+        .unwrap_or_else(|error| panic!("down should move to the next table row: {error}"));
+    assert_eq!(session.selection().focus.paragraph_id, target_id);
+    assert_eq!(
+        session.focused_table_cell().map(|cell| cell.row_index),
+        Some(1)
+    );
+}
+
+#[test]
+fn down_with_real_layout_candidate_completes_nested_environment_before_crossing_cells() {
+    let nested_intro = paragraph_with_run_text("intro");
+    let nested = paragraph_with_run_text("inside");
+    let nested_id = nested.id.clone();
+    let title = paragraph_with_run_text("section title");
+    let title_id = title.id.clone();
+    let target = paragraph_with_run_text("next row");
+    let target_id = target.id.clone();
+    let environment_id = NodeId::generate();
+    let table_id = NodeId::generate();
+    let row_ids = [NodeId::generate(), NodeId::generate()];
+    let cell_ids = [NodeId::generate(), NodeId::generate()];
+    let document = Document {
+        body: vec![Block::Table(Table {
+            id: table_id.clone(),
+            rows: vec![
+                TableRow {
+                    id: row_ids[0].clone(),
+                    cells: vec![TableCell {
+                        id: cell_ids[0].clone(),
+                        blocks: vec![Block::Environment(BlockEnvironment {
+                            id: environment_id.clone(),
+                            kind: BlockEnvironmentKind::Section,
+                            definition_id: None,
+                            props: BTreeMap::new(),
+                            title: Some(title),
+                            children: vec![
+                                Block::Paragraph(nested_intro),
+                                Block::Paragraph(nested),
+                            ],
+                            extra: BTreeMap::new(),
+                        })],
+                    }],
+                },
+                TableRow {
+                    id: row_ids[1].clone(),
+                    cells: vec![TableCell {
+                        id: cell_ids[1].clone(),
+                        blocks: vec![Block::Paragraph(target)],
+                    }],
+                },
+            ],
+        })],
+        ..Document::blank()
+    };
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("nested table session failed: {error}"));
+    let nested_end = Pos {
+        story: StoryId::TableCell {
+            table_id,
+            row_id: row_ids[0].clone(),
+            cell_id: cell_ids[0].clone(),
+        },
+        paragraph_id: nested_id,
+        offset: 2,
+        affinity: Affinity::Downstream,
+    };
+    session
+        .run(Command::SetSelection(Some(Selection {
+            anchor: nested_end.clone(),
+            focus: nested_end.clone(),
+        })))
+        .unwrap_or_else(|error| panic!("nested environment caret setup failed: {error}"));
+
+    let mut layout = crate::DocumentLayoutRuntime::new_system()
+        .unwrap_or_else(|error| panic!("system layout runtime failed: {error}"));
+    let snapshot = layout
+        .layout_session(&session)
+        .unwrap_or_else(|error| panic!("nested table layout failed: {error}"));
+    let caret = snapshot
+        .caret_geometry(&nested_end, caret_layout::VisualAffinity::Downstream)
+        .unwrap_or_else(|| panic!("nested caret geometry missing"));
+    let generation = NavigationGeneration {
+        session_id: session.session_id().clone(),
+        document_generation: session.document_generation(),
+        font_generation: snapshot.font_generation,
+    };
+    let candidate = snapshot
+        .vertical_candidate_from_block(caret, None, 1, caret.x_pt as f32, generation)
+        .unwrap_or_else(|| panic!("layout should produce a downward visual candidate"));
+    assert!(matches!(
+        &candidate,
+        NavigationCandidate::Document { focus, .. } if focus.paragraph_id == target_id
+    ));
+
+    session
+        .run(Command::EditorKey(EditorKey::DownArrow {
+            candidate: Some(candidate),
+            extend: false,
+            structure: false,
+        }))
+        .unwrap_or_else(|error| panic!("down with visual candidate failed: {error}"));
+    assert_eq!(
+        session.block_boundary_exit(),
+        Some((environment_id.clone(), Direction::Forward))
+    );
+    session
+        .run(Command::EditorKey(EditorKey::DownArrow {
+            candidate: None,
+            extend: false,
+            structure: false,
+        }))
+        .unwrap_or_else(|error| panic!("down from environment stop failed: {error}"));
+    assert_eq!(session.selection().focus.paragraph_id, target_id);
+    assert_eq!(
+        session.focused_table_cell().map(|cell| cell.row_index),
+        Some(1)
+    );
+
+    let title_start = Pos {
+        story: StoryId::EnvironmentTitle(environment_id.clone()),
+        paragraph_id: title_id,
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
+    session
+        .run(Command::SetSelection(Some(Selection {
+            anchor: title_start.clone(),
+            focus: title_start,
+        })))
+        .unwrap_or_else(|error| panic!("section title caret setup failed: {error}"));
+    session
+        .run(Command::EditorKey(EditorKey::UpArrow {
+            candidate: None,
+            extend: false,
+            structure: false,
+        }))
+        .unwrap_or_else(|error| {
+            panic!("up from section title should reach its outer edge: {error}")
+        });
+    assert_eq!(
+        session.block_boundary_exit(),
+        Some((environment_id, Direction::Backward))
+    );
+}
+
 fn inline_math_content(source: &str) -> ParagraphContent {
     let caret_math::ParsedMath::Tree(math_tree) =
         caret_math::parse(source, caret_math::MathInputKind::Inline)
@@ -1643,7 +1879,7 @@ fn shift_candidate_crossing_consecutive_math_blocks_extends_one_block_at_a_time(
         }))
         .unwrap_or_else(|error| panic!("first shift-right failed: {error}"));
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&first_id)
     );
     let (_, focus) = session
@@ -1664,7 +1900,7 @@ fn shift_candidate_crossing_consecutive_math_blocks_extends_one_block_at_a_time(
         }))
         .unwrap_or_else(|error| panic!("second shift-right failed: {error}"));
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         &[first_id.clone(), second_id.clone()]
     );
     let (_, focus) = session
@@ -1730,7 +1966,7 @@ fn shift_candidate_crossing_consecutive_math_blocks_extends_one_block_at_a_time(
         }))
         .unwrap_or_else(|error| panic!("first shift-left failed: {error}"));
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&second_id)
     );
     session
@@ -1740,7 +1976,7 @@ fn shift_candidate_crossing_consecutive_math_blocks_extends_one_block_at_a_time(
         }))
         .unwrap_or_else(|error| panic!("second shift-left failed: {error}"));
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         &[first_id.clone(), second_id.clone()]
     );
     session
@@ -1797,6 +2033,139 @@ fn section_block_for_unit_navigation(title: &str, body: &str) -> (Block, NodeId,
         title_id,
         body_id,
     )
+}
+
+#[test]
+fn horizontal_navigation_skips_an_empty_block_environment() {
+    let (before, before_id, _, _) = section_block_for_unit_navigation("a", "inside");
+    let after = paragraph_with_run_text("b");
+    let after_id = after.id.clone();
+    let empty_environment = Block::Environment(BlockEnvironment {
+        id: NodeId::generate(),
+        kind: caret_doc::BlockEnvironmentKind::Custom,
+        definition_id: None,
+        props: Default::default(),
+        title: None,
+        children: Vec::new(),
+        extra: Default::default(),
+    });
+    let Block::Environment(environment) = &empty_environment else {
+        unreachable!();
+    };
+    let empty_id = environment.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![
+        before.clone(),
+        empty_environment.clone(),
+        Block::Paragraph(after),
+    ];
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("empty block environment session failed: {error}"));
+    session
+        .park_at_block_edge(before_id.clone(), Direction::Forward)
+        .unwrap_or_else(|error| panic!("before-environment edge setup failed: {error}"));
+
+    session
+        .run(Command::EditorKey(EditorKey::RightArrow {
+            candidate: None,
+            extend: false,
+        }))
+        .unwrap_or_else(|error| panic!("right arrow across empty environment failed: {error}"));
+
+    assert_eq!(session.selection().focus.paragraph_id, after_id);
+    assert_eq!(session.selection().focus.offset, 0);
+
+    let mut shift_session = Session::new(Document {
+        body: vec![
+            before,
+            empty_environment,
+            Block::Paragraph(paragraph_with_run_text("b")),
+        ],
+        ..Document::blank()
+    })
+    .unwrap_or_else(|error| panic!("shift selection session failed: {error}"));
+    shift_session
+        .park_at_block_edge(before_id, Direction::Forward)
+        .unwrap_or_else(|error| panic!("shift selection edge setup failed: {error}"));
+    shift_session
+        .run(Command::EditorKey(EditorKey::RightArrow {
+            candidate: None,
+            extend: true,
+        }))
+        .unwrap_or_else(|error| panic!("shift-right over empty environment failed: {error}"));
+    assert_eq!(shift_session.selected_block_environments(), &[empty_id]);
+}
+
+#[test]
+fn table_arrow_skips_a_trailing_empty_environment_when_changing_cells() {
+    let left = paragraph_with_run_text("left");
+    let left_id = left.id.clone();
+    let right = paragraph_with_run_text("right");
+    let right_id = right.id.clone();
+    let table_id = NodeId::generate();
+    let row_id = NodeId::generate();
+    let left_cell_id = NodeId::generate();
+    let right_cell_id = NodeId::generate();
+    let table = caret_doc::Table {
+        id: table_id.clone(),
+        rows: vec![caret_doc::TableRow {
+            id: row_id.clone(),
+            cells: vec![
+                caret_doc::TableCell {
+                    id: left_cell_id.clone(),
+                    blocks: vec![
+                        Block::Paragraph(left),
+                        Block::Environment(BlockEnvironment {
+                            id: NodeId::generate(),
+                            kind: caret_doc::BlockEnvironmentKind::Custom,
+                            definition_id: None,
+                            props: Default::default(),
+                            title: None,
+                            children: Vec::new(),
+                            extra: Default::default(),
+                        }),
+                    ],
+                },
+                caret_doc::TableCell {
+                    id: right_cell_id,
+                    blocks: vec![Block::Paragraph(right)],
+                },
+            ],
+        }],
+    };
+    let mut session = Session::new(Document {
+        body: vec![Block::Table(table)],
+        ..Document::blank()
+    })
+    .unwrap_or_else(|error| panic!("table with empty environment failed: {error}"));
+    let end = Pos {
+        story: StoryId::TableCell {
+            table_id,
+            row_id,
+            cell_id: left_cell_id,
+        },
+        paragraph_id: left_id,
+        offset: "left".len(),
+        affinity: Affinity::Upstream,
+    };
+    session
+        .run(Command::SetSelection(Some(Selection {
+            anchor: end.clone(),
+            focus: end,
+        })))
+        .unwrap_or_else(|error| panic!("left cell caret setup failed: {error}"));
+
+    session
+        .run(Command::EditorKey(EditorKey::RightArrow {
+            candidate: None,
+            extend: false,
+        }))
+        .unwrap_or_else(|error| {
+            panic!("right arrow across empty cell environment failed: {error}")
+        });
+
+    assert_eq!(session.selection().focus.paragraph_id, right_id);
+    assert_eq!(session.selection().focus.offset, 0);
 }
 
 fn document_candidate_for(
@@ -1926,7 +2295,7 @@ fn shift_candidate_adds_equation_then_environment_one_unit_at_a_time() {
         }))
         .unwrap_or_else(|error| panic!("first shift candidate failed: {error}"));
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
     assert!(session.selected_block_environments().is_empty());
@@ -1942,7 +2311,7 @@ fn shift_candidate_adds_equation_then_environment_one_unit_at_a_time() {
         std::slice::from_ref(&environment_id)
     );
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
 }
@@ -2113,6 +2482,241 @@ fn horizontal_candidate_backward_from_environment_outer_stop_stops_at_adjacent_e
 }
 
 #[test]
+fn ordinary_arrows_cross_explicit_breaks_around_an_environment() {
+    let (environment, environment_id, _title_id, _body_id) =
+        section_block_for_unit_navigation("s", "body");
+    let after = paragraph_with_run_text("after");
+    let after_id = after.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![
+        environment,
+        Block::ExplicitBreak(caret_doc::ExplicitBreak::default()),
+        Block::Paragraph(after),
+    ];
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("session initialization failed: {error}"));
+
+    session
+        .park_at_block_edge(environment_id.clone(), Direction::Forward)
+        .unwrap_or_else(|error| panic!("environment edge setup failed: {error}"));
+    session
+        .run(Command::EditorKey(EditorKey::RightArrow {
+            candidate: None,
+            extend: false,
+        }))
+        .unwrap_or_else(|error| panic!("right arrow across explicit break failed: {error}"));
+    assert_eq!(session.selection().focus.paragraph_id, after_id);
+    assert_eq!(session.selection().focus.offset, 0);
+    assert!(session.block_boundary_exit().is_none());
+
+    let start = body_position(&after_id, 0, Affinity::Downstream);
+    session
+        .run(Command::SetSelection(Some(Selection {
+            anchor: start.clone(),
+            focus: start,
+        })))
+        .unwrap_or_else(|error| panic!("paragraph start setup failed: {error}"));
+}
+
+#[test]
+fn backward_candidate_from_body_enters_section_across_explicit_break() {
+    let (section, environment_id, title_id, _body_id) =
+        section_block_for_unit_navigation("Heading", "body");
+    let after = paragraph_with_run_text("after");
+    let after_id = after.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![
+        section,
+        Block::ExplicitBreak(caret_doc::ExplicitBreak::default()),
+        Block::Paragraph(after),
+    ];
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("session initialization failed: {error}"));
+    let start = body_position(&after_id, 0, Affinity::Downstream);
+    session
+        .run(Command::SetSelection(Some(Selection {
+            anchor: start.clone(),
+            focus: start,
+        })))
+        .unwrap_or_else(|error| panic!("paragraph start setup failed: {error}"));
+    let candidate = document_candidate_for(
+        &session,
+        Pos {
+            story: StoryId::EnvironmentTitle(environment_id),
+            paragraph_id: title_id.clone(),
+            offset: "Heading".len(),
+            affinity: Affinity::Upstream,
+        },
+        caret_layout::VisualAffinity::Upstream,
+    );
+    session
+        .run(Command::EditorKey(EditorKey::LeftArrow {
+            candidate: Some(candidate),
+            extend: false,
+        }))
+        .unwrap_or_else(|error| panic!("left candidate into section failed: {error}"));
+    assert_eq!(session.selection().focus.paragraph_id, title_id);
+    assert_eq!(session.selection().focus.offset, "Heading".len());
+}
+
+#[test]
+fn backward_arrow_enters_table_across_explicit_break_from_body() {
+    let table = serde_json::from_value::<Block>(serde_json::json!({
+        "type": "table",
+        "id": "table-before-break",
+        "rows": [{"id": "row", "cells": [{"id": "cell", "blocks": [{
+            "type": "paragraph",
+            "id": "table-paragraph",
+            "inlines": [{"type": "text", "runs": [{"text": "cell", "props": {}}]}]
+        }]}]}]
+    }))
+    .unwrap_or_else(|error| panic!("table fixture failed: {error}"));
+    let after = paragraph_with_run_text("after");
+    let after_id = after.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![
+        table,
+        Block::ExplicitBreak(caret_doc::ExplicitBreak::default()),
+        Block::Paragraph(after),
+    ];
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("session initialization failed: {error}"));
+    let start = body_position(&after_id, 0, Affinity::Downstream);
+    session
+        .run(Command::SetSelection(Some(Selection {
+            anchor: start.clone(),
+            focus: start,
+        })))
+        .unwrap_or_else(|error| panic!("paragraph start setup failed: {error}"));
+
+    session
+        .run(Command::EditorKey(EditorKey::LeftArrow {
+            candidate: None,
+            extend: false,
+        }))
+        .unwrap_or_else(|error| panic!("left arrow to preceding table failed: {error}"));
+    let table_id = NodeId::parse("table-before-break")
+        .unwrap_or_else(|error| panic!("table id is valid: {error}"));
+    assert_eq!(
+        session.block_boundary_exit(),
+        Some((table_id, Direction::Forward))
+    );
+    session
+        .run(Command::EditorKey(EditorKey::LeftArrow {
+            candidate: None,
+            extend: false,
+        }))
+        .unwrap_or_else(|error| panic!("left arrow entering table failed: {error}"));
+    assert_eq!(
+        session.selection().focus.paragraph_id.to_string(),
+        "table-paragraph"
+    );
+}
+
+#[test]
+fn table_cell_arrows_ignore_leading_explicit_breaks_at_cell_boundaries() {
+    let mut horizontal_table = serde_json::from_value::<Block>(serde_json::json!({
+        "type": "table",
+        "id": "horizontal-table",
+        "rows": [{"id": "horizontal-row", "cells": [
+            {"id": "left-cell", "blocks": [{
+                "type": "paragraph", "id": "left-paragraph",
+                "inlines": [{"type": "text", "runs": [{"text": "left", "props": {}}]}]
+            }]},
+            {"id": "right-cell", "blocks": [
+                {"type": "explicitBreak"},
+                {"type": "paragraph", "id": "right-paragraph",
+                 "inlines": [{"type": "text", "runs": [{"text": "right", "props": {}}]}]}
+            ]}
+        ]}]
+    }))
+    .unwrap_or_else(|error| panic!("horizontal table fixture failed: {error}"));
+    let Block::Table(horizontal_table) = &mut horizontal_table else {
+        panic!("horizontal fixture must be a table");
+    };
+    horizontal_table.rows[0].cells[1].blocks.insert(
+        1,
+        Block::Opaque(caret_doc::OpaqueNode {
+            raw: serde_json::json!({"type": "unsupported"}),
+        }),
+    );
+    let mut document = Document::blank();
+    document.body = vec![Block::Table(horizontal_table.clone())];
+    let mut horizontal = Session::new(document)
+        .unwrap_or_else(|error| panic!("horizontal table session failed: {error}"));
+    let id = |value| NodeId::parse(value).unwrap_or_else(|error| panic!("invalid id: {error}"));
+    let right_start = Pos {
+        story: StoryId::TableCell {
+            table_id: id("horizontal-table"),
+            row_id: id("horizontal-row"),
+            cell_id: id("right-cell"),
+        },
+        paragraph_id: id("right-paragraph"),
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
+    horizontal
+        .run(Command::SetSelection(Some(Selection {
+            anchor: right_start.clone(),
+            focus: right_start,
+        })))
+        .unwrap_or_else(|error| panic!("right cell caret setup failed: {error}"));
+    horizontal
+        .run(Command::EditorKey(EditorKey::LeftArrow {
+            candidate: None,
+            extend: false,
+        }))
+        .unwrap_or_else(|error| panic!("left arrow across cell break failed: {error}"));
+    assert_eq!(
+        horizontal.selection().focus.paragraph_id,
+        id("left-paragraph")
+    );
+    assert_eq!(horizontal.selection().focus.offset, "left".len());
+
+    let vertical_table = serde_json::from_value::<Block>(serde_json::json!({
+        "type": "table",
+        "id": "vertical-table",
+        "rows": [
+            {"id": "top-row", "cells": [{"id": "top-cell", "blocks": [{
+                "type": "paragraph", "id": "top-paragraph",
+                "inlines": [{"type": "text", "runs": [{"text": "top", "props": {}}]}]
+            }]}]},
+            {"id": "bottom-row", "cells": [{"id": "bottom-cell", "blocks": [
+                {"type": "explicitBreak"},
+                {"type": "paragraph", "id": "bottom-paragraph",
+                 "inlines": [{"type": "text", "runs": [{"text": "bottom", "props": {}}]}]}
+            ]}]}
+        ]
+    }))
+    .unwrap_or_else(|error| panic!("vertical table fixture failed: {error}"));
+    let mut document = Document::blank();
+    document.body = vec![vertical_table];
+    let mut vertical = Session::new(document)
+        .unwrap_or_else(|error| panic!("vertical table session failed: {error}"));
+    let bottom_start = Pos {
+        story: StoryId::TableCell {
+            table_id: id("vertical-table"),
+            row_id: id("bottom-row"),
+            cell_id: id("bottom-cell"),
+        },
+        paragraph_id: id("bottom-paragraph"),
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
+    vertical
+        .run(Command::SetSelection(Some(Selection {
+            anchor: bottom_start.clone(),
+            focus: bottom_start,
+        })))
+        .unwrap_or_else(|error| panic!("bottom cell caret setup failed: {error}"));
+    vertical
+        .run(vertical_key(Direction::Backward, false))
+        .unwrap_or_else(|error| panic!("up arrow across cell break failed: {error}"));
+    assert_eq!(vertical.selection().focus.paragraph_id, id("top-paragraph"));
+    assert_eq!(vertical.selection().focus.offset, "top".len());
+}
+
+#[test]
 fn shift_candidate_backward_from_environment_extends_by_document_units() {
     let before = paragraph_with_run_text("p");
     let before_id = before.id.clone();
@@ -2171,7 +2775,7 @@ fn shift_candidate_backward_from_environment_extends_by_document_units() {
         }))
         .unwrap_or_else(|error| panic!("second shift left failed: {error}"));
     assert_eq!(
-        session.selected_math_blocks(),
+        session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
     assert_eq!(

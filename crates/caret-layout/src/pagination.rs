@@ -125,7 +125,7 @@ pub struct ParagraphFragment {
     pub host: FragmentHost,
 }
 
-/// 片段所属的文档宿主；正文之外的单元格内容不能进入正文拖选/选择域。
+/// 片段所属的排版宿主，供布局区分正文与单元格的局部几何。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FragmentHost {
     Body,
@@ -320,9 +320,14 @@ pub fn paginate_paragraphs(
                     return Err(PaginationError::InvalidTable);
                 }
                 let mut first_row = true;
-                for (row_index, row) in table.layout.rows.iter().enumerate() {
-                    let row_height = row.height_pt as f32;
-                    if !row_height.is_finite() || row_height < 0.0 {
+                for row_index in 0..table.layout.rows.len() {
+                    let [row_top, row_bottom] = table
+                        .layout
+                        .row_rule_bounds_pt(row_index..row_index + 1)
+                        .ok_or(PaginationError::InvalidTable)?;
+                    let row_height = (row_bottom - row_top) as f32;
+                    if !row_height.is_finite() || row_height < 0.0 || !(row_top as f32).is_finite()
+                    {
                         return Err(PaginationError::InvalidTable);
                     }
                     let pending_space_pt = if first_row && page_has_content(&current) {
@@ -341,7 +346,7 @@ pub fn paginate_paragraphs(
                     } else {
                         0.0
                     };
-                    let y_offset_pt = page.used_height_pt + pending_space_pt - row.top_pt as f32;
+                    let y_offset_pt = page.used_height_pt + pending_space_pt - row_top as f32;
                     match page.table_fragments.last_mut() {
                         Some(fragment)
                             if fragment.table_id == *table.table_id

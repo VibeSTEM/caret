@@ -470,6 +470,14 @@ void ShellDocumentCanvasTest::underlinedTextRendersTheRustFfiDecorationInTheQtCa
     invalid_clip_frame.insert(QStringLiteral("shapes"), QVariantList{invalid_clip_shape});
     canvas->setGlyphFrames(QVariantList{invalid_clip_frame});
     QCOMPARE(canvas->glyphFrames(), accepted_glyph_frames);
+    QVariantMap partial_x_clip_shape =
+        decoration_only_request.value(QStringLiteral("shapes")).toList().first().toMap();
+    partial_x_clip_shape.insert(QStringLiteral("clipXEnabled"), true);
+    partial_x_clip_shape.insert(QStringLiteral("clipX0Pt"), 0.0);
+    QVariantMap partial_x_clip_frame = decoration_only_request;
+    partial_x_clip_frame.insert(QStringLiteral("shapes"), QVariantList{partial_x_clip_shape});
+    canvas->setGlyphFrames(QVariantList{partial_x_clip_frame});
+    QCOMPARE(canvas->glyphFrames(), accepted_glyph_frames);
     QVariantMap invalid_line_shape =
         decoration_only_request.value(QStringLiteral("shapes")).toList().first().toMap();
     invalid_line_shape.insert(QStringLiteral("widthPt"), -1.0);
@@ -1185,7 +1193,10 @@ void ShellDocumentCanvasTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
                                   {QStringLiteral("pixelPhaseApplied"), false},
                                   {QStringLiteral("clipEnabled"), true},
                                   {QStringLiteral("clipY0Pt"), 28.0},
-                                  {QStringLiteral("clipY1Pt"), 31.0}},
+                                  {QStringLiteral("clipY1Pt"), 31.0},
+                                  {QStringLiteral("clipXEnabled"), true},
+                                  {QStringLiteral("clipX0Pt"), 20.5},
+                                  {QStringLiteral("clipX1Pt"), 24.75}},
                       QVariantMap{{QStringLiteral("imageIndex"), 1},
                                   {QStringLiteral("xPt"), 30.0},
                                   {QStringLiteral("baselineYPt"), 32.0},
@@ -1193,6 +1204,72 @@ void ShellDocumentCanvasTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
                                   {QStringLiteral("pixelPhaseY"), 0.0},
                                   {QStringLiteral("pixelPhaseApplied"), false},
                                   {QStringLiteral("clipEnabled"), false}}}},
+        {QStringLiteral("decorations"),
+         QVariantList{QVariantMap{{QStringLiteral("xPt"), 32.0},
+                                  {QStringLiteral("yPt"), 28.0},
+                                  {QStringLiteral("widthPt"), 8.0},
+                                  {QStringLiteral("heightPt"), 5.0},
+                                  {QStringLiteral("colorRed"), 0},
+                                  {QStringLiteral("colorGreen"), 0},
+                                  {QStringLiteral("colorBlue"), 240},
+                                  {QStringLiteral("colorAlpha"), 255},
+                                  {QStringLiteral("clipEnabled"), true},
+                                  {QStringLiteral("clipY0Pt"), 29.0},
+                                  {QStringLiteral("clipY1Pt"), 32.0},
+                                  {QStringLiteral("clipXEnabled"), true},
+                                  {QStringLiteral("clipX0Pt"), 34.0},
+                                  {QStringLiteral("clipX1Pt"), 37.0}}}},
+        {QStringLiteral("shapes"),
+         QVariantList{
+             QVariantMap{{QStringLiteral("kind"), 0},
+                         {QStringLiteral("xPt"), 10.0},
+                         {QStringLiteral("yPt"), 40.0},
+                         {QStringLiteral("dxPt"), 12.0},
+                         {QStringLiteral("dyPt"), 0.0},
+                         {QStringLiteral("widthPt"), 0.0},
+                         {QStringLiteral("heightPt"), 0.0},
+                         {QStringLiteral("fillEnabled"), false},
+                         {QStringLiteral("fillRed"), 0},
+                         {QStringLiteral("fillGreen"), 0},
+                         {QStringLiteral("fillBlue"), 0},
+                         {QStringLiteral("fillAlpha"), 0},
+                         {QStringLiteral("strokeEnabled"), true},
+                         {QStringLiteral("strokeRed"), 220},
+                         {QStringLiteral("strokeGreen"), 0},
+                         {QStringLiteral("strokeBlue"), 220},
+                         {QStringLiteral("strokeAlpha"), 255},
+                         {QStringLiteral("strokeWidthPt"), 3.0},
+                         {QStringLiteral("clipEnabled"), true},
+                         {QStringLiteral("clipY0Pt"), 39.0},
+                         {QStringLiteral("clipY1Pt"), 42.0},
+                         {QStringLiteral("clipXEnabled"), true},
+                         {QStringLiteral("clipX0Pt"), 14.0},
+                         {QStringLiteral("clipX1Pt"), 18.0}},
+             QVariantMap{{QStringLiteral("kind"), 1},
+                         {QStringLiteral("xPt"), 40.0},
+                         {QStringLiteral("yPt"), 28.0},
+                         {QStringLiteral("dxPt"), 0.0},
+                         {QStringLiteral("dyPt"), 0.0},
+                         {QStringLiteral("widthPt"), 8.0},
+                         {QStringLiteral("heightPt"), 5.0},
+                         {QStringLiteral("fillEnabled"), true},
+                         {QStringLiteral("fillRed"), 0},
+                         {QStringLiteral("fillGreen"), 220},
+                         {QStringLiteral("fillBlue"), 0},
+                         {QStringLiteral("fillAlpha"), 255},
+                         {QStringLiteral("strokeEnabled"), false},
+                         {QStringLiteral("strokeRed"), 0},
+                         {QStringLiteral("strokeGreen"), 0},
+                         {QStringLiteral("strokeBlue"), 0},
+                         {QStringLiteral("strokeAlpha"), 0},
+                         {QStringLiteral("strokeWidthPt"), 0.0},
+                         {QStringLiteral("clipEnabled"), true},
+                         {QStringLiteral("clipY0Pt"), 29.0},
+                         {QStringLiteral("clipY1Pt"), 32.0},
+                         {QStringLiteral("clipXEnabled"), true},
+                         {QStringLiteral("clipX0Pt"), 42.0},
+                         {QStringLiteral("clipX1Pt"), 45.0}},
+         }},
     };
     QVariantMap second_glyph_frame = glyph_frame;
     second_glyph_frame.insert(QStringLiteral("pageIndex"), 1);
@@ -1302,6 +1379,31 @@ void ShellDocumentCanvasTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     QCOMPARE(pixel_at_logical_point(frame, 100.5, 95.5), QColor(QStringLiteral("#ff0000")));
     QCOMPARE(pixel_at_logical_point(frame, 101.0, 180.0), QColor(Qt::green));
     QCOMPARE(pixel_at_logical_point(frame, 88.5, 134.5), QColor(Qt::red));
+    const QPointF clipped_glyph_inside = rendered_canvas->documentToContent(0, QPointF(21.0, 29.5));
+    const QPointF clipped_glyph_right = rendered_canvas->documentToContent(0, QPointF(25.5, 29.5));
+    const QPointF clipped_glyph_below = rendered_canvas->documentToContent(0, QPointF(21.0, 32.0));
+    QCOMPARE(pixel_at_logical_point(frame, clipped_glyph_inside.x(), clipped_glyph_inside.y()),
+             QColor(Qt::red));
+    QCOMPARE(pixel_at_logical_point(frame, clipped_glyph_right.x(), clipped_glyph_right.y()),
+             QColor(Qt::white));
+    QCOMPARE(pixel_at_logical_point(frame, clipped_glyph_below.x(), clipped_glyph_below.y()),
+             QColor(Qt::white));
+    const QPointF decoration_inside = rendered_canvas->documentToContent(0, QPointF(35.5, 30.5));
+    const QPointF decoration_outside = rendered_canvas->documentToContent(0, QPointF(39.0, 30.5));
+    const QPointF shape_inside = rendered_canvas->documentToContent(0, QPointF(43.5, 30.5));
+    const QPointF shape_outside = rendered_canvas->documentToContent(0, QPointF(47.0, 30.5));
+    const QPointF line_inside = rendered_canvas->documentToContent(0, QPointF(16.0, 40.0));
+    const QPointF line_outside = rendered_canvas->documentToContent(0, QPointF(20.0, 40.0));
+    QCOMPARE(pixel_at_logical_point(frame, decoration_inside.x(), decoration_inside.y()),
+             QColor(0, 0, 240));
+    QVERIFY(pixel_at_logical_point(frame, decoration_outside.x(), decoration_outside.y()) !=
+            QColor(0, 0, 240));
+    QCOMPARE(pixel_at_logical_point(frame, shape_inside.x(), shape_inside.y()), QColor(0, 220, 0));
+    QVERIFY(pixel_at_logical_point(frame, shape_outside.x(), shape_outside.y()) !=
+            QColor(0, 220, 0));
+    QCOMPARE(pixel_at_logical_point(frame, line_inside.x(), line_inside.y()), QColor(220, 0, 220));
+    QVERIFY(pixel_at_logical_point(frame, line_outside.x(), line_outside.y()) !=
+            QColor(220, 0, 220));
 
     const auto current_caret_pixel = [&render_window]() {
         const QImage current_frame = render_window.grabWindow();

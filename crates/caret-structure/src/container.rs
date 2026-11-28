@@ -76,7 +76,12 @@ impl BlockContainerPath {
 
     /// 最内层表格单元格；用于推导段落 Story 与单元格相对几何。
     pub fn innermost_cell(&self) -> Option<&TableCellPath> {
-        self.steps.iter().rev().find_map(|step| match step {
+        self.table_cells().next_back()
+    }
+
+    /// 按容器嵌套顺序遍历单元格，供跨格范围比较共同父链。
+    pub fn table_cells(&self) -> impl DoubleEndedIterator<Item = &TableCellPath> {
+        self.steps.iter().filter_map(|step| match step {
             ContainerStep::TableCell(cell) => Some(cell),
             ContainerStep::Environment(_) => None,
         })

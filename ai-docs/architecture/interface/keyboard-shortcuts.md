@@ -40,13 +40,13 @@ Esc 和 Shift+Esc 由当前焦点作用域处理；事件到达画布后交给 R
 | 结构的首 / 尾 | Ctrl+Alt+Home / End | Command+Option+Home / End |
 | 编辑器 Escape 仲裁 | Esc / Shift+Esc | 同左 |
 | 逐级扩大选区 | Ctrl+Space | Control+Space |
-| 插入行或列 | Alt+方向键 | Control+Option+Shift+方向键 |
+| 插入行或列 | Alt+方向键 或 Ctrl+Alt+Shift+方向键 | Control+Option+Shift+方向键 |
 | 删除列 | Alt+Backspace / Delete | Option+Backspace / Delete |
 | 删除行 | Alt+Shift+Backspace / Delete | Option+Shift+Backspace / Delete |
 
 逐级扩大选区使用物理 Control+Space；macOS 上不是 Command+Space。Qt 的平台修饰键语义映射由画布统一处理。
 
-表格里，上一块 / 下一块（Linux / Windows 的 Ctrl+↑ / ↓、macOS 的 Option+↑ / ↓）先按行移动；到边缘时若相邻正文段落存在则离开表格，表格位于文档末尾且无尾随段落时保持（v1 限制，见 046）。单元格之间的移动还可用普通方向键：在单元格内容首/末边界时，左右按行优先、上下同列换格；表格边缘在存在相邻正文段落时按块行为离开表格，否则保持。表内键已在 Rust Session 与 native 画布接线（Shift+Tab、Alt+T、行列插入/删除）；`\table` 命令面板入口已启用。
+表格内的上一块和下一块按行移动。普通方向键到达单元格边界时，左右按行优先换格，上下按同列换行。越过表格边缘时先停靠在整表外侧。Escape 可直接停靠到外后。Shift+方向键可跨过整表形成结构选区，逐级扩大选区也可以从表格内选中整表。
 
 插入行列和删除行列只在表格内可用。插入方向以当前单元格为基准：↑ / ↓ 在前 / 后插入行，← / → 在前 / 后插入列。删除列保持 Alt+Backspace / Delete（macOS Option+Backspace / Delete）；删除行使用 Alt+Shift+Backspace / Delete（macOS Option+Shift+Backspace / Delete）。macOS 的 Option+↑ / ↓ 始终用于导航，不插入行。
 

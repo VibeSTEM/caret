@@ -397,6 +397,21 @@ impl DocumentViewRuntime {
             }
             return Ok(result);
         }
+        let direction = if line_delta < 0 {
+            caret_engine::Direction::Backward
+        } else {
+            caret_engine::Direction::Forward
+        };
+        if self
+            .session
+            .block_boundary_uses_vertical_step(direction, extend)
+        {
+            return dispatch_navigation_key(
+                self,
+                vertical_navigation_key(line_delta, None, extend),
+                "navigation.vertical",
+            );
+        }
         let boundary = self.session.block_boundary_exit();
         let structure_range = self.session.structure_selection_range();
         let block_focus = structure_range.and_then(|(_, focus)| match focus {
@@ -414,15 +429,10 @@ impl DocumentViewRuntime {
             let fallback = snapshot
                 .caret_geometry(&focus, affinity)
                 .ok_or_else(|| "navigation.invalid_caret".to_owned())?;
-            let edge = block_focus;
-            let caret = edge.map_or_else(
-                || {
-                    boundary.as_ref().map_or(fallback, |(id, side)| {
-                        snapshot.block_boundary_caret(id, *side, fallback)
-                    })
-                },
-                |(id, side)| snapshot.block_boundary_caret(&id, side, fallback),
-            );
+            let edge = block_focus.as_ref().or(boundary.as_ref());
+            let caret = edge.map_or(fallback, |(id, side)| {
+                snapshot.block_boundary_caret(id, *side, fallback)
+            });
             let margin = snapshot.pages[caret.page_index].margin_left_pt as f32;
             // 块外侧停靠的页面列独立于借用的正文光标；后续连续扩选仍沿用同一列。
             let x = if boundary.is_some() {
@@ -430,8 +440,13 @@ impl DocumentViewRuntime {
             } else {
                 preferred.map_or(caret.x_pt as f32, |x| x + margin)
             };
-            let candidate =
-                snapshot.vertical_candidate_from_block(caret, line_delta, x, generation);
+            let candidate = snapshot.vertical_candidate_from_block(
+                caret,
+                edge.map(|(id, side)| (id, *side)),
+                line_delta,
+                x,
+                generation,
+            );
             let target_margin = match &candidate {
                 Some(NavigationCandidate::Document {
                     focus,
@@ -442,7 +457,7 @@ impl DocumentViewRuntime {
                     .map(|geometry| snapshot.pages[geometry.page_index].margin_left_pt as f32),
                 _ => None,
             };
-            if candidate.is_none() {
+            if candidate.is_none() && !extend {
                 return self.interaction_state_json();
             }
             let result = dispatch_navigation_key(
@@ -453,14 +468,6 @@ impl DocumentViewRuntime {
             self.preferred_visual_x_pt = Some(target_margin.map_or(x, |margin| x - margin));
             return Ok(result);
         }
-        let table_vertical_boundary = !extend
-            && self
-                .session
-                .table_vertical_block_boundary(if line_delta < 0 {
-                    caret_engine::Direction::Backward
-                } else {
-                    caret_engine::Direction::Forward
-                });
         let at_vertical_edge = {
             let focus = self.session.selection().focus.clone();
             let visual_affinity = self.session.selection_visual_affinity();
@@ -476,23 +483,30 @@ impl DocumentViewRuntime {
             paragraph
                 .layout
                 .move_vertical(cursor, line_delta, preferred_x)
-                .is_none_or(|(next, _)| next.byte_index() == cursor.byte_index())
+                .is_none()
         };
         if at_vertical_edge {
             let focus_before_edge = self.session.selection().focus.clone();
+            let candidate = if extend {
+                let generation = navigation_generation(self)?;
+                self.session
+                    .adjacent_atomic_selection_candidate(direction, generation)
+                    .map_err(|error| format!("navigation.vertical_edge: {error}"))?
+            } else {
+                None
+            };
             let result = dispatch_navigation_key(
                 self,
-                vertical_navigation_key(line_delta, None, extend),
+                vertical_navigation_key(line_delta, candidate, extend),
                 "navigation.vertical_edge",
             )?;
-            // 表格 cell 边界或共享宿主导航已经在 phase1 原子地完成换格/消费按键；
-            // 不能再让 phase2 用旧几何候选提交第二次移动。
-            if table_vertical_boundary || self.session.selection().focus != focus_before_edge {
+            // 宿主边界先于跨行候选提交。焦点已变时，旧视觉候选不能再提交一次。
+            if self.session.selection().focus != focus_before_edge {
                 self.preferred_visual_x_pt = None;
                 return Ok(result);
             }
             if self.session.math_edit().is_some()
-                || self.session.math_block_boundary_exit().is_some()
+                || self.session.block_boundary_exit().is_some()
                 || self
                     .session
                     .structure_selection_range()

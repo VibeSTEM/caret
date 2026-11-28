@@ -13,6 +13,7 @@ pub use caret_doc::{ClipboardFragment, DocumentFontTarget};
 pub use caret_layout::{HitAffinity, VisualAffinity};
 pub use caret_structure::{
     IndexedStructure, StructureClass, StructureIndex, StructureKind, StructurePosition,
+    TableCellPath,
 };
 
 pub use editing::{
@@ -31,9 +32,9 @@ pub use editing::{
 pub use layout::{
     DocumentLayoutError, DocumentLayoutRuntime, DocumentLayoutService, DocumentLayoutSnapshot,
     FragmentHost, LaidOutParagraph, MathTextVerticalTarget, MathTreeVerticalTarget,
-    PageCaretGeometry, PageEnvironmentRange, PageHit, PageLayoutSnapshot, PageMathStructureHit,
-    PageMathTextDragStop, PageMathTextHit, PageMathTreeDragStop, PageSelectionRect,
-    TextLayoutDiagnostic,
+    PageCaretGeometry, PageCellHitRegion, PageEnvironmentRange, PageHit, PageLayoutSnapshot,
+    PageMathStructureHit, PageMathTextDragStop, PageMathTextHit, PageMathTreeDragStop,
+    PageSelectionRect, TextLayoutDiagnostic,
 };
 pub use layout_view::{
     DocumentLayoutDeltaView, DocumentLayoutView, DocumentPositionView, EnvironmentRangeView,

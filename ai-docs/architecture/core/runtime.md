@@ -82,4 +82,6 @@ AutoSave 的策略与文档生命周期分开管理。全局开关是 Rust `Pref
 
 恢复文件由 `caret-app` 独立的 `DocumentRecoveryStorage` 管理，放在 `app-local-data:/recovery/`，由宿主映射到 Qt `QStandardPaths::AppLocalDataLocation`。它复用底层原子文件工具，不耦入普通 `DocumentStorage`；该本机持久目录避免 Windows roaming data 同步大型恢复副本。恢复 envelope 包含本地 `.cdoc` 快照或外部原始字节、原路径、基线摘要、创建时间和 schema 版本。启动时提供恢复选择，保留三十天。恢复到临时会话后继续保留 envelope，另存成功或明确丢弃后才删除；再次编辑时原子更新同一条目。由于通用文件系统不提供可移植的内容 compare-and-swap，外部检查和原子替换之间仍存在窄竞争窗口，不能承诺绝对无丢失。
 
+`caret-app` 协调冲突恢复副本的创建和复用、等待会话接管的租约、快照写入与绑定代际。worker 完成时由应用层核对捕获的会话、修订和恢复身份，再推进生命周期。FFI 转换请求、完成结果和错误投影。
+
 AutoSave I/O 失败不推进保存点、不丢弃内存内容，也不进行无界重试；下一次编辑、显式重试或关闭时再尝试。启用状态下关闭 dirty 的已命名文档会先保存当前 revision；失败、冲突或仍有较新 revision 时回到 018 的 Save / Don't Save / Cancel 流程。未命名文档必须先走另存为。关闭开关不会中断已经开始的原子写入。

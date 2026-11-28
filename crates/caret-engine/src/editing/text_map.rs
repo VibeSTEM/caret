@@ -1047,6 +1047,14 @@ fn collect_paragraph_run_property_spans(
             match content {
                 FlowContent::Text(flow) => {
                     for run in &flow.runs {
+                        // 默认空 Run 没有插入格式或元数据，不应切断同一属性范围。
+                        if run.text.is_empty()
+                            && run.language.is_none()
+                            && run.props.is_empty()
+                            && run.extra.is_empty()
+                        {
+                            continue;
+                        }
                         if (property.is_active)(run.props.get(property.key)) {
                             active_start.get_or_insert(*offset);
                         } else {

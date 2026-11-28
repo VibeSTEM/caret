@@ -90,16 +90,14 @@ impl Session {
             return self.collapse_structure_selection(Direction::Backward);
         }
         if !extend
-            && let Some(effect) = self.table_arrow_step(
-                super::super::table::TableArrowAxis::Horizontal,
-                Direction::Backward,
-            )?
+            && self.empty_inline_boundary_candidate_matches(candidate.as_ref())?
+            && let Some(effect) = self.move_empty_inline_host_boundary(Direction::Backward)?
         {
             return Ok(effect);
         }
         if !extend
-            && self.empty_inline_boundary_candidate_matches(candidate.as_ref())?
-            && let Some(effect) = self.move_empty_inline_host_boundary(Direction::Backward)?
+            && let Some(effect) =
+                self.step_table_horizontally(Direction::Backward, candidate.as_ref())?
         {
             return Ok(effect);
         }

@@ -309,10 +309,13 @@ bool LayoutViewModel::installInteraction(const QJsonObject& root) {
     }
     QVariantList table_guidelines = m_table_guidelines;
     const QJsonValue table_guidelines_value = root.value(QStringLiteral("tableGuidelines"));
-    if (!table_guidelines_value.isUndefined() &&
-        !layout_snapshot::parse_table_guidelines(table_guidelines_value, m_page_sizes_pt,
-                                                 table_guidelines, m_error)) {
-        return false;
+    if (!table_guidelines_value.isUndefined()) {
+        QVariantList parsed_table_guidelines;
+        if (!layout_snapshot::parse_table_guidelines(table_guidelines_value, m_page_sizes_pt,
+                                                     parsed_table_guidelines, m_error)) {
+            return false;
+        }
+        table_guidelines = std::move(parsed_table_guidelines);
     }
     QVariantList current_structure = m_current_structure;
     const QJsonValue current_structure_value = root.value(QStringLiteral("currentStructure"));

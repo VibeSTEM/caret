@@ -2,10 +2,14 @@
 
 use super::*;
 use crate::editing::text_map::TextMap;
-use crate::editing::{Affinity, Command, EditError, MathEditBranch, Pos, Selection, StoryId};
+use crate::editing::{
+    Affinity, Command, Direction, DocumentRangeEndpoint, EditError, MathEditBranch, Pos, Selection,
+    StoryId, StructureSelection,
+};
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, InlineEnvironment,
-    InlineEnvironmentKind, InlineMath, NodeId, Paragraph, ParagraphContent, Run, TextFlow,
+    InlineEnvironmentKind, InlineMath, NodeId, Paragraph, ParagraphContent, Run, Table, TableCell,
+    TableRow, TextFlow,
 };
 use caret_math::{MathInputKind, ParsedMath};
 
@@ -99,6 +103,462 @@ fn inline_math(source: &str) -> ParagraphContent {
         math_tree: parse_tree(source, MathInputKind::Inline),
         extra: Default::default(),
     })
+}
+
+fn table_cell(blocks: Vec<Block>) -> TableCell {
+    TableCell {
+        id: NodeId::generate(),
+        blocks,
+    }
+}
+
+fn select_block(session: &mut Session, block_id: &NodeId) {
+    session
+        .install_structure_selection(StructureSelection {
+            anchor: DocumentRangeEndpoint::BlockEdge {
+                block_id: block_id.clone(),
+                side: Direction::Backward,
+            },
+            focus: DocumentRangeEndpoint::BlockEdge {
+                block_id: block_id.clone(),
+                side: Direction::Forward,
+            },
+        })
+        .unwrap_or_else(|error| panic!("block selection should succeed: {error}"));
+}
+
+fn table_block(rows: Vec<Vec<Vec<Block>>>) -> (Block, NodeId, Vec<NodeId>, Vec<NodeId>) {
+    let mut row_ids = Vec::with_capacity(rows.len());
+    let mut cell_ids = Vec::new();
+    let rows = rows
+        .into_iter()
+        .map(|cells| {
+            let cells = cells
+                .into_iter()
+                .map(|blocks| {
+                    let cell = table_cell(blocks);
+                    cell_ids.push(cell.id.clone());
+                    cell
+                })
+                .collect();
+            let row = TableRow {
+                id: NodeId::generate(),
+                cells,
+            };
+            row_ids.push(row.id.clone());
+            row
+        })
+        .collect();
+    let table = Table {
+        id: NodeId::generate(),
+        rows,
+    };
+    let table_id = table.id.clone();
+    (Block::Table(table), table_id, row_ids, cell_ids)
+}
+
+fn cell_position(table: &Table, paragraph: &Paragraph, offset: usize) -> Pos {
+    let row = table
+        .rows
+        .iter()
+        .find(|row| {
+            row.cells.iter().any(|cell| {
+                cell.blocks
+                    .iter()
+                    .any(|block| matches!(block, Block::Paragraph(p) if p.id == paragraph.id))
+            })
+        })
+        .unwrap_or_else(|| panic!("paragraph should be inside a table cell"));
+    let cell = row
+        .cells
+        .iter()
+        .find(|cell| {
+            cell.blocks
+                .iter()
+                .any(|block| matches!(block, Block::Paragraph(p) if p.id == paragraph.id))
+        })
+        .unwrap_or_else(|| panic!("paragraph should be inside a table cell"));
+    Pos {
+        story: StoryId::TableCell {
+            table_id: table.id.clone(),
+            row_id: row.id.clone(),
+            cell_id: cell.id.clone(),
+        },
+        paragraph_id: paragraph.id.clone(),
+        offset,
+        affinity: Affinity::Downstream,
+    }
+}
+
+fn select_between_blocks(session: &mut Session, first: &NodeId, last: &NodeId) {
+    session
+        .install_structure_selection(StructureSelection {
+            anchor: DocumentRangeEndpoint::BlockEdge {
+                block_id: first.clone(),
+                side: Direction::Backward,
+            },
+            focus: DocumentRangeEndpoint::BlockEdge {
+                block_id: last.clone(),
+                side: Direction::Forward,
+            },
+        })
+        .unwrap_or_else(|error| panic!("block range should succeed: {error}"));
+}
+
+#[test]
+fn table_blocks_copy_to_tsv_and_paste_with_fresh_ids_and_one_undo() {
+    let mut inline = Paragraph::empty(NodeId::generate());
+    let inline_math = match inline_math("x") {
+        ParagraphContent::Math(math) => math,
+        _ => unreachable!(),
+    };
+    let inline_math_id = inline_math.id.clone();
+    inline.inlines = vec![text_flow("one"), ParagraphContent::Math(inline_math)];
+    let equation = equation_block("x");
+    let equation_id = match &equation {
+        Block::Equation(equation) => equation.id.clone(),
+        _ => unreachable!(),
+    };
+    let first_para_id = inline.id.clone();
+    let second = paragraph_with(NodeId::generate(), "multi1");
+    let third = paragraph_with(NodeId::generate(), "multi2");
+    let second_id = match &second {
+        Block::Paragraph(paragraph) => paragraph.id.clone(),
+        _ => unreachable!(),
+    };
+    let third_id = match &third {
+        Block::Paragraph(paragraph) => paragraph.id.clone(),
+        _ => unreachable!(),
+    };
+    let align = Block::Align(parse_align(r"\begin{aligned}a&=b\end{aligned}"));
+    let (table_block, table_id, row_ids, cell_ids) = table_block(vec![
+        vec![vec![Block::Paragraph(inline)], vec![equation]],
+        vec![vec![second, third], vec![align]],
+    ]);
+    let mut source = session_with_body(vec![table_block]);
+    select_block(&mut source, &table_id);
+
+    let copy = source
+        .copy_clipboard_fragment()
+        .unwrap_or_else(|error| panic!("table copy should succeed: {error}"))
+        .unwrap_or_else(|| panic!("selected table should produce a fragment"));
+    assert_eq!(copy.fragment.shape, ClipboardFragmentShape::Blocks);
+    assert!(matches!(copy.fragment.blocks.as_slice(), [Block::Table(_)]));
+    assert_eq!(
+        copy.plain_text,
+        "one\\(x\\)\t\\[x\\]\nmulti1\nmulti2\t\\[\\begin{aligned}a & =b\\end{aligned}\\]"
+    );
+    assert_eq!(
+        source
+            .selected_text()
+            .unwrap_or_else(|error| panic!("selection projection should succeed: {error}")),
+        "one\u{fffc}\t\u{fffc}\nmulti1\nmulti2\t\u{fffc}"
+    );
+    assert!(!copy.plain_text.contains('\u{fffc}'));
+
+    let target_id = NodeId::generate();
+    let mut target = session_with_body(vec![paragraph_with(target_id.clone(), "beforeafter")]);
+    select(&mut target, pos(&target_id, 6), pos(&target_id, 6));
+    let before = target.document().clone();
+    target
+        .paste_clipboard_fragment(copy.fragment)
+        .unwrap_or_else(|error| panic!("table block paste should succeed: {error}"));
+    let pasted = target.document().clone();
+    assert!(matches!(
+        target.document().body.as_slice(),
+        [Block::Paragraph(_), Block::Table(_), Block::Paragraph(_)]
+    ));
+    let pasted_table = match &target.document().body[1] {
+        Block::Table(table) => table,
+        _ => unreachable!(),
+    };
+    for id in [
+        table_id,
+        row_ids[0].clone(),
+        row_ids[1].clone(),
+        cell_ids[0].clone(),
+        cell_ids[1].clone(),
+        cell_ids[2].clone(),
+        cell_ids[3].clone(),
+        first_para_id,
+        second_id,
+        third_id,
+        inline_math_id,
+        equation_id,
+    ] {
+        assert_ne!(pasted_table.id, id);
+        assert!(!caret_doc::clipboard_fragment_contains_id(
+            &target.document().body,
+            &id
+        ));
+    }
+    assert_eq!(
+        body_paragraph_texts(&target),
+        vec!["before".to_owned(), "after".to_owned()]
+    );
+    target
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("table paste should undo once: {error}"));
+    assert_eq!(target.document(), &before);
+    assert!(!target.can_undo());
+    target
+        .run(Command::Redo)
+        .unwrap_or_else(|error| panic!("table paste should redo: {error}"));
+    assert_eq!(target.document(), &pasted);
+}
+
+#[test]
+fn same_cell_range_copies_paragraph_cuts_and_display_formula_then_pastes_in_cell() {
+    let first = match paragraph_with(NodeId::generate(), "alpha") {
+        Block::Paragraph(paragraph) => paragraph,
+        _ => unreachable!(),
+    };
+    let last = match paragraph_with(NodeId::generate(), "omega") {
+        Block::Paragraph(paragraph) => paragraph,
+        _ => unreachable!(),
+    };
+    let equation = equation_block("x");
+    let equation_id = match &equation {
+        Block::Equation(equation) => equation.id.clone(),
+        _ => unreachable!(),
+    };
+    let (source_table_block, _source_table_id, _, _) = table_block(vec![vec![vec![
+        Block::Paragraph(first.clone()),
+        equation,
+        Block::Paragraph(last.clone()),
+    ]]]);
+    let source_table = match &source_table_block {
+        Block::Table(table) => table.clone(),
+        _ => unreachable!(),
+    };
+    let mut source = session_with_body(vec![source_table_block]);
+    select(
+        &mut source,
+        cell_position(&source_table, &first, 2),
+        cell_position(&source_table, &last, 3),
+    );
+    let copy = source
+        .copy_clipboard_fragment()
+        .unwrap_or_else(|error| panic!("same-cell range copy should succeed: {error}"))
+        .unwrap_or_else(|| panic!("selected cell range should produce a fragment"));
+    assert_eq!(copy.fragment.shape, ClipboardFragmentShape::Blocks);
+    assert!(copy.fragment.start_clipped && copy.fragment.end_clipped);
+    assert_eq!(copy.plain_text, "pha\n\\[x\\]\nome");
+    assert_eq!(
+        source
+            .selected_text()
+            .unwrap_or_else(|error| panic!("same-cell text projection should succeed: {error}")),
+        "pha\n\u{fffc}\nome"
+    );
+    let Block::Table(source_table) = &source.document().body[0] else {
+        unreachable!();
+    };
+    let source_cell = &source_table.rows[0].cells[0];
+
+    let target_first = match paragraph_with(NodeId::generate(), "XY") {
+        Block::Paragraph(paragraph) => paragraph,
+        _ => unreachable!(),
+    };
+    let (target_table_block, _, _, _) =
+        table_block(vec![vec![vec![Block::Paragraph(target_first.clone())]]]);
+    let target_table = match &target_table_block {
+        Block::Table(table) => table.clone(),
+        _ => unreachable!(),
+    };
+    let mut target = session_with_body(vec![target_table_block]);
+    let target_position = cell_position(&target_table, &target_first, 1);
+    select(&mut target, target_position.clone(), target_position);
+    let before = target.document().clone();
+    target
+        .paste_clipboard_fragment(copy.fragment)
+        .unwrap_or_else(|error| panic!("ordinary block fragment should paste in a cell: {error}"));
+    let Block::Table(pasted_table) = &target.document().body[0] else {
+        unreachable!();
+    };
+    let pasted_cell = &pasted_table.rows[0].cells[0];
+    assert_eq!(pasted_cell.blocks.len(), 3);
+    assert!(
+        matches!(&pasted_cell.blocks[0], Block::Paragraph(paragraph) if paragraph_text_of(paragraph) == "Xpha")
+    );
+    assert!(
+        matches!(&pasted_cell.blocks[1], Block::Equation(equation) if equation.id != equation_id)
+    );
+    assert!(
+        matches!(&pasted_cell.blocks[2], Block::Paragraph(paragraph) if paragraph_text_of(paragraph) == "omeY")
+    );
+    assert_eq!(source_cell.blocks.len(), 3);
+    let pasted = target.document().clone();
+    target
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("cell paste should undo once: {error}"));
+    assert_eq!(target.document(), &before);
+    target
+        .run(Command::Redo)
+        .unwrap_or_else(|error| panic!("cell paste should redo: {error}"));
+    assert_eq!(target.document(), &pasted);
+}
+
+#[test]
+fn copying_only_a_cell_paragraph_break_pastes_one_shared_boundary()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (left, right) in [("aa", "bb"), ("", "bb"), ("aa", ""), ("", "")] {
+        for destination_text in ["xy", ""] {
+            let Block::Paragraph(first) = paragraph_with(NodeId::generate(), left) else {
+                unreachable!();
+            };
+            let Block::Paragraph(second) = paragraph_with(NodeId::generate(), right) else {
+                unreachable!();
+            };
+            let Block::Paragraph(target) = paragraph_with(NodeId::generate(), destination_text)
+            else {
+                unreachable!();
+            };
+            let (block, ..) = table_block(vec![vec![vec![
+                Block::Paragraph(first.clone()),
+                Block::Paragraph(second.clone()),
+                Block::Paragraph(target.clone()),
+                paragraph_with(NodeId::generate(), "cc"),
+            ]]]);
+            let Block::Table(table) = &block else {
+                unreachable!();
+            };
+            let first_end = cell_position(table, &first, left.len());
+            let second_start = cell_position(table, &second, 0);
+            let target_start = cell_position(table, &target, 0);
+            let mut session = session_with_body(vec![block]);
+            select(&mut session, first_end, second_start);
+            assert_eq!(session.selected_text()?, "\n");
+            let copied = session
+                .copy_clipboard_fragment()?
+                .ok_or(EditError::InvalidPosition)?;
+            assert_eq!(copied.plain_text, "\n");
+            assert_eq!(copied.fragment.shape, ClipboardFragmentShape::Blocks);
+            assert!(copied.fragment.start_clipped && copied.fragment.end_clipped);
+            assert_eq!(copied.fragment.blocks.len(), 2);
+            let encoded = caret_doc::encode_clipboard_fragment_json(&copied.fragment)?;
+            let fragment = caret_doc::decode_clipboard_fragment_json(&encoded)?;
+
+            for offset in 0..=destination_text.len() {
+                let destination = Pos {
+                    offset,
+                    ..target_start.clone()
+                };
+                select(&mut session, destination.clone(), destination);
+                let before = session.document().clone();
+                session.paste_clipboard_fragment(fragment.clone())?;
+                let Block::Table(table) = &session.document().body[0] else {
+                    return Err(EditError::InvalidPosition.into());
+                };
+                let text = table.rows[0].cells[0]
+                    .blocks
+                    .iter()
+                    .map(|block| match block {
+                        Block::Paragraph(paragraph) => Ok(paragraph_text_of(paragraph)),
+                        _ => Err(EditError::InvalidPosition),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let (prefix, suffix) = destination_text.split_at(offset);
+                assert_eq!(text, [left, right, prefix, suffix, "cc"]);
+                session.run(Command::Undo)?;
+                assert_eq!(session.document(), &before);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn cross_table_structure_range_copies_and_pastes_tables_in_document_order() {
+    let (first_table, first_id, _, _) = table_block(vec![vec![vec![paragraph_with(
+        NodeId::generate(),
+        "first",
+    )]]]);
+    let (second_table, second_id, _, _) = table_block(vec![vec![vec![paragraph_with(
+        NodeId::generate(),
+        "second",
+    )]]]);
+    let middle_id = NodeId::generate();
+    let mut source = session_with_body(vec![
+        first_table,
+        paragraph_with(middle_id.clone(), "middle"),
+        second_table,
+    ]);
+    select_between_blocks(&mut source, &first_id, &second_id);
+    let copy = source
+        .copy_clipboard_fragment()
+        .unwrap_or_else(|error| panic!("cross-table copy should succeed: {error}"))
+        .unwrap_or_else(|| panic!("cross-table range should produce a fragment"));
+    assert_eq!(copy.fragment.shape, ClipboardFragmentShape::Blocks);
+    assert!(matches!(
+        copy.fragment.blocks.as_slice(),
+        [Block::Table(_), Block::Paragraph(_), Block::Table(_)]
+    ));
+
+    let target_id = NodeId::generate();
+    let mut target = session_with_body(vec![paragraph_with(target_id.clone(), "delete")]);
+    select(&mut target, pos(&target_id, 0), pos(&target_id, 6));
+    target
+        .paste_clipboard_fragment(copy.fragment)
+        .unwrap_or_else(|error| panic!("cross-table blocks should paste: {error}"));
+    assert!(matches!(
+        target.document().body.as_slice(),
+        [Block::Table(_), Block::Paragraph(_), Block::Table(_)]
+    ));
+    let Block::Table(first_pasted) = &target.document().body[0] else {
+        unreachable!();
+    };
+    let Block::Table(second_pasted) = &target.document().body[2] else {
+        unreachable!();
+    };
+    assert_ne!(first_pasted.id, first_id);
+    assert_ne!(second_pasted.id, second_id);
+    assert_eq!(body_paragraph_texts(&target), vec!["middle".to_owned()]);
+    let table_text = |table: &Table| match &table.rows[0].cells[0].blocks[0] {
+        Block::Paragraph(paragraph) => paragraph_text_of(paragraph),
+        _ => panic!("copied cell should preserve its paragraph block"),
+    };
+    assert_eq!(table_text(first_pasted), "first");
+    assert_eq!(table_text(second_pasted), "second");
+}
+
+#[test]
+fn table_blocks_cannot_be_pasted_into_an_existing_cell_and_failure_is_atomic() {
+    let (source_table, source_table_id, _, _) = table_block(vec![vec![vec![paragraph_with(
+        NodeId::generate(),
+        "copied",
+    )]]]);
+    let mut source = session_with_body(vec![source_table]);
+    select_block(&mut source, &source_table_id);
+    let copy = source
+        .copy_clipboard_fragment()
+        .unwrap_or_else(|error| panic!("table copy should succeed: {error}"))
+        .unwrap_or_else(|| panic!("selected table should produce a fragment"));
+
+    let paragraph = match paragraph_with(NodeId::generate(), "keep") {
+        Block::Paragraph(paragraph) => paragraph,
+        _ => unreachable!(),
+    };
+    let (target_table_block, _, _, _) =
+        table_block(vec![vec![vec![Block::Paragraph(paragraph.clone())]]]);
+    let target_table = match &target_table_block {
+        Block::Table(table) => table.clone(),
+        _ => unreachable!(),
+    };
+    let mut target = session_with_body(vec![target_table_block]);
+    let position = cell_position(&target_table, &paragraph, 2);
+    select(&mut target, position.clone(), position);
+    let document_before = target.document().clone();
+    let selection_before = target.selection().clone();
+    let generation_before = target.document_generation();
+    assert!(!target.can_undo());
+    assert_eq!(
+        target.paste_clipboard_fragment(copy.fragment),
+        Err(EditError::ClipboardHostMismatch)
+    );
+    assert_eq!(target.document(), &document_before);
+    assert_eq!(target.selection(), &selection_before);
+    assert_eq!(target.document_generation(), generation_before);
+    assert!(!target.can_undo());
 }
 
 #[test]

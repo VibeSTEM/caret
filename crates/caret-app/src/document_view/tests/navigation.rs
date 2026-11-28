@@ -412,6 +412,328 @@ fn horizontal_navigation_enters_adjacent_inline_and_display_math_from_both_sides
 }
 
 #[test]
+fn horizontal_navigation_crosses_the_page_break_after_a_table()
+-> Result<(), Box<dyn std::error::Error>> {
+    let table_id = NodeId::generate();
+    let after = paragraph_with_text("after");
+    let after_id = after.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Table(caret_doc::Table {
+            id: table_id.clone(),
+            rows: vec![caret_doc::TableRow {
+                id: NodeId::generate(),
+                cells: vec![caret_doc::TableCell {
+                    id: NodeId::generate(),
+                    blocks: vec![Block::Paragraph(Paragraph::empty(NodeId::generate()))],
+                }],
+            }],
+        }),
+        Block::ExplicitBreak(caret_doc::ExplicitBreak {
+            kind: "page".to_owned(),
+            extra: BTreeMap::new(),
+        }),
+        Block::Paragraph(after),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document.clone())?;
+    set_body_caret(&mut runtime, after_id.clone(), 0)?;
+    let edge = Some((table_id, caret_engine::Direction::Forward));
+    let left: Value = serde_json::from_str(&runtime.move_visual_caret_json(false, false)?)?;
+    assert_eq!(runtime.session.block_boundary_exit(), edge);
+    assert_eq!(left["caretGeometry"]["pageIndex"], 0);
+
+    runtime.move_visual_caret_json(false, false)?;
+    assert!(runtime.session.focused_table_cell().is_some());
+    runtime.move_visual_caret_json(true, false)?;
+    assert_eq!(runtime.session.block_boundary_exit(), edge);
+
+    let right: Value = serde_json::from_str(&runtime.move_visual_caret_json(true, false)?)?;
+    assert!(runtime.session.block_boundary_exit().is_none());
+    assert_eq!(runtime.session.selection().focus.paragraph_id, after_id);
+    assert_eq!(runtime.session.selection().focus.offset, 0);
+    assert_eq!(right["caretGeometry"]["pageIndex"], 1);
+    assert_eq!(runtime.session.document(), &document);
+    Ok(())
+}
+
+#[test]
+fn dragging_from_text_to_inline_math_in_another_cell_previews_the_whole_table()
+-> Result<(), Box<dyn std::error::Error>> {
+    let text = paragraph_with_text("cell text");
+    let text_id = text.id.as_str().to_owned();
+    let math_id = NodeId::generate();
+    let mut math = Paragraph::empty(NodeId::generate());
+    let mut math_tree = inline_math_tree();
+    math_tree
+        .root
+        .content
+        .push(caret_doc::MathContent::Math(caret_doc::MathNode {
+            id: NodeId::generate(),
+            kind: caret_doc::MathNodeKind::Group,
+            text: None,
+            attributes: BTreeMap::new(),
+            children: vec![align_text_tree("abc").root],
+            extra: BTreeMap::new(),
+        }));
+    math.inlines
+        .push(ParagraphContent::Math(caret_doc::InlineMath {
+            id: math_id.clone(),
+            math_tree,
+            extra: BTreeMap::new(),
+        }));
+    let table_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body = vec![Block::Table(caret_doc::Table {
+        id: table_id.clone(),
+        rows: vec![caret_doc::TableRow {
+            id: NodeId::generate(),
+            cells: [text, math]
+                .into_iter()
+                .map(|paragraph| caret_doc::TableCell {
+                    id: NodeId::generate(),
+                    blocks: vec![Block::Paragraph(paragraph)],
+                })
+                .collect(),
+        }],
+    })];
+    let mut runtime = DocumentViewRuntime::new(document.clone())?;
+    let initial: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+    let hit_map: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+    let stops = hit_map["stops"].as_array().ok_or("drag map has no stops")?;
+    let text_stop = stops
+        .iter()
+        .find(|stop| {
+            stop["position"]["kind"] == "body"
+                && stop["position"]["paragraphId"] == text_id
+                && stop["position"]["offsetUtf8"] == "1"
+        })
+        .ok_or("first table cell has no text stop")?;
+    let start: Value = serde_json::from_str(&runtime.drag_start_domain_json(
+        0,
+        text_stop["xPt"].as_f64().ok_or("text stop has no x")?,
+        text_stop["y0Pt"].as_f64().ok_or("text stop has no y")?,
+    )?)?;
+    assert_eq!(start["domainId"], "body");
+    let endpoint = |stop: &Value| {
+        let mut position = stop["position"].clone();
+        position["visualAffinity"] = stop["visualAffinity"].clone();
+        position
+    };
+    for kind in ["mathTree", "math"] {
+        let math_stop = stops
+            .iter()
+            .find(|stop| {
+                stop["position"]["kind"] == kind
+                    && stop["position"]["target"]["mathId"] == math_id.as_str()
+            })
+            .ok_or("second table cell has no inline math stop")?;
+        let selection = serde_json::json!({
+            "anchor": endpoint(text_stop),
+            "focus": endpoint(math_stop),
+        });
+        let snapshot: Value =
+            serde_json::from_str(&runtime.set_selection_json(&selection.to_string())?)?;
+        assert_eq!(
+            runtime.session.selected_atomic_blocks(),
+            std::slice::from_ref(&table_id)
+        );
+        assert_eq!(
+            snapshot["selectionRects"],
+            initial["blockEnvironmentHighlightRects"]
+        );
+        assert_eq!(snapshot["tableGuidelines"], serde_json::json!([]));
+        assert_eq!(runtime.document(), &document);
+    }
+    for (field, invalid) in [
+        ("sessionId", serde_json::json!(NodeId::generate().as_str())),
+        (
+            "documentGeneration",
+            serde_json::json!(u64::MAX.to_string()),
+        ),
+        ("fontGeneration", serde_json::json!(u64::MAX.to_string())),
+        ("pageIndex", serde_json::json!(1)),
+    ] {
+        let mut stale = endpoint(text_stop);
+        stale[field] = invalid;
+        let selection = serde_json::json!({"anchor": stale, "focus": endpoint(text_stop)});
+        assert_eq!(
+            runtime.set_selection_json(&selection.to_string()),
+            Err("selection.stale_body_hit".to_owned())
+        );
+        assert_eq!(
+            runtime.session.selected_atomic_blocks(),
+            std::slice::from_ref(&table_id)
+        );
+        assert_eq!(runtime.document(), &document);
+    }
+    Ok(())
+}
+
+#[test]
+fn body_drag_from_preedit_only_offset_rehits_across_table_cells()
+-> Result<(), Box<dyn std::error::Error>> {
+    let table_id = NodeId::generate();
+    let first_cell_id = NodeId::generate();
+    let second_cell_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body = vec![Block::Table(caret_doc::Table {
+        id: table_id.clone(),
+        rows: vec![caret_doc::TableRow {
+            id: NodeId::generate(),
+            cells: vec![
+                caret_doc::TableCell {
+                    id: first_cell_id.clone(),
+                    blocks: vec![Block::Paragraph(Paragraph::empty(NodeId::generate()))],
+                },
+                caret_doc::TableCell {
+                    id: second_cell_id.clone(),
+                    blocks: vec![Block::Paragraph(Paragraph::empty(NodeId::generate()))],
+                },
+            ],
+        }],
+    })];
+    let mut runtime = DocumentViewRuntime::new(document.clone())?;
+    runtime.input_method_event_json("nihong".to_owned(), String::new(), 0, 0, 6)?;
+    let preview: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+    let cell_regions = preview["cellHitRegions"]
+        .as_array()
+        .ok_or("preview omitted table cell hit regions")?;
+    let first_region = cell_regions
+        .iter()
+        .find(|region| region["cellId"] == first_cell_id.as_str())
+        .ok_or("first cell hit region is missing")?;
+    let second_region = cell_regions
+        .iter()
+        .find(|region| region["cellId"] == second_cell_id.as_str())
+        .ok_or("second cell hit region is missing")?;
+    assert_eq!(first_region["pageIndex"], 0);
+    assert_eq!(second_region["pageIndex"], 0);
+    assert!(first_region["x1Pt"].as_f64() <= second_region["x0Pt"].as_f64());
+    let stops = preview["stops"].as_array().ok_or("preview has no stops")?;
+    let anchor = stops
+        .iter()
+        .find(|stop| {
+            stop["position"]["paragraphId"]
+                == runtime.session.selection().focus.paragraph_id.to_string()
+                && stop["position"]["offsetUtf8"] == "6"
+        })
+        .ok_or("preedit-only body stop is missing")?;
+    let focus = stops
+        .iter()
+        .find(|stop| {
+            stop["position"]["kind"] == "body" && stop["cellId"] == second_cell_id.as_str()
+        })
+        .ok_or("second cell body stop is missing")?;
+    let endpoint = |stop: &Value| {
+        let mut position = stop["position"].clone();
+        position["visualAffinity"] = stop["visualAffinity"].clone();
+        position
+    };
+    let mut stale_anchor = endpoint(anchor);
+    stale_anchor["documentGeneration"] = serde_json::json!(u64::MAX.to_string());
+    let composition_before = runtime.session.composition().cloned();
+    let selection = serde_json::json!({
+        "anchor": stale_anchor,
+        "focus": endpoint(focus),
+    });
+    assert_eq!(
+        runtime.set_selection_json(&selection.to_string()),
+        Err("selection.stale_body_hit".to_owned())
+    );
+    assert_eq!(runtime.session.composition(), composition_before.as_ref());
+    assert!(runtime.composition_id.is_some());
+    let result: Value = serde_json::from_str(
+        &runtime.set_selection_json(
+            &serde_json::json!({
+                "anchor": endpoint(anchor),
+                "focus": endpoint(focus),
+            })
+            .to_string(),
+        )?,
+    )?;
+    assert!(runtime.composition_id.is_none());
+    assert!(runtime.session.composition().is_none());
+    assert_eq!(runtime.session.selected_atomic_blocks(), &[table_id]);
+    assert_eq!(runtime.document(), &document);
+    assert!(
+        result["selectionRects"]
+            .as_array()
+            .is_some_and(|rects| !rects.is_empty())
+    );
+    Ok(())
+}
+
+#[test]
+fn stale_body_preedit_hits_cannot_cancel_a_newer_composition()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    let base_map: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+    let base_stop = &base_map["stops"][0];
+    let mut base_position = base_stop["position"].clone();
+    base_position["visualAffinity"] = base_stop["visualAffinity"].clone();
+    assert_eq!(base_position["kind"], "body");
+    assert!(base_position.get("compositionRevision").is_none());
+    runtime.input_method_event_json("alpha".to_owned(), String::new(), 0, 0, 5)?;
+    let base_drag = serde_json::json!({"anchor": base_position.clone(), "focus": base_position});
+    assert_eq!(
+        runtime.set_selection_json(&base_drag.to_string()),
+        Err("selection.stale_body_hit".to_owned())
+    );
+    let first_map: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+    let first_stop = first_map["stops"]
+        .as_array()
+        .and_then(|stops| {
+            stops.iter().find(|stop| {
+                stop["position"]["kind"] == "body" && stop["position"]["offsetUtf8"] == "5"
+            })
+        })
+        .ok_or("first composition body stop is missing")?;
+    let first_revision = first_stop["position"]["compositionRevision"].clone();
+    assert!(first_revision.is_string());
+
+    runtime.input_method_event_json("bravo".to_owned(), String::new(), 0, 0, 5)?;
+    let second_map: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+    let second_stop = second_map["stops"]
+        .as_array()
+        .and_then(|stops| {
+            stops.iter().find(|stop| {
+                stop["position"]["kind"] == "body" && stop["position"]["offsetUtf8"] == "5"
+            })
+        })
+        .ok_or("updated composition body stop is missing")?;
+    assert_ne!(
+        first_revision,
+        second_stop["position"]["compositionRevision"]
+    );
+    let mut stale_position = first_stop["position"].clone();
+    stale_position["visualAffinity"] = first_stop["visualAffinity"].clone();
+    let stale = serde_json::json!({
+        "anchor": stale_position.clone(),
+        "focus": stale_position,
+    });
+    assert_eq!(
+        runtime.set_selection_json(&stale.to_string()),
+        Err("selection.stale_body_hit".to_owned())
+    );
+    assert_eq!(
+        runtime
+            .session
+            .composition()
+            .map(|composition| composition.preedit.as_str()),
+        Some("bravo")
+    );
+
+    runtime.input_method_event_json(String::new(), String::new(), 0, 0, 0)?;
+    assert!(runtime.session.composition().is_none());
+    assert_eq!(
+        runtime.set_selection_json(&stale.to_string()),
+        Err("selection.stale_body_hit".to_owned())
+    );
+    assert!(runtime.session.composition().is_none());
+    Ok(())
+}
+
+#[test]
 fn vertical_navigation_leaves_math_block_boundary_for_adjacent_visual_paragraph()
 -> Result<(), Box<dyn std::error::Error>> {
     for align in [false, true] {
@@ -492,6 +814,360 @@ fn vertical_navigation_leaves_math_block_boundary_for_adjacent_visual_paragraph(
     Ok(())
 }
 
+fn table_between_paragraphs() -> (Document, NodeId, NodeId, NodeId, [NodeId; 2]) {
+    let before = paragraph_with_text("before");
+    let after = paragraph_with_text("after");
+    let before_id = before.id.clone();
+    let after_id = after.id.clone();
+    let table_id = NodeId::generate();
+    let cell_ids = [NodeId::generate(), NodeId::generate()];
+    let rows = cell_ids
+        .iter()
+        .enumerate()
+        .map(|(row, cell_id)| caret_doc::TableRow {
+            id: NodeId::generate(),
+            cells: vec![caret_doc::TableCell {
+                id: cell_id.clone(),
+                blocks: (0..2 + row * 2)
+                    .map(|_| Block::Paragraph(paragraph_with_text("cell line")))
+                    .collect(),
+            }],
+        })
+        .collect();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before),
+        Block::Table(caret_doc::Table {
+            id: table_id.clone(),
+            rows,
+        }),
+        Block::Paragraph(after),
+    ];
+    (document, before_id, after_id, table_id, cell_ids)
+}
+
+#[test]
+fn table_boundary_caret_centers_on_the_visible_edge_row() -> Result<(), Box<dyn std::error::Error>>
+{
+    use caret_engine::Direction;
+
+    let (document, before, after, table, cells) = table_between_paragraphs();
+    for paginated in [false, true] {
+        for (row, (paragraph, delta, side)) in [
+            (&before, 1, Direction::Backward),
+            (&after, -1, Direction::Forward),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut runtime = DocumentViewRuntime::new(document.clone())?;
+            if paginated {
+                let mut geometry = caret_doc::PageGeometry::default();
+                geometry.margins.bottom = geometry.page_size_pt().1 - geometry.margins.top - 100.0;
+                runtime
+                    .session
+                    .run(caret_engine::Command::SetPageGeometry(geometry))?;
+            }
+            set_body_caret(&mut runtime, paragraph.clone(), 2)?;
+            let result: Value =
+                serde_json::from_str(&runtime.move_vertical_caret_json(delta, false)?)?;
+            assert_eq!(
+                runtime.session.block_boundary_exit(),
+                Some((table.clone(), side))
+            );
+            let caret = &result["caretGeometry"];
+            let page = usize::from(paginated && row == 1);
+            assert_eq!(caret["pageIndex"], page);
+            let cell = runtime
+                .current_snapshot()?
+                .table_cell_hit_regions(page)
+                .iter()
+                .find(|cell| cell.cell_id == cells[row])
+                .ok_or("missing grid row")?;
+            assert_eq!(caret["xPt"], if row == 0 { cell.x0_pt } else { cell.x1_pt });
+            let y0 = caret["y0Pt"].as_f64().ok_or("missing caret top")?;
+            let y1 = caret["y1Pt"].as_f64().ok_or("missing caret bottom")?;
+            assert!(y1 > y0);
+            assert!((y0 + y1 - cell.y0_pt - cell.y1_pt).abs() < 0.01);
+            runtime.move_vertical_caret_json(-delta, false)?;
+            assert!(runtime.session.block_boundary_exit().is_none());
+            assert_eq!(&runtime.session.selection().focus.paragraph_id, paragraph);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn vertical_navigation_leaves_a_clipped_table_row_on_the_next_page()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (mut document, _, after, table_id, _) = table_between_paragraphs();
+    let Block::Table(table) = &mut document.body[1] else {
+        unreachable!()
+    };
+    let Block::Paragraph(paragraph) = &mut table.rows[1].cells[0].blocks[0] else {
+        unreachable!()
+    };
+    let line = paragraph_with_text("another line").inlines;
+    for _ in 0..120 {
+        paragraph
+            .inlines
+            .push(ParagraphContent::SoftBreak(caret_doc::SoftBreak::default()));
+        paragraph.inlines.extend(line.clone());
+    }
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    set_body_caret(&mut runtime, after.clone(), 2)?;
+    let above: Value = serde_json::from_str(&runtime.move_vertical_caret_json(-1, false)?)?;
+    assert_eq!(
+        runtime.session.block_boundary_exit(),
+        Some((table_id, caret_engine::Direction::Forward))
+    );
+    let below: Value = serde_json::from_str(&runtime.move_vertical_caret_json(1, false)?)?;
+    assert!(runtime.session.block_boundary_exit().is_none());
+    assert_eq!(runtime.session.selection().focus.paragraph_id, after);
+    assert!(
+        below["caretGeometry"]["pageIndex"]
+            .as_u64()
+            .ok_or("missing paragraph page")?
+            > above["caretGeometry"]["pageIndex"]
+                .as_u64()
+                .ok_or("missing table page")?
+    );
+    Ok(())
+}
+
+#[test]
+fn shift_vertical_crosses_each_adjacent_atomic_block_in_one_key()
+-> Result<(), Box<dyn std::error::Error>> {
+    use caret_engine::{Direction, DocumentRangeEndpoint};
+
+    let (document, before, after, table, _) = table_between_paragraphs();
+    for (block, block_id) in [
+        (document.body[1].clone(), table),
+        formula_block(false),
+        formula_block(true),
+    ] {
+        let mut document = document.clone();
+        document.body[1] = block;
+        for (delta, start, target, side, target_offset) in [
+            (1, &before, &after, Direction::Forward, "after".len()),
+            (-1, &after, &before, Direction::Backward, 0),
+        ] {
+            let mut runtime = DocumentViewRuntime::new(document.clone())?;
+            set_body_caret(&mut runtime, start.clone(), 2)?;
+            let anchor = DocumentRangeEndpoint::Text(runtime.session.selection().anchor.clone());
+            let edge = DocumentRangeEndpoint::BlockEdge {
+                block_id: block_id.clone(),
+                side,
+            };
+            let result: Value =
+                serde_json::from_str(&runtime.move_vertical_caret_json(delta, true)?)?;
+            assert_eq!(
+                runtime.session.structure_selection_range(),
+                Some((&anchor, &edge))
+            );
+            assert_eq!(
+                runtime.session.selected_atomic_blocks(),
+                std::slice::from_ref(&block_id)
+            );
+            assert!(
+                result["selectionRects"]
+                    .as_array()
+                    .is_some_and(|rects| rects.len() >= 2)
+            );
+
+            runtime.move_vertical_caret_json(delta, true)?;
+            assert!(matches!(runtime.session.structure_selection_range(),
+                Some((kept_anchor, DocumentRangeEndpoint::Text(focus)))
+                    if kept_anchor == &anchor && &focus.paragraph_id == target && focus.offset == target_offset));
+            assert_eq!(runtime.document(), &document);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn vertical_arrows_keep_adjacent_tables_atomic_in_both_directions()
+-> Result<(), Box<dyn std::error::Error>> {
+    use caret_engine::{Direction, DocumentRangeEndpoint};
+
+    let (mut document, before, after, first, _) = table_between_paragraphs();
+    let (second_document, _, _, second, _) = table_between_paragraphs();
+    document.body.insert(2, second_document.body[1].clone());
+    for (delta, paragraph, first_id, next_id, side, entry) in [
+        (
+            1,
+            &before,
+            &first,
+            &second,
+            Direction::Forward,
+            Direction::Backward,
+        ),
+        (
+            -1,
+            &after,
+            &second,
+            &first,
+            Direction::Backward,
+            Direction::Forward,
+        ),
+    ] {
+        for extend in [false, true] {
+            let mut runtime = DocumentViewRuntime::new(document.clone())?;
+            set_body_caret(&mut runtime, paragraph.clone(), 2)?;
+            let anchor = DocumentRangeEndpoint::Text(runtime.session.selection().anchor.clone());
+            runtime.move_vertical_caret_json(delta, true)?;
+            assert_eq!(
+                runtime.session.selected_atomic_blocks(),
+                std::slice::from_ref(first_id)
+            );
+            if !extend {
+                runtime.move_visual_caret_json(delta > 0, false)?;
+                assert_eq!(
+                    runtime.session.block_boundary_exit(),
+                    Some((first_id.clone(), side))
+                );
+            }
+            runtime.move_vertical_caret_json(delta, extend)?;
+            if extend {
+                let edge = DocumentRangeEndpoint::BlockEdge {
+                    block_id: next_id.clone(),
+                    side,
+                };
+                assert_eq!(
+                    runtime.session.structure_selection_range(),
+                    Some((&anchor, &edge))
+                );
+                assert_eq!(
+                    runtime.session.selected_atomic_blocks(),
+                    &[first.clone(), second.clone()]
+                );
+            } else {
+                assert_eq!(
+                    runtime.session.block_boundary_exit(),
+                    Some((next_id.clone(), entry))
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn vertical_arrows_reach_the_table_entry_of_an_adjacent_environment()
+-> Result<(), Box<dyn std::error::Error>> {
+    use caret_engine::Direction;
+
+    let (document, before, after, first, _) = table_between_paragraphs();
+    let (second_document, _, _, second, _) = table_between_paragraphs();
+    let mut document = document;
+    document.body.insert(2, second_document.body[1].clone());
+    for (delta, paragraph, start, target, index, near) in [
+        (1, &before, &first, &second, 2, Direction::Backward),
+        (-1, &after, &second, &first, 1, Direction::Forward),
+    ] {
+        let mut document = document.clone();
+        let mut container = match section("", "") {
+            Block::Environment(environment) => environment,
+            _ => unreachable!(),
+        };
+        container.title = None;
+        container.children = vec![document.body[index].clone()];
+        let environment_id = container.id.clone();
+        document.body[index] = Block::Environment(container);
+
+        for extend in [false, true] {
+            let mut runtime = DocumentViewRuntime::new(document.clone())?;
+            set_body_caret(&mut runtime, paragraph.clone(), 2)?;
+            runtime.move_vertical_caret_json(delta, true)?;
+            assert_eq!(
+                runtime.session.selected_atomic_blocks(),
+                std::slice::from_ref(start)
+            );
+            let anchor = runtime
+                .session
+                .structure_selection_range()
+                .ok_or("missing selected table range")?
+                .0
+                .clone();
+            if !extend {
+                runtime.move_visual_caret_json(delta > 0, false)?;
+            }
+            runtime.move_vertical_caret_json(delta, extend)?;
+            if extend {
+                assert_eq!(
+                    runtime.session.selected_block_environments(),
+                    std::slice::from_ref(&environment_id)
+                );
+                assert_eq!(
+                    runtime.session.selected_atomic_blocks(),
+                    std::slice::from_ref(start)
+                );
+                runtime.move_vertical_caret_json(-delta, true)?;
+                assert!(runtime.session.selected_block_environments().is_empty());
+                assert_eq!(
+                    runtime.session.selected_atomic_blocks(),
+                    std::slice::from_ref(start)
+                );
+                assert_eq!(
+                    runtime.session.structure_selection_range(),
+                    Some((
+                        &anchor,
+                        &caret_engine::DocumentRangeEndpoint::BlockEdge {
+                            block_id: environment_id.clone(),
+                            side: near,
+                        }
+                    ))
+                );
+            } else {
+                assert_eq!(
+                    runtime.session.block_boundary_exit(),
+                    Some((target.clone(), near))
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn shift_vertical_reaches_the_table_after_the_last_visual_line()
+-> Result<(), Box<dyn std::error::Error>> {
+    use caret_engine::{Direction, DocumentRangeEndpoint};
+
+    let (mut document, before, _, table, _) = table_between_paragraphs();
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        unreachable!()
+    };
+    paragraph
+        .inlines
+        .push(ParagraphContent::SoftBreak(caret_doc::SoftBreak::default()));
+    paragraph
+        .inlines
+        .extend(paragraph_with_text("second line").inlines);
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    set_body_caret(&mut runtime, before.clone(), 2)?;
+    let anchor = runtime.session.selection().anchor.clone();
+
+    runtime.move_vertical_caret_json(1, true)?;
+    assert_eq!(runtime.session.selection().anchor, anchor);
+    assert_eq!(runtime.session.selection().focus.paragraph_id, before);
+    assert!(runtime.session.selection().focus.offset > "before".len());
+    assert!(runtime.session.selected_atomic_blocks().is_empty());
+
+    runtime.move_vertical_caret_json(1, true)?;
+    assert_eq!(
+        runtime.session.structure_selection_range(),
+        Some((
+            &DocumentRangeEndpoint::Text(anchor),
+            &DocumentRangeEndpoint::BlockEdge {
+                block_id: table,
+                side: Direction::Forward
+            },
+        ))
+    );
+    Ok(())
+}
+
 #[test]
 fn vertical_navigation_visits_each_neighboring_display_row_and_section_title()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -518,7 +1194,7 @@ fn vertical_navigation_visits_each_neighboring_display_row_and_section_title()
         &[environment_id]
     );
     assert_eq!(
-        runtime.session.selected_math_blocks(),
+        runtime.session.selected_atomic_blocks(),
         std::slice::from_ref(&second_id)
     );
     assert!(
@@ -1014,7 +1690,7 @@ fn backspace_at_a_virtual_math_boundary_does_not_delete_the_adjacent_paragraph()
         Block::Paragraph(after),
     ];
     let mut runtime = DocumentViewRuntime::new(document)?;
-    set_body_caret(&mut runtime, before_id, "before".len())?;
+    set_body_caret(&mut runtime, before_id.clone(), "before".len())?;
     runtime.session.run(caret_engine::Command::EnterMath(
         caret_engine::Direction::Forward,
     ))?;
@@ -3342,6 +4018,261 @@ fn repeated_arrow_from_outer_stop_enters_the_adjacent_environment()
         first_body_id
     );
     assert_eq!(runtime.session.selection().focus.offset, "one".len());
+    Ok(())
+}
+
+#[test]
+fn body_drag_from_block_boundary_composition_preview_uses_virtual_edge()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("before");
+    let before_id = before.id.clone();
+    let after = paragraph_with_text("after");
+    let (formula, formula_id) = formula_block(false);
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(before), formula, Block::Paragraph(after)];
+
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    set_body_caret(&mut runtime, before_id.clone(), "before".len())?;
+    for _ in 0..4 {
+        runtime.move_visual_caret_json(true, false)?;
+    }
+    let boundary = (formula_id.clone(), caret_engine::Direction::Forward);
+    assert_eq!(
+        runtime.session.block_boundary_exit(),
+        Some(boundary.clone())
+    );
+
+    runtime.input_method_event_json("甲\n乙".to_owned(), String::new(), 0, 0, 1)?;
+    let composition_range = runtime
+        .composition_range
+        .as_ref()
+        .ok_or_else(|| std::io::Error::other("boundary preedit range is missing"))?;
+    let caret_engine::CompositionRange::Paragraph(range) = composition_range else {
+        return Err("boundary preedit should produce a paragraph range".into());
+    };
+    let active_temporary_id = range.anchor.paragraph_id.to_string();
+    assert_eq!(range.anchor.paragraph_id, range.focus.paragraph_id);
+    assert!(
+        runtime
+            .session
+            .story_for_paragraph(&range.anchor.paragraph_id)
+            .is_none()
+    );
+
+    let map: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+    let stops = map["stops"]
+        .as_array()
+        .ok_or_else(|| std::io::Error::other("drag map omitted stops"))?;
+    let temporary = stops
+        .iter()
+        .find(|stop| {
+            stop["position"]["paragraphId"] != active_temporary_id
+                && stop["position"]["paragraphId"]
+                    .as_str()
+                    .and_then(|id| NodeId::parse(id).ok())
+                    .is_some_and(|id| runtime.session.story_for_paragraph(&id).is_none())
+        })
+        .ok_or_else(|| std::io::Error::other("non-active temporary preedit stop is missing"))?;
+    assert_eq!(temporary["position"]["kind"], "body");
+    assert!(temporary["position"]["compositionRevision"].is_string());
+    let committed = stops
+        .iter()
+        .find(|stop| {
+            stop["position"]["paragraphId"] == before_id.to_string()
+                && stop["position"]["offsetUtf8"] == "6"
+        })
+        .ok_or_else(|| std::io::Error::other("preceding body stop is missing"))?;
+    let mut temporary_position = temporary["position"].clone();
+    temporary_position["visualAffinity"] = temporary["visualAffinity"].clone();
+    let mut committed_position = committed["position"].clone();
+    committed_position["visualAffinity"] = committed["visualAffinity"].clone();
+    let selection = serde_json::json!({
+        "anchor": temporary_position,
+        "focus": committed_position,
+    });
+    let result: Value = serde_json::from_str(&runtime.set_selection_json(&selection.to_string())?)?;
+
+    assert!(runtime.composition_id.is_none());
+    assert_eq!(runtime.document().body.len(), 3);
+    assert!(result["compositionCancelled"].as_bool().unwrap_or(false));
+    let drag_anchor = result["dragAnchor"]["position"].clone();
+    assert_eq!(drag_anchor["kind"], "blockEdge");
+    assert_eq!(drag_anchor["domainId"], "body");
+    let range = runtime
+        .session
+        .structure_selection_range()
+        .map(|(anchor, focus)| (anchor.clone(), focus.clone()))
+        .ok_or_else(|| std::io::Error::other("virtual edge range was not installed"))?;
+    assert!(
+        matches!(&range.0, caret_engine::DocumentRangeEndpoint::BlockEdge { block_id, side }
+        if block_id == &formula_id && side == &caret_engine::Direction::Forward)
+    );
+    assert!(
+        matches!(&range.1, caret_engine::DocumentRangeEndpoint::Text(position)
+        if position.paragraph_id == before_id)
+    );
+
+    let mut committed_anchor = drag_anchor;
+    committed_anchor["visualAffinity"] = result["dragAnchor"]["visualAffinity"].clone();
+    let committed_map: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+    let committed_focus_stop = committed_map["stops"]
+        .as_array()
+        .and_then(|stops| {
+            stops.iter().find(|stop| {
+                stop["position"]["paragraphId"] == before_id.to_string()
+                    && stop["position"]["offsetUtf8"] == "6"
+            })
+        })
+        .ok_or_else(|| std::io::Error::other("committed continuation stop is missing"))?;
+    let mut committed_focus = committed_focus_stop["position"].clone();
+    committed_focus["visualAffinity"] = committed_focus_stop["visualAffinity"].clone();
+    runtime.set_selection_json(
+        &serde_json::json!({
+            "anchor": committed_anchor,
+            "focus": committed_focus,
+        })
+        .to_string(),
+    )?;
+    assert_eq!(
+        runtime
+            .session
+            .structure_selection_range()
+            .map(|(anchor, focus)| (anchor.clone(), focus.clone())),
+        Some(range)
+    );
+    assert_eq!(runtime.session.document().body.len(), 3);
+    Ok(())
+}
+
+#[test]
+fn block_boundary_preedit_drag_into_table_formula_keeps_tree_anchor_versioned()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("before");
+    let before_id = before.id.clone();
+    let table_id = NodeId::generate();
+    let equation_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before),
+        Block::Table(caret_doc::Table {
+            id: table_id.clone(),
+            rows: vec![caret_doc::TableRow {
+                id: NodeId::generate(),
+                cells: vec![caret_doc::TableCell {
+                    id: NodeId::generate(),
+                    blocks: vec![Block::Equation(caret_doc::Equation {
+                        id: equation_id.clone(),
+                        math_tree: align_text_tree("x"),
+                        extra: BTreeMap::new(),
+                    })],
+                }],
+            }],
+        }),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let base_page_count = runtime.current_snapshot()?.pages.len();
+    let mut base_tree = None;
+    for page in 0..base_page_count {
+        let map: Value = serde_json::from_str(&runtime.drag_hit_map_json(page as i32)?)?;
+        base_tree = map["stops"].as_array().and_then(|stops| {
+            stops
+                .iter()
+                .find(|stop| {
+                    stop["position"]["kind"] == "mathTree"
+                        && stop["position"]["target"]["blockId"] == equation_id.to_string()
+                })
+                .cloned()
+        });
+        if base_tree.is_some() {
+            break;
+        }
+    }
+    let base_tree =
+        base_tree.ok_or_else(|| std::io::Error::other("base formula stop is missing"))?;
+    let base_tree_page = base_tree["position"]["pageIndex"]
+        .as_u64()
+        .ok_or_else(|| std::io::Error::other("base formula stop has no page"))?;
+
+    set_body_caret(&mut runtime, before_id.clone(), "before".len())?;
+    for _ in 0..8 {
+        if runtime.session.block_boundary_exit().is_some() {
+            break;
+        }
+        runtime.move_visual_caret_json(true, false)?;
+    }
+    assert_eq!(
+        runtime.session.block_boundary_exit(),
+        Some((table_id.clone(), caret_engine::Direction::Backward))
+    );
+
+    let preedit = format!("{}甲", "乙\n".repeat(120));
+    runtime.input_method_event_json(preedit, String::new(), 0, 0, 1)?;
+    let composition_range = runtime
+        .composition_range
+        .as_ref()
+        .ok_or_else(|| std::io::Error::other("table boundary preedit range is missing"))?;
+    let caret_engine::CompositionRange::Paragraph(range) = composition_range else {
+        return Err("table boundary preedit should use a paragraph range".into());
+    };
+    let temporary_id = range.anchor.paragraph_id.to_string();
+    let preview_page_count = runtime.current_snapshot()?.pages.len();
+    let mut temporary = None;
+    let mut tree = None;
+    for page in 0..preview_page_count {
+        let map: Value = serde_json::from_str(&runtime.drag_hit_map_json(page as i32)?)?;
+        let Some(stops) = map["stops"].as_array() else {
+            continue;
+        };
+        temporary = temporary.or_else(|| {
+            stops
+                .iter()
+                .find(|stop| stop["position"]["paragraphId"] == temporary_id)
+                .cloned()
+        });
+        tree = tree.or_else(|| {
+            stops
+                .iter()
+                .find(|stop| {
+                    stop["position"]["kind"] == "mathTree"
+                        && stop["position"]["target"]["kind"] == "block"
+                        && stop["position"]["target"]["blockId"] == equation_id.to_string()
+                })
+                .cloned()
+        });
+    }
+    let temporary =
+        temporary.ok_or_else(|| std::io::Error::other("table preedit stop is missing"))?;
+    let tree = tree.ok_or_else(|| std::io::Error::other("table formula tree stop is missing"))?;
+    assert!(tree["position"]["pageIndex"].as_u64().unwrap_or(0) > base_tree_page);
+    assert!(tree["position"]["documentGeneration"].is_string());
+    assert!(tree["position"]["fontGeneration"].is_string());
+    assert!(tree["position"]["compositionRevision"].is_string());
+    assert_eq!(tree["position"]["treeHost"]["kind"], "equation");
+
+    let mut temporary_position = temporary["position"].clone();
+    temporary_position["visualAffinity"] = temporary["visualAffinity"].clone();
+    let mut tree_position = tree["position"].clone();
+    tree_position["visualAffinity"] = tree["visualAffinity"].clone();
+    let result: Value = serde_json::from_str(
+        &runtime.set_selection_json(
+            &serde_json::json!({
+                "anchor": temporary_position,
+                "focus": tree_position,
+            })
+            .to_string(),
+        )?,
+    )?;
+
+    assert!(runtime.composition_id.is_none());
+    assert!(runtime.session.has_structure_selection());
+    assert_eq!(result["dragAnchor"]["position"]["kind"], "blockEdge");
+    assert_eq!(
+        result["dragAnchor"]["position"]["blockId"],
+        table_id.to_string()
+    );
+    assert!(result["dragAnchor"]["position"]["documentGeneration"].is_string());
+    assert!(result["dragAnchor"]["position"]["fontGeneration"].is_string());
     Ok(())
 }
 
@@ -5820,12 +6751,12 @@ fn shift_arrows_include_consecutive_display_math_blocks_one_at_a_time()
 
     runtime.move_visual_caret_json(true, true)?;
     assert_eq!(
-        runtime.session.selected_math_blocks(),
+        runtime.session.selected_atomic_blocks(),
         std::slice::from_ref(&first_id)
     );
     runtime.move_visual_caret_json(true, true)?;
     assert_eq!(
-        runtime.session.selected_math_blocks(),
+        runtime.session.selected_atomic_blocks(),
         &[first_id.clone(), second_id.clone()]
     );
     let (_, focus) = runtime
@@ -5858,12 +6789,12 @@ fn shift_arrows_include_consecutive_display_math_blocks_one_at_a_time()
     set_body_caret(&mut runtime, after_id.clone(), 0)?;
     runtime.move_visual_caret_json(false, true)?;
     assert_eq!(
-        runtime.session.selected_math_blocks(),
+        runtime.session.selected_atomic_blocks(),
         std::slice::from_ref(&second_id)
     );
     runtime.move_visual_caret_json(false, true)?;
     assert_eq!(
-        runtime.session.selected_math_blocks(),
+        runtime.session.selected_atomic_blocks(),
         &[first_id.clone(), second_id.clone()]
     );
     runtime.move_visual_caret_json(false, true)?;
@@ -5948,7 +6879,7 @@ fn horizontal_navigation_steps_through_equation_before_section()
     assert!(runtime.session.math_edit().is_none());
     assert_eq!(runtime.session.selection().focus.paragraph_id, title_id);
     assert_eq!(runtime.session.selected_block_environments(), &[]);
-    assert!(runtime.session.selected_math_blocks().is_empty());
+    assert!(runtime.session.selected_atomic_blocks().is_empty());
 
     // 反向：从环境内部退出后，先进入公式外后再继续向左，不跳过公式。
     let mut runtime = DocumentViewRuntime::new({
@@ -6005,7 +6936,7 @@ fn shift_navigation_adds_equation_and_section_one_unit_at_a_time()
 
     runtime.move_visual_caret_json(true, true)?;
     assert_eq!(
-        runtime.session.selected_math_blocks(),
+        runtime.session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
     assert!(
@@ -6019,7 +6950,7 @@ fn shift_navigation_adds_equation_and_section_one_unit_at_a_time()
         std::slice::from_ref(&environment_id)
     );
     assert_eq!(
-        runtime.session.selected_math_blocks(),
+        runtime.session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
     Ok(())
@@ -6104,7 +7035,7 @@ fn shift_navigation_backward_adds_equation_then_section_one_unit_at_a_time()
 
     runtime.move_visual_caret_json(false, true)?;
     assert_eq!(
-        runtime.session.selected_math_blocks(),
+        runtime.session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
     assert!(
@@ -6118,7 +7049,7 @@ fn shift_navigation_backward_adds_equation_then_section_one_unit_at_a_time()
         std::slice::from_ref(&environment_id)
     );
     assert_eq!(
-        runtime.session.selected_math_blocks(),
+        runtime.session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
     Ok(())
@@ -6243,10 +7174,10 @@ fn horizontal_navigation_steps_through_equation_inside_environment()
     };
     set_body_caret(&mut runtime, first_child_a, 1)?;
     runtime.move_visual_caret_json(true, true)?;
-    assert_eq!(runtime.session.selected_math_blocks().len(), 1);
+    assert_eq!(runtime.session.selected_atomic_blocks().len(), 1);
     assert!(runtime.session.selected_block_environments().is_empty());
     runtime.move_visual_caret_json(true, true)?;
-    assert_eq!(runtime.session.selected_math_blocks().len(), 1);
+    assert_eq!(runtime.session.selected_atomic_blocks().len(), 1);
     assert!(runtime.session.selected_block_environments().is_empty());
     let _ = section_block_id;
     Ok(())
@@ -6456,7 +7387,7 @@ fn shift_left_from_selected_environment_continues_by_document_units()
         runtime.session.selected_block_environments(),
         std::slice::from_ref(&second_id)
     );
-    assert!(runtime.session.selected_math_blocks().is_empty());
+    assert!(runtime.session.selected_atomic_blocks().is_empty());
     assert!(matches!(
         runtime.session.structure_selection_range().map(|(_, focus)| focus),
         Some(caret_engine::DocumentRangeEndpoint::BlockEdge {
@@ -6468,7 +7399,7 @@ fn shift_left_from_selected_environment_continues_by_document_units()
     // 第二次 Shift+Left 必须把前一个公式作为单元加入，而不是在环境内逐字后退。
     runtime.move_visual_caret_json(false, true)?;
     assert_eq!(
-        runtime.session.selected_math_blocks(),
+        runtime.session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
     assert_eq!(
@@ -6536,7 +7467,7 @@ fn shift_right_from_text_adds_environment_equation_environment_by_document_units
     );
     runtime.move_visual_caret_json(true, true)?;
     assert_eq!(
-        runtime.session.selected_math_blocks(),
+        runtime.session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
     runtime.move_visual_caret_json(true, true)?;
@@ -6556,7 +7487,7 @@ fn shift_right_from_text_adds_environment_equation_environment_by_document_units
         &[first_id.clone(), second_id.clone()]
     );
     assert_eq!(
-        runtime.session.selected_math_blocks(),
+        runtime.session.selected_atomic_blocks(),
         std::slice::from_ref(&equation_id)
     );
     Ok(())

@@ -334,19 +334,26 @@ void update_glyph_node(QSGImageNode* node, QSGTexture* texture, const GlyphRecta
     }
 }
 
-/// 把行级裁剪范围（clipY0Pt..clipY1Pt）换算成画布裁剪区；未启用时返回页裁剪区。
+/// 把字形 x/y 裁切范围换算为画布裁切区，并与页边界相交。
 /// 字段取值由 glyph_frame_wire 校验，这里只做几何换算。
-QRectF glyph_frame_clip_rect(const QRectF& page_clip_rect, int page_index, bool clip_enabled,
+QRectF glyph_frame_clip_rect(const QRectF& page_clip_rect, int page_index, bool clip_x_enabled,
+                             qreal clip_x0_pt, qreal clip_x1_pt, bool clip_y_enabled,
                              qreal clip_y0_pt, qreal clip_y1_pt,
                              const std::function<QPointF(int, const QPointF&)>& document_to_content,
                              qreal logical_scale) {
-    if (!clip_enabled) {
+    if (!clip_x_enabled && !clip_y_enabled) {
         return page_clip_rect;
     }
-    const QPointF clip_top = document_to_content(page_index, QPointF(0.0, clip_y0_pt));
-    return page_clip_rect.intersected(QRectF(page_clip_rect.left(), clip_top.y(),
-                                             page_clip_rect.width(),
-                                             (clip_y1_pt - clip_y0_pt) * logical_scale));
+    const QPointF clip_origin = document_to_content(
+        page_index, QPointF(clip_x_enabled ? clip_x0_pt : 0.0, clip_y_enabled ? clip_y0_pt : 0.0));
+    const qreal clip_width =
+        clip_x_enabled ? (clip_x1_pt - clip_x0_pt) * logical_scale : page_clip_rect.width();
+    const qreal clip_height =
+        clip_y_enabled ? (clip_y1_pt - clip_y0_pt) * logical_scale : page_clip_rect.height();
+    const QRectF requested_clip(clip_x_enabled ? clip_origin.x() : page_clip_rect.left(),
+                                clip_y_enabled ? clip_origin.y() : page_clip_rect.top(), clip_width,
+                                clip_height);
+    return page_clip_rect.intersected(requested_clip);
 }
 
 void build_glyph_frame(PageGlyphNode* group, QQuickWindow* window, const QVariantMap& frame,
@@ -444,7 +451,8 @@ void build_glyph_frame(PageGlyphNode* group, QQuickWindow* window, const QVarian
             image_to_logical_scale, QPointF(placement.pixel_phase_x, placement.pixel_phase_y),
             placement.pixel_phase_applied);
         const QRectF clip_rect = glyph_frame_clip_rect(
-            page_clip_rect, page_index, placement.clip_enabled, placement.clip_y0_pt,
+            page_clip_rect, page_index, placement.clip_x_enabled, placement.clip_x0_pt,
+            placement.clip_x1_pt, placement.clip_enabled, placement.clip_y0_pt,
             placement.clip_y1_pt, document_to_content, logical_scale);
         const QRectF visible_rect = glyph_rect.intersected(clip_rect);
         if (visible_rect.isEmpty() || glyph_rect.width() <= 0.0 || glyph_rect.height() <= 0.0) {
@@ -491,7 +499,8 @@ void build_glyph_frame(PageGlyphNode* group, QQuickWindow* window, const QVarian
                                      decoration.width_pt * logical_scale,
                                      decoration.height_pt * logical_scale);
         const QRectF clip_rect = glyph_frame_clip_rect(
-            page_clip_rect, page_index, decoration.clip_enabled, decoration.clip_y0_pt,
+            page_clip_rect, page_index, decoration.clip_x_enabled, decoration.clip_x0_pt,
+            decoration.clip_x1_pt, decoration.clip_enabled, decoration.clip_y0_pt,
             decoration.clip_y1_pt, document_to_content, logical_scale);
         const QRectF visible_rect = decoration_rect.intersected(clip_rect);
         if (visible_rect.isEmpty()) {
@@ -528,9 +537,13 @@ void build_glyph_frame(PageGlyphNode* group, QQuickWindow* window, const QVarian
         delete child;
     }
     for (const glyph_frame_wire::GlyphShape& shape : glyph_frame.shapes) {
-        const QRectF clip_rect =
-            glyph_frame_clip_rect(page_clip_rect, page_index, shape.clip_enabled, shape.clip_y0_pt,
-                                  shape.clip_y1_pt, document_to_content, logical_scale);
+        const QRectF clip_rect = glyph_frame_clip_rect(
+            page_clip_rect, page_index, shape.clip_x_enabled, shape.clip_x0_pt, shape.clip_x1_pt,
+            shape.clip_enabled, shape.clip_y0_pt, shape.clip_y1_pt, document_to_content,
+            logical_scale);
+        if (clip_rect.isEmpty()) {
+            continue;
+        }
         const QPointF origin = document_to_content(page_index, QPointF(shape.x_pt, shape.y_pt));
         auto* shape_item = new QSGNode();
         group->shape_nodes->appendChildNode(shape_item);
@@ -562,7 +575,8 @@ void build_glyph_frame(PageGlyphNode* group, QQuickWindow* window, const QVarian
                 QRectF(first, second)
                     .normalized()
                     .adjusted(-half_width, -half_width, half_width, half_width);
-            const bool needs_clip = shape.clip_enabled || !clip_rect.contains(stroke_bounds);
+            const bool needs_clip =
+                shape.clip_enabled || shape.clip_x_enabled || !clip_rect.contains(stroke_bounds);
             QSGNode* line_parent = shape_item;
             if (needs_clip) {
                 auto* clipped = make_rect_clip_node(clip_rect);

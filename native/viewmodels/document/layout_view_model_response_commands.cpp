@@ -97,10 +97,16 @@ QVariantMap LayoutViewModel::installEditResponse(const QJsonDocument& snapshot_d
     installCaretGeometry(caret_document.object().toVariantMap());
     refreshDocumentFileStatus();
     refreshAutoSaveDeadline();
-    return {{QStringLiteral("valid"), true},
-            {QStringLiteral("documentGeneration"), documentGeneration()},
-            {QStringLiteral("compositionCancelled"),
-             snapshot_document.object().value(QStringLiteral("compositionCancelled")).toBool()}};
+    const QJsonObject fields = snapshot_document.object();
+    QVariantMap result{{QStringLiteral("valid"), true},
+                       {QStringLiteral("documentGeneration"), documentGeneration()},
+                       {QStringLiteral("compositionCancelled"),
+                        fields.value(QStringLiteral("compositionCancelled")).toBool()}};
+    const QJsonValue drag_anchor = fields.value(QStringLiteral("dragAnchor"));
+    if (drag_anchor.isObject()) {
+        result.insert(QStringLiteral("dragAnchor"), drag_anchor.toObject().toVariantMap());
+    }
+    return result;
 #else
     Q_UNUSED(snapshot_document)
     return {{QStringLiteral("valid"), false},

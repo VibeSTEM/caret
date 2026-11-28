@@ -77,6 +77,18 @@ pub enum DocumentRangeEndpoint {
     BlockEdge { block_id: NodeId, side: Direction },
 }
 
+impl DocumentRangeEndpoint {
+    /// 返回用于查询物理块容器的节点；行内数学端点使用所在段落。
+    pub(super) fn block_container_node_id(&self) -> &NodeId {
+        match self {
+            Self::Text(position) => &position.paragraph_id,
+            Self::InlineMathTree { paragraph_id, .. }
+            | Self::InlineMathText { paragraph_id, .. } => paragraph_id,
+            Self::BlockEdge { block_id, .. } => block_id,
+        }
+    }
+}
+
 /// 跨宿主的文档级结构选区；锚点与焦点各自保留完整文档位置和方向。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StructureSelection {

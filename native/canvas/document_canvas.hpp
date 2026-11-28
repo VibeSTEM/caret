@@ -17,6 +17,7 @@
 #include <QtQml/qqmlregistration.h>
 
 class QSGNode;
+class QEvent;
 class QKeyEvent;
 class QInputMethodEvent;
 
@@ -216,6 +217,7 @@ class DocumentCanvas : public QQuickItem {
     [[nodiscard]] QRectF caretRect(const QVariantMap& geometry) const;
     void refreshCaretBlink();
     void toggleCaretVisibility();
+    bool event(QEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void inputMethodEvent(QInputMethodEvent* event) override;
     QSGNode* updatePaintNode(QSGNode* old_node, UpdatePaintNodeData* data) override;

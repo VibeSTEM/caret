@@ -1964,7 +1964,7 @@ fn extend_until_math_selected(
     math_id: &NodeId,
 ) -> Result<(), Box<dyn std::error::Error>> {
     for _ in 0..4 {
-        if runtime.session.selected_math_blocks() == std::slice::from_ref(math_id) {
+        if runtime.session.selected_atomic_blocks() == std::slice::from_ref(math_id) {
             return Ok(());
         }
         runtime.move_visual_caret_json(forward, true)?;
@@ -2009,7 +2009,7 @@ fn structural_selection_geometry_covers_equation_hosts_across_host_boundaries()
     let page = runtime.current_snapshot()?.pages[0].clone();
     let math_rectangles = runtime
         .current_snapshot()?
-        .math_block_geometry(std::slice::from_ref(&math_id))
+        .atomic_block_geometry(std::slice::from_ref(&math_id))
         .ok_or_else(|| std::io::Error::other("equation fragment is missing"))?;
     assert_eq!(math_rectangles.len(), 1);
     let math_rectangle = math_rectangles[0];
@@ -2029,7 +2029,7 @@ fn structural_selection_geometry_covers_equation_hosts_across_host_boundaries()
     // 第一次 Shift+Right：公式整体进入结构选区，选区层由公式整栏矩形表示。
     let first: Value = serde_json::from_str(&runtime.move_visual_caret_json(true, true)?)?;
     assert_eq!(
-        runtime.session.selected_math_blocks(),
+        runtime.session.selected_atomic_blocks(),
         std::slice::from_ref(&math_id)
     );
     assert!(
@@ -2060,7 +2060,7 @@ fn structural_selection_geometry_covers_equation_hosts_across_host_boundaries()
     // 继续 Shift+Right：结构范围保留公式并延伸到后一段文字。
     runtime.move_visual_caret_json(true, true)?;
     assert_eq!(
-        runtime.session.selected_math_blocks(),
+        runtime.session.selected_atomic_blocks(),
         std::slice::from_ref(&math_id)
     );
     assert_eq!(runtime.session.selection().focus.paragraph_id, after_id);
@@ -2098,7 +2098,7 @@ fn structural_selection_geometry_covers_align_hosts_across_host_boundaries()
     let page = runtime.current_snapshot()?.pages[0].clone();
     let math_rectangles = runtime
         .current_snapshot()?
-        .math_block_geometry(std::slice::from_ref(&math_id))
+        .atomic_block_geometry(std::slice::from_ref(&math_id))
         .ok_or_else(|| std::io::Error::other("align fragment is missing"))?;
     assert!(!math_rectangles.is_empty());
     let math_tuples = math_rectangles
@@ -2122,7 +2122,7 @@ fn structural_selection_geometry_covers_align_hosts_across_host_boundaries()
     // 第一次 Shift+Right：Align 整体进入结构选区，选区层由所有行矩形表示。
     let first: Value = serde_json::from_str(&runtime.move_visual_caret_json(true, true)?)?;
     assert_eq!(
-        runtime.session.selected_math_blocks(),
+        runtime.session.selected_atomic_blocks(),
         std::slice::from_ref(&math_id)
     );
     assert!(
@@ -2157,7 +2157,7 @@ fn structural_selection_geometry_covers_align_hosts_across_host_boundaries()
     // 继续 Shift+Right：结构范围保留 Align 并延伸到后一段文字。
     runtime.move_visual_caret_json(true, true)?;
     assert_eq!(
-        runtime.session.selected_math_blocks(),
+        runtime.session.selected_atomic_blocks(),
         std::slice::from_ref(&math_id)
     );
     assert_eq!(runtime.session.selection().focus.paragraph_id, after_id);
@@ -2194,7 +2194,7 @@ fn block_edge_structural_selection_geometry_resolves_without_a_preceding_paragra
     runtime.layout_snapshot_json()?;
     let math_rectangle = runtime
         .current_snapshot()?
-        .math_block_geometry(std::slice::from_ref(&math_id))
+        .atomic_block_geometry(std::slice::from_ref(&math_id))
         .and_then(|rectangles| rectangles.first().copied())
         .ok_or_else(|| std::io::Error::other("equation fragment is missing"))?;
     runtime
@@ -2257,7 +2257,7 @@ fn block_edge_forward_endpoint_projects_a_trailing_equation_selection()
     runtime.layout_snapshot_json()?;
     let math_rectangle = runtime
         .current_snapshot()?
-        .math_block_geometry(std::slice::from_ref(&math_id))
+        .atomic_block_geometry(std::slice::from_ref(&math_id))
         .and_then(|rectangles| rectangles.first().copied())
         .ok_or_else(|| std::io::Error::other("equation fragment is missing"))?;
     runtime
@@ -2330,7 +2330,7 @@ fn equation_selection_inside_a_section_suppresses_block_and_inline_highlights()
     runtime.layout_snapshot_json()?;
     let math_rectangle = runtime
         .current_snapshot()?
-        .math_block_geometry(std::slice::from_ref(&math_id))
+        .atomic_block_geometry(std::slice::from_ref(&math_id))
         .and_then(|rectangles| rectangles.first().copied())
         .ok_or_else(|| std::io::Error::other("equation fragment is missing"))?;
     runtime
@@ -2356,7 +2356,7 @@ fn equation_selection_inside_a_section_suppresses_block_and_inline_highlights()
         "the regression case needs a block edge endpoint"
     );
     assert_eq!(
-        runtime.session.selected_math_blocks(),
+        runtime.session.selected_atomic_blocks(),
         std::slice::from_ref(&math_id)
     );
     assert!(runtime.session.selected_block_environment().is_none());
@@ -2411,7 +2411,7 @@ fn replacing_an_equation_only_structural_range_publishes_a_full_snapshot()
         )))?;
     runtime.move_visual_caret_json(true, true)?;
     assert_eq!(
-        runtime.session.selected_math_blocks(),
+        runtime.session.selected_atomic_blocks(),
         std::slice::from_ref(&math_id)
     );
     assert!(runtime.session.selected_block_environment().is_none());
@@ -2445,7 +2445,7 @@ fn replacing_an_equation_only_structural_range_publishes_a_full_snapshot()
             .all(|block| { matches!(block, Block::Paragraph(_)) })
     );
     assert!(!runtime.session.has_structure_selection());
-    assert!(runtime.session.selected_math_blocks().is_empty());
+    assert!(runtime.session.selected_atomic_blocks().is_empty());
     let selection = runtime.session.selection();
     assert_eq!(selection.anchor, selection.focus);
     assert_eq!(selection.focus.paragraph_id, before_id);
@@ -2532,7 +2532,7 @@ fn plain_arrow_collapses_a_structural_selection_instead_of_moving_from_its_focus
 
     // 普通 Right 折叠到范围终点并停靠在公式后边界，而不是从焦点再前移一个字符。
     assert!(!runtime.session.has_structure_selection());
-    assert!(runtime.session.selected_math_blocks().is_empty());
+    assert!(runtime.session.selected_atomic_blocks().is_empty());
     assert_eq!(
         runtime.session.selection().anchor,
         runtime.session.selection().focus
@@ -2738,6 +2738,378 @@ fn empty_inline_math_focus_publishes_the_shared_insertion_slot()
 }
 
 #[test]
+fn empty_inline_math_hit_tracks_the_highlight_shifted_at_the_page_edge()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (font_size_centipoints, expected_width_pt) in [(90, 4.0), (1200, 6.0)] {
+        let (original, _) = empty_inline_math_runtime(font_size_centipoints)?;
+        for with_placeholder in [false, true] {
+            let mut document = original.session.document().clone();
+            let Block::Paragraph(paragraph) = &mut document.body[0] else {
+                panic!("fixture should start with a paragraph");
+            };
+            paragraph
+                .inlines
+                .retain(|content| matches!(content, ParagraphContent::Math(_)));
+            let ParagraphContent::Math(inline) = &mut paragraph.inlines[0] else {
+                panic!("fixture should contain the empty inline formula");
+            };
+            if with_placeholder {
+                inline
+                    .math_tree
+                    .root
+                    .content
+                    .push(MathContent::Math(caret_doc::MathNode {
+                        id: NodeId::generate(),
+                        kind: caret_doc::MathNodeKind::Placeholder,
+                        text: None,
+                        attributes: BTreeMap::new(),
+                        children: Vec::new(),
+                        extra: BTreeMap::new(),
+                    }));
+            }
+            let mut runtime = DocumentViewRuntime::new(document)?;
+            let mut geometry = caret_doc::PageGeometry::default();
+            geometry.margins.left = 0.0;
+            runtime
+                .session
+                .run(caret_engine::Command::SetPageGeometry(geometry))?;
+            runtime.session.run(caret_engine::Command::EnterMath(
+                caret_engine::Direction::Forward,
+            ))?;
+            let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+            let slot = &interaction["inlineEnvironmentHighlightRects"][0];
+            assert_eq!(slot["x0Pt"], 0.0);
+            assert_eq!(slot["x1Pt"], expected_width_pt);
+            let top = slot["y0Pt"]
+                .as_f64()
+                .ok_or_else(|| std::io::Error::other("slot top is missing"))?;
+            let bottom = slot["y1Pt"]
+                .as_f64()
+                .ok_or_else(|| std::io::Error::other("slot bottom is missing"))?;
+            let y_pt = (top + bottom) / 2.0;
+
+            // 内侧四分之一落在页面整体内移后的槽内，超出旧的对称命中区。
+            let inside: Value = serde_json::from_str(&runtime.place_caret_at_page_json(
+                0,
+                expected_width_pt * 0.75,
+                y_pt,
+            )?)?;
+            assert_eq!(inside["mathTree"], true);
+            let outside: Value = serde_json::from_str(&runtime.place_caret_at_page_json(
+                0,
+                expected_width_pt + 0.5,
+                y_pt,
+            )?)?;
+            assert_ne!(outside["mathTree"], true);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn empty_inline_slots_stay_in_their_table_cell_when_the_page_is_narrow()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (original, formula_paragraph_id) = empty_inline_math_runtime(9600)?;
+    let mut document = original.session.document().clone();
+    let Block::Paragraph(mut formula) = document.body.remove(0) else {
+        panic!("fixture should start with a paragraph");
+    };
+    formula
+        .inlines
+        .retain(|content| matches!(content, ParagraphContent::Math(_)));
+    let table_id = NodeId::generate();
+    let row_id = NodeId::generate();
+    let formula_cell_id = NodeId::generate();
+    let text_id = NodeId::generate();
+    document.body = vec![Block::Table(caret_doc::Table {
+        id: table_id.clone(),
+        rows: vec![caret_doc::TableRow {
+            id: row_id.clone(),
+            cells: vec![
+                caret_doc::TableCell {
+                    id: formula_cell_id.clone(),
+                    blocks: vec![Block::Paragraph(formula)],
+                },
+                caret_doc::TableCell {
+                    id: NodeId::generate(),
+                    blocks: vec![Block::Paragraph(Paragraph::empty(text_id.clone()))],
+                },
+            ],
+        }],
+    })];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let mut geometry = caret_doc::PageGeometry::default();
+    geometry.margins.left = 0.0;
+    geometry.margins.right = geometry.page_size_pt().0 - 72.0;
+    runtime
+        .session
+        .run(caret_engine::Command::SetPageGeometry(geometry))?;
+    let snapshot = runtime.current_snapshot()?;
+    let cells = snapshot.table_cell_hit_regions(0);
+    assert_eq!(cells.len(), 2);
+    let divider = cells[1].x0_pt;
+    let right_edge = cells[1].x1_pt;
+    let caret = snapshot
+        .caret_geometry(
+            &caret_engine::Pos {
+                story: caret_engine::StoryId::TableCell {
+                    table_id,
+                    row_id,
+                    cell_id: formula_cell_id,
+                },
+                paragraph_id: formula_paragraph_id,
+                offset: 0,
+                affinity: caret_engine::Affinity::Downstream,
+            },
+            caret_engine::VisualAffinity::Downstream,
+        )
+        .ok_or("missing empty formula boundary")?;
+    let y_pt = (caret.y0_pt + caret.y1_pt) / 2.0;
+    let hit: Value = serde_json::from_str(&runtime.place_caret_at_page_json(0, caret.x_pt, y_pt)?)?;
+    assert_eq!(hit["mathTree"], true);
+    let math: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+    let formula_slot = &math["inlineEnvironmentHighlightRects"][0];
+    let formula_x0 = formula_slot["x0Pt"]
+        .as_f64()
+        .ok_or("missing formula slot")?;
+    let formula_x1 = formula_slot["x1Pt"]
+        .as_f64()
+        .ok_or("missing formula slot")?;
+    assert!(formula_x0 >= caret.x_pt && formula_x1 <= divider);
+    let inner_edge: Value =
+        serde_json::from_str(&runtime.place_caret_at_page_json(0, formula_x1 - 0.5, y_pt)?)?;
+    assert_eq!(inner_edge["mathTree"], true);
+    let text: Value =
+        serde_json::from_str(&runtime.place_caret_at_page_json(0, divider + 6.0, y_pt)?)?;
+    assert_eq!(text["position"]["paragraphId"], text_id.as_str());
+
+    runtime
+        .session
+        .run(caret_engine::Command::ToggleInlineFormat(
+            InlineEnvironmentKind::Bold,
+        ))?;
+    let pending: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+    let pending_slot = &pending["inlineEnvironmentHighlightRects"][0];
+    let pending_x0 = pending_slot["x0Pt"]
+        .as_f64()
+        .ok_or("missing pending format slot")?;
+    let pending_x1 = pending_slot["x1Pt"]
+        .as_f64()
+        .ok_or("missing pending format slot")?;
+    let pending_caret = pending["caretGeometry"]["xPt"]
+        .as_f64()
+        .ok_or("missing right cell caret")?;
+    assert!(pending_x0 >= pending_caret && pending_caret > divider && pending_x1 <= right_edge);
+    Ok(())
+}
+
+#[test]
+fn overflowing_display_formula_leaves_the_adjacent_cell_clickable()
+-> Result<(), Box<dyn std::error::Error>> {
+    let formula_id = NodeId::generate();
+    let formula_cell_id = NodeId::generate();
+    let text_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body = vec![Block::Table(caret_doc::Table {
+        id: NodeId::generate(),
+        rows: vec![caret_doc::TableRow {
+            id: NodeId::generate(),
+            cells: vec![
+                caret_doc::TableCell {
+                    id: formula_cell_id.clone(),
+                    blocks: vec![equation_block(&formula_id, &"M".repeat(120))],
+                },
+                caret_doc::TableCell {
+                    id: NodeId::generate(),
+                    blocks: vec![Block::Paragraph(Paragraph::empty(text_id.clone()))],
+                },
+            ],
+        }],
+    })];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let (inside_x, outside_x, y, clip) = {
+        let snapshot = runtime.current_snapshot()?;
+        let cells = snapshot.table_cell_hit_regions(0);
+        assert_eq!(cells.len(), 2);
+        let glyphs = snapshot.page_glyphs(0)?;
+        let run = glyphs.runs.first().ok_or("missing wide formula run")?;
+        let first = run.glyphs.first().ok_or("missing formula glyph")?;
+        let outside_x = cells[1].x0_pt + 6.0;
+        assert!(run.glyphs.iter().any(|glyph| glyph.x_pt > outside_x));
+        (
+            (cells[0].x0_pt + cells[0].x1_pt) / 2.0,
+            outside_x,
+            first.baseline_y_pt - f64::from(run.font_size_pt) / 3.0,
+            run.line_clip_x_pt.ok_or("missing formula content clip")?,
+        )
+    };
+    let formula: Value = serde_json::from_str(&runtime.place_caret_at_page_json(0, inside_x, y)?)?;
+    assert_eq!(formula["mathText"], true);
+    let neighbor: Value =
+        serde_json::from_str(&runtime.place_caret_at_page_json(0, outside_x, y)?)?;
+    assert_eq!(neighbor["position"]["paragraphId"], text_id.as_str());
+    let drag: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+    let visible_edges = drag["stops"].as_array().ok_or("missing drag stops")?;
+    let formula_edges: Vec<_> = visible_edges
+        .iter()
+        .filter(|stop| {
+            stop["domainId"] == "body"
+                && stop["position"]["kind"] == "mathTree"
+                && stop["position"]["target"]["blockId"] == formula_id.as_str()
+        })
+        .collect();
+    assert_eq!(formula_edges.len(), 2);
+    for edge in formula_edges {
+        assert_eq!(edge["cellId"], formula_cell_id.as_str());
+        let x = edge["xPt"].as_f64().ok_or("missing formula edge x")?;
+        assert!((clip[0]..=clip[1]).contains(&x));
+    }
+    Ok(())
+}
+
+fn narrow_table_runtime(
+    left: Block,
+    font_size_centipoints: u16,
+) -> Result<DocumentViewRuntime, Box<dyn std::error::Error>> {
+    let mut document = Document::blank();
+    document.global_settings.default_font_size_centipoints = font_size_centipoints;
+    document.body = vec![Block::Table(caret_doc::Table {
+        id: NodeId::generate(),
+        rows: vec![caret_doc::TableRow {
+            id: NodeId::generate(),
+            cells: vec![
+                caret_doc::TableCell {
+                    id: NodeId::generate(),
+                    blocks: vec![left],
+                },
+                caret_doc::TableCell {
+                    id: NodeId::generate(),
+                    blocks: vec![Block::Paragraph(Paragraph::empty(NodeId::generate()))],
+                },
+            ],
+        }],
+    })];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let mut geometry = caret_doc::PageGeometry::default();
+    geometry.margins.left = 0.0;
+    geometry.margins.right = geometry.page_size_pt().0 - 72.0;
+    runtime
+        .session
+        .run(caret_engine::Command::SetPageGeometry(geometry))?;
+    Ok(runtime)
+}
+
+#[test]
+fn clipped_math_grapheme_can_be_selected_from_its_visible_edges()
+-> Result<(), Box<dyn std::error::Error>> {
+    let formula_id = NodeId::generate();
+    let mut runtime = narrow_table_runtime(equation_block(&formula_id, "M"), 9600)?;
+    let clip = {
+        let snapshot = runtime.current_snapshot()?;
+        let glyphs = snapshot.page_glyphs(0)?;
+        let run = glyphs.runs.first().ok_or("missing clipped math glyph")?;
+        assert_eq!(run.glyphs.len(), 1);
+        run.line_clip_x_pt.ok_or("missing cell clip")?
+    };
+    let hit_map: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+    let stops = hit_map["stops"].as_array().ok_or("missing drag stops")?;
+    let edge = |offset: &str| {
+        stops.iter().find(|stop| {
+            stop["position"]["kind"] == "math"
+                && stop["position"]["target"]["blockId"] == formula_id.as_str()
+                && stop["position"]["orderUtf8"] == offset
+        })
+    };
+    let before = edge("0").ok_or("missing clipped start")?;
+    let after = edge("1").ok_or("missing clipped end")?;
+    assert_eq!(before["xPt"], clip[0]);
+    assert_eq!(after["xPt"], clip[1]);
+    for (anchor, focus) in [(before, after), (after, before)] {
+        runtime.set_selection_json(
+            &serde_json::json!({"anchor": anchor["position"], "focus": focus["position"]})
+                .to_string(),
+        )?;
+        let selected: Value = serde_json::from_str(&runtime.selected_text_json()?)?;
+        assert_eq!(selected["text"], "M");
+    }
+    Ok(())
+}
+
+#[test]
+fn overflowing_cell_text_click_returns_the_same_clipped_caret_as_the_snapshot()
+-> Result<(), Box<dyn std::error::Error>> {
+    let paragraph_id = NodeId::generate();
+    let mut runtime = narrow_table_runtime(
+        Block::Paragraph(paragraph_with_id(&paragraph_id, "M")),
+        4800,
+    )?;
+    let (x, y, clip) = {
+        let snapshot = runtime.current_snapshot()?;
+        let glyphs = snapshot.page_glyphs(0)?;
+        let run = glyphs.runs.first().ok_or("missing clipped body glyph")?;
+        let clip = run.line_clip_x_pt.ok_or("missing cell clip")?;
+        let glyph = run.glyphs.first().ok_or("missing body glyph")?;
+        (
+            snapshot.table_cell_hit_regions(0)[0].x1_pt - 0.5,
+            glyph.baseline_y_pt - f64::from(run.font_size_pt) / 3.0,
+            clip,
+        )
+    };
+    assert!(x > clip[1]);
+    let placed: Value = serde_json::from_str(&runtime.place_caret_at_page_json(0, x, y)?)?;
+    assert_eq!(placed["position"]["paragraphId"], paragraph_id.as_str());
+    assert_eq!(placed["position"]["offsetUtf8"], "1");
+    assert_eq!(placed["caret"]["xPt"], clip[1]);
+    let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+    assert_eq!(placed["caret"]["xPt"], interaction["caretGeometry"]["xPt"]);
+    Ok(())
+}
+
+#[test]
+fn stale_math_text_preedit_stops_cannot_cancel_a_newer_composition()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut document = Document::blank();
+    let formula_id = NodeId::generate();
+    document.body.push(equation_block(&formula_id, "word"));
+    let mut runtime = DocumentViewRuntime::new(document.clone())?;
+    let select_math_text = |map: Value| -> Result<Value, Box<dyn std::error::Error>> {
+        let stops = map["stops"].as_array().ok_or("missing drag stops")?;
+        let endpoint = |offset: &str| {
+            stops
+                .iter()
+                .find(|stop| {
+                    stop["position"]["kind"] == "math"
+                        && stop["position"]["target"]["blockId"] == formula_id.as_str()
+                        && stop["position"]["orderUtf8"] == offset
+                })
+                .map(|stop| stop["position"].clone())
+                .ok_or("missing math endpoint")
+        };
+        Ok(serde_json::json!({"anchor": endpoint("0")?, "focus": endpoint("4")?}))
+    };
+    runtime.input_method_event_json("alpha".to_owned(), String::new(), 0, 0, 5)?;
+    let first = select_math_text(serde_json::from_str(&runtime.drag_hit_map_json(0)?)?)?;
+    runtime.input_method_event_json("bravo".to_owned(), String::new(), 0, 0, 5)?;
+    let second = select_math_text(serde_json::from_str(&runtime.drag_hit_map_json(0)?)?)?;
+    assert!(first["anchor"]["compositionRevision"].is_string());
+    assert_ne!(
+        first["anchor"]["compositionRevision"],
+        second["anchor"]["compositionRevision"]
+    );
+    let preview = runtime.session.composition().cloned();
+    assert_eq!(
+        runtime.set_selection_json(&first.to_string()),
+        Err("selection.stale_math_hit".to_owned())
+    );
+    assert_eq!(runtime.session.composition(), preview.as_ref());
+    assert_eq!(runtime.document(), &document);
+    runtime.set_selection_json(&second.to_string())?;
+    assert!(runtime.session.composition().is_none());
+    assert_eq!(runtime.document(), &document);
+    Ok(())
+}
+
+#[test]
 fn selecting_only_an_empty_inline_math_publishes_no_zero_width_rectangles()
 -> Result<(), Box<dyn std::error::Error>> {
     let (mut runtime, paragraph_id) = empty_inline_math_runtime(1200)?;
@@ -2920,7 +3292,7 @@ fn dragging_across_display_math_previews_the_math_block_rect_before_release()
     runtime.layout_snapshot_json()?;
     let math_rectangle = runtime
         .current_snapshot()?
-        .math_block_geometry(std::slice::from_ref(&math_id))
+        .atomic_block_geometry(std::slice::from_ref(&math_id))
         .and_then(|rectangles| rectangles.first().copied())
         .ok_or_else(|| std::io::Error::other("equation fragment is missing"))?;
     let math_tuple = (
@@ -2955,7 +3327,7 @@ fn dragging_across_display_math_previews_the_math_block_rect_before_release()
     );
     assert!(runtime.session.has_structure_selection());
     assert_eq!(
-        runtime.session.selected_math_blocks(),
+        runtime.session.selected_atomic_blocks(),
         std::slice::from_ref(&math_id)
     );
 
@@ -3017,7 +3389,7 @@ fn mixed_inline_math_selection_keeps_block_and_math_geometry_in_both_snapshots()
     runtime.layout_snapshot_json()?;
     let equation_rect = runtime
         .current_snapshot()?
-        .math_block_geometry(std::slice::from_ref(&equation_id))
+        .atomic_block_geometry(std::slice::from_ref(&equation_id))
         .and_then(|rectangles| rectangles.first().copied())
         .ok_or_else(|| std::io::Error::other("equation rectangle is missing"))?;
     let equation_tuple = (
@@ -3056,7 +3428,7 @@ fn mixed_inline_math_selection_keeps_block_and_math_geometry_in_both_snapshots()
         caret_engine::VisualAffinity::Upstream,
         caret_engine::VisualAffinity::Downstream,
     )?;
-    assert_eq!(runtime.session.selected_math_blocks(), &[equation_id]);
+    assert_eq!(runtime.session.selected_atomic_blocks(), &[equation_id]);
 
     let full: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)?;
     let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
@@ -3097,7 +3469,7 @@ fn dragging_within_paragraph_before_display_math_does_not_preview_the_block()
     runtime.layout_snapshot_json()?;
     let math_rectangle = runtime
         .current_snapshot()?
-        .math_block_geometry(std::slice::from_ref(&math_id))
+        .atomic_block_geometry(std::slice::from_ref(&math_id))
         .and_then(|rectangles| rectangles.first().copied())
         .ok_or_else(|| std::io::Error::other("equation fragment is missing"))?;
     let math_tuple = (
@@ -3362,44 +3734,65 @@ fn empty_body_paragraph_vertical_arrow_stays_put() -> Result<(), Box<dyn std::er
 }
 
 #[test]
-fn table_host_horizontal_navigation_and_shift_never_mismatch_story()
+fn table_host_horizontal_navigation_and_selection_use_same_block_geometry()
 -> Result<(), Box<dyn std::error::Error>> {
+    use caret_engine::{Direction, Selection};
+
     let mut runtime = DocumentViewRuntime::new_blank()?;
     runtime.insert_text_json("BEFORE".to_owned())?;
-    runtime.handle_editor_key_json("insert-table")?;
-    runtime.handle_editor_key_json("escape")?;
-    assert!(matches!(
-        &runtime.session.selection().focus.story,
-        caret_engine::StoryId::Body
-    ));
+    let before = runtime.session.selection().focus.clone();
+    let inserted: Value = serde_json::from_str(&runtime.handle_editor_key_json("insert-table")?)?;
+    let table_id = runtime
+        .session
+        .focused_table_cell()
+        .ok_or("table focus")?
+        .table_id;
+    let table_rect = &inserted["blockEnvironmentHighlightRects"][0];
+
     runtime
-        .move_visual_caret_json(true, false)
-        .map_err(|error| format!("plain right into table: {error}"))?;
-    assert!(
-        matches!(
-            &runtime.session.selection().focus.story,
-            caret_engine::StoryId::TableCell { .. }
-        ),
-        "Right after a body paragraph must enter the adjacent table"
-    );
-    runtime.handle_editor_key_json("escape")?;
-    let before_shift = runtime.session.selection().focus.clone();
-    runtime
-        .move_visual_caret_json(true, true)
-        .map_err(|error| format!("shift right at table edge: {error}"))?;
+        .session
+        .run(caret_engine::Command::SetSelection(Some(Selection {
+            anchor: before.clone(),
+            focus: before,
+        })))?;
+    let edge: Value = serde_json::from_str(&runtime.move_visual_caret_json(true, false)?)?;
     assert_eq!(
-        runtime.session.selection().focus,
-        before_shift,
-        "Shift+Right into a table must not cross stories or move the caret"
+        runtime.session.block_boundary_exit(),
+        Some((table_id.clone(), Direction::Backward))
     );
-    runtime
-        .move_vertical_caret_json(1, true)
-        .map_err(|error| format!("shift down at table edge: {error}"))?;
+    assert_eq!(edge["caretGeometry"]["xPt"], table_rect["x0Pt"]);
+    assert_eq!(edge["tableGuidelines"], serde_json::json!([]));
+
+    let selected: Value = serde_json::from_str(&runtime.move_visual_caret_json(true, true)?)?;
     assert_eq!(
-        runtime.session.selection().focus,
-        before_shift,
-        "Shift+Down into a table must not cross stories or move the caret"
+        runtime.session.selected_atomic_blocks(),
+        std::slice::from_ref(&table_id)
     );
+    assert_eq!(selected["selectionRects"], serde_json::json!([table_rect]));
+    assert_eq!(selected["tableGuidelines"], serde_json::json!([]));
+    runtime.move_visual_caret_json(false, false)?;
+    assert_eq!(
+        runtime.session.block_boundary_exit(),
+        Some((table_id, Direction::Backward))
+    );
+    let selected_vertical: Value =
+        serde_json::from_str(&runtime.move_vertical_caret_json(1, true)?)?;
+    assert_eq!(
+        selected_vertical["selectionRects"],
+        selected["selectionRects"]
+    );
+    assert_eq!(runtime.session.selected_atomic_blocks().len(), 1);
+    runtime.move_visual_caret_json(false, false)?;
+    let entered: Value = serde_json::from_str(&runtime.move_visual_caret_json(true, false)?)?;
+    assert!(runtime.session.focused_table_cell().is_some());
+    assert!(runtime.session.block_boundary_exit().is_none());
+    assert_eq!(entered["tableGuidelines"].as_array().map(Vec::len), Some(1));
+    for _ in 0..2 {
+        let expanded: Value =
+            serde_json::from_str(&runtime.handle_editor_key_json("expand-structure")?)?;
+        assert_eq!(expanded["selectionRects"], selected["selectionRects"]);
+        assert_eq!(expanded["tableGuidelines"], serde_json::json!([]));
+    }
     Ok(())
 }
 
@@ -3451,30 +3844,47 @@ fn table_structure_keys_outside_table_are_noops() -> Result<(), Box<dyn std::err
 #[test]
 fn structure_keys_enter_and_leave_table_across_block_boundaries()
 -> Result<(), Box<dyn std::error::Error>> {
+    use caret_engine::{Direction, Selection};
+
     let mut runtime = DocumentViewRuntime::new_blank()?;
     runtime.insert_text_json("BEFORE".to_owned())?;
+    let before = runtime.session.selection().focus.clone();
     runtime.handle_editor_key_json("insert-table")?;
-    runtime.handle_editor_key_json("escape")?;
+    let table_id = runtime
+        .session
+        .focused_table_cell()
+        .ok_or("table focus")?
+        .table_id;
     runtime
-        .handle_editor_key_json("structure-next")
-        .map_err(|error| format!("structure next into table: {error}"))?;
-    assert!(
-        matches!(
-            &runtime.session.selection().focus.story,
-            caret_engine::StoryId::TableCell { .. }
-        ),
-        "structure-next from the adjacent body paragraph must enter the table first cell"
+        .session
+        .run(caret_engine::Command::SetSelection(Some(Selection {
+            anchor: before.clone(),
+            focus: before,
+        })))?;
+    runtime.handle_editor_key_json("structure-next")?;
+    assert_eq!(
+        runtime.session.block_boundary_exit(),
+        Some((table_id.clone(), Direction::Backward))
     );
-    runtime
-        .handle_editor_key_json("structure-previous")
-        .map_err(|error| format!("structure previous out of table: {error}"))?;
-    assert!(
-        matches!(
-            &runtime.session.selection().focus.story,
-            caret_engine::StoryId::Body
-        ),
-        "structure-previous at the first table row must leave to the adjacent body paragraph"
+    runtime.handle_editor_key_json("structure-next")?;
+    assert_eq!(
+        runtime
+            .session
+            .focused_table_cell()
+            .map(|cell| cell.table_id),
+        Some(table_id.clone())
     );
+    runtime.handle_editor_key_json("structure-previous")?;
+    assert_eq!(
+        runtime.session.block_boundary_exit(),
+        Some((table_id, Direction::Backward))
+    );
+    runtime.handle_editor_key_json("structure-previous")?;
+    assert!(runtime.session.block_boundary_exit().is_none());
+    assert!(matches!(
+        runtime.session.selection().focus.story,
+        caret_engine::StoryId::Body
+    ));
     Ok(())
 }
 
@@ -3537,7 +3947,7 @@ fn table_after_display_equation_does_not_swallow_horizontal_edge()
 }
 
 #[test]
-fn unavailable_table_key_is_noop_and_escape_exits_table_to_body()
+fn unavailable_table_key_is_noop_and_escape_parks_at_block_end()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut runtime = DocumentViewRuntime::new_blank()?;
     runtime.insert_text_json("BEFORE".to_owned())?;
@@ -3547,17 +3957,20 @@ fn unavailable_table_key_is_noop_and_escape_exits_table_to_body()
         .handle_editor_key_json("insert-table")
         .map_err(|error| format!("insert-table inside cell must not error: {error}"))?;
     assert_eq!(runtime.session.document_generation(), generation);
-    runtime
-        .handle_editor_key_json("escape")
-        .map_err(|error| format!("escape: {error}"))?;
-    assert!(
-        matches!(
-            &runtime.session.selection().focus.story,
-            caret_engine::StoryId::Body
-        ),
-        "Escape from a cell must exit to the adjacent body paragraph"
+    let table_id = runtime
+        .session
+        .focused_table_cell()
+        .ok_or("table focus")?
+        .table_id;
+    let first: Value = serde_json::from_str(&runtime.handle_editor_key_json("escape")?)?;
+    assert_eq!(
+        runtime.session.block_boundary_exit(),
+        Some((table_id, caret_engine::Direction::Forward))
     );
-    assert_eq!(runtime.session.selection().focus.offset, 6);
+    assert_eq!(first["tableGuidelines"], serde_json::json!([]));
+    let second: Value = serde_json::from_str(&runtime.handle_editor_key_json("escape")?)?;
+    assert_eq!(second["caretGeometry"], first["caretGeometry"]);
+    assert_eq!(runtime.session.document_generation(), generation);
     Ok(())
 }
 
@@ -3582,9 +3995,13 @@ fn shift_arrows_at_cell_boundary_extend_inside_cell_without_error()
         matches!(&runtime.session.selection().focus.story, caret_engine::StoryId::TableCell { cell_id: current, .. } if current == &cell),
         "Shift+Right at the cell content boundary must not cross to another cell"
     );
+    runtime.move_visual_caret_json(false, false)?;
+    let caret = runtime.session.selection().clone();
+    assert_eq!(caret.focus.offset, 1);
     runtime
         .move_vertical_caret_json(1, true)
         .map_err(|error| format!("shift down: {error}"))?;
+    assert_eq!(runtime.session.selection(), &caret);
     assert!(
         matches!(&runtime.session.selection().focus.story, caret_engine::StoryId::TableCell { cell_id: current, .. } if current == &cell),
         "Shift+Down at the cell boundary must not leave the cell"
@@ -3756,15 +4173,16 @@ fn table_cells_move_with_visual_and_vertical_arrows_at_boundaries()
     runtime
         .insert_text_json("x".to_owned())
         .map_err(|e| format!("type: {e}"))?;
-    let before_edge = runtime.session.selection().focus.clone();
     runtime
         .move_vertical_caret_json(1, false)
         .map_err(|e| format!("down2: {e}"))?;
-    assert_eq!(
-        runtime.session.selection().focus,
-        before_edge,
-        "Down at the last table row must be a focus-preserving no-op"
-    );
+    assert!(matches!(
+        runtime.session.block_boundary_exit(),
+        Some((_, caret_engine::Direction::Forward))
+    ));
+    let parked = runtime.session.selection().focus.clone();
+    runtime.move_vertical_caret_json(1, false)?;
+    assert_eq!(runtime.session.selection().focus, parked);
     Ok(())
 }
 
@@ -3901,5 +4319,426 @@ fn inserted_table_renders_cell_paragraphs_and_navigates() -> Result<(), Box<dyn 
     let json = runtime.layout_snapshot_json()?;
     let snapshot: Value = serde_json::from_str(&json)?;
     assert_eq!(snapshot["pages"].as_array().map(Vec::len), Some(1));
+    Ok(())
+}
+
+#[test]
+fn dragging_across_table_cells_selects_each_page_fragment() -> Result<(), Box<dyn std::error::Error>>
+{
+    let table_id = NodeId::generate();
+    let first = NodeId::generate();
+    let last = NodeId::generate();
+    let row_count = 120;
+    let rows = (0..row_count)
+        .map(|index| {
+            let paragraph_id = match index {
+                0 => first.clone(),
+                index if index == row_count - 1 => last.clone(),
+                _ => NodeId::generate(),
+            };
+            caret_doc::TableRow {
+                id: NodeId::generate(),
+                cells: vec![caret_doc::TableCell {
+                    id: NodeId::generate(),
+                    blocks: vec![Block::Paragraph(paragraph_with_id(&paragraph_id, "cell"))],
+                }],
+            }
+        })
+        .collect();
+    let mut document = Document::blank();
+    document.body = vec![Block::Table(caret_doc::Table {
+        id: table_id.clone(),
+        rows,
+    })];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let layout = runtime.current_snapshot()?;
+    let mut expected = Vec::new();
+    for (page_index, page) in layout.pages.iter().enumerate() {
+        // 用页面实际绘制的表格横线验证每个分页片段的四条边。
+        let glyphs = layout.page_glyphs(page_index)?;
+        let mut horizontal_rules = glyphs
+            .shapes
+            .iter()
+            .filter(|shape| shape.dy_pt == 0.0 && shape.dx_pt > 0.0);
+        let top = horizontal_rules.next().ok_or("缺少表格上边框")?;
+        let bottom = horizontal_rules.next_back().ok_or("缺少表格下边框")?;
+        expected.push((
+            i64::try_from(page_index)?,
+            top.x_pt.clamp(0.0, page.width_pt),
+            top.y_pt.clamp(0.0, page.height_pt),
+            (top.x_pt + top.dx_pt).clamp(0.0, page.width_pt),
+            bottom.y_pt.clamp(0.0, page.height_pt),
+        ));
+    }
+    assert!(expected.len() >= 3, "表格须覆盖首尾之外的完整页面");
+
+    let selection: Value = serde_json::from_str(
+        &runtime.set_selection_json(&body_drag_payload((&first, 1), (&last, 2)))?,
+    )?;
+    let selected = rectangle_tuples(&selection["selectionRects"]);
+    assert_eq!(
+        runtime.session.selected_atomic_blocks(),
+        std::slice::from_ref(&table_id)
+    );
+    assert_eq!(selected.len(), expected.len());
+    for (actual, expected) in selected.iter().zip(expected) {
+        assert!(
+            rectangle_close(actual, expected),
+            "{actual:?} != {expected:?}"
+        );
+    }
+    assert_eq!(selection["tableGuidelines"], serde_json::json!([]));
+
+    let snapshot: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)?;
+    assert_eq!(rectangle_tuples(&snapshot["selectionRects"]), selected);
+    assert_eq!(
+        snapshot["caretGeometry"]["pageIndex"],
+        selected.last().ok_or("缺少表格选区")?.0
+    );
+    Ok(())
+}
+
+fn paragraph_with_math_text_island(paragraph_id: &NodeId, math_id: &NodeId) -> Block {
+    let Block::Equation(equation) = equation_block(math_id, "island") else {
+        unreachable!();
+    };
+    let mut math_tree = equation.math_tree;
+    let content = std::mem::take(&mut math_tree.root.content);
+    math_tree
+        .root
+        .content
+        .push(MathContent::Math(caret_doc::MathNode {
+            id: NodeId::generate(),
+            kind: caret_doc::MathNodeKind::Group,
+            text: None,
+            attributes: BTreeMap::new(),
+            children: vec![MathFlow {
+                id: NodeId::generate(),
+                content,
+                extra: BTreeMap::new(),
+            }],
+            extra: BTreeMap::new(),
+        }));
+    let mut paragraph = paragraph_with_id(paragraph_id, "text");
+    paragraph.inlines.push(ParagraphContent::Math(InlineMath {
+        id: math_id.clone(),
+        math_tree,
+        extra: BTreeMap::new(),
+    }));
+    Block::Paragraph(paragraph)
+}
+
+#[test]
+fn body_drag_hit_map_includes_display_formula_cells_and_selects_the_table()
+-> Result<(), Box<dyn std::error::Error>> {
+    for use_align in [false, true] {
+        let table_id = NodeId::generate();
+        let text_id = NodeId::generate();
+        let formula_id = NodeId::generate();
+        let inline_id = NodeId::generate();
+        let formula_cell_id = NodeId::generate();
+        let formula = if use_align {
+            align_block(&formula_id)
+        } else {
+            equation_block(&formula_id, "x")
+        };
+        let outside_id = NodeId::generate();
+        let outside_math_id = NodeId::generate();
+        let mut document = Document::blank();
+        document.body = vec![
+            Block::Table(caret_doc::Table {
+                id: table_id.clone(),
+                rows: vec![caret_doc::TableRow {
+                    id: NodeId::generate(),
+                    cells: vec![
+                        caret_doc::TableCell {
+                            id: NodeId::generate(),
+                            blocks: vec![paragraph_with_math_text_island(&text_id, &inline_id)],
+                        },
+                        caret_doc::TableCell {
+                            id: formula_cell_id.clone(),
+                            blocks: vec![formula],
+                        },
+                    ],
+                }],
+            }),
+            paragraph_with_math_text_island(&outside_id, &outside_math_id),
+        ];
+        let mut runtime = DocumentViewRuntime::new(document)?;
+        let hit_map: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+        let stops = hit_map["stops"].as_array().ok_or("drag stops")?;
+        let body_stop = stops
+            .iter()
+            .find(|stop| {
+                stop["position"]["paragraphId"] == text_id.as_str()
+                    && stop["position"]["offsetUtf8"] == "4"
+            })
+            .ok_or("body drag stop")?;
+        let formula_stop = stops
+            .iter()
+            .find(|stop| {
+                stop["position"]["kind"] == "mathTree"
+                    && stop["position"]["target"]["kind"] == "block"
+                    && stop["position"]["target"]["blockId"] == formula_id.as_str()
+                    && stop["cellId"] == formula_cell_id.as_str()
+                    && stop["position"]["affinity"] == "upstream"
+            })
+            .ok_or(if use_align {
+                "Align block tree stop"
+            } else {
+                "Equation block tree stop"
+            })?;
+        let snapshot = runtime.current_snapshot()?;
+        let formula_cell_region = snapshot
+            .table_cell_hit_regions(0)
+            .iter()
+            .find(|region| region.cell_id == formula_cell_id)
+            .ok_or("formula cell hit region")?;
+        let whitespace_x = (formula_cell_region.x0_pt + formula_cell_region.x1_pt) / 2.0;
+        let whitespace_y = formula_cell_region.y1_pt - 1.0;
+        assert!(
+            snapshot
+                .hit_test_math_structure(0, whitespace_x, whitespace_y)
+                .is_none(),
+            "cell padding beneath a formula must use cell ownership fallback"
+        );
+        let start_domain: Value = serde_json::from_str(&runtime.drag_start_domain_json(
+            0,
+            whitespace_x,
+            whitespace_y,
+        )?)?;
+        assert_eq!(start_domain["domainId"], "body");
+        let mut body_position = body_stop["position"].clone();
+        body_position["visualAffinity"] = body_stop["visualAffinity"].clone();
+        let selection = serde_json::json!({
+            "anchor": body_position,
+            "focus": formula_stop["position"],
+        });
+        runtime.set_selection_json(&selection.to_string())?;
+        assert_eq!(
+            runtime.session.selected_atomic_blocks(),
+            std::slice::from_ref(&table_id),
+            "dragging from body text into a formula-only cell must promote to the table"
+        );
+        let reverse = serde_json::json!({
+            "anchor": formula_stop["position"],
+            "focus": body_position,
+        });
+        runtime.set_selection_json(&reverse.to_string())?;
+        assert_eq!(
+            runtime.session.selected_atomic_blocks(),
+            std::slice::from_ref(&table_id),
+            "dragging from a formula-only cell back into body text must promote to the table"
+        );
+        for math_id in [&inline_id, &outside_math_id] {
+            let inline_stop = stops
+                .iter()
+                .find(|stop| {
+                    stop["domainId"] == "body"
+                        && stop["position"]["kind"] == "math"
+                        && stop["position"]["target"]["mathId"] == math_id.as_str()
+                        && stop["position"]["orderUtf8"] == "3"
+                })
+                .ok_or("inline MathText stop")?;
+            for (anchor, focus) in [(inline_stop, formula_stop), (formula_stop, inline_stop)] {
+                runtime.clear_selection_json()?;
+                assert!(runtime.session.selected_atomic_blocks().is_empty());
+                runtime.set_selection_json(
+                    &serde_json::json!({"anchor": anchor["position"], "focus": focus["position"]})
+                        .to_string(),
+                )?;
+                assert_eq!(
+                    runtime.session.selected_atomic_blocks(),
+                    std::slice::from_ref(&table_id),
+                    "dragging between a display formula edge and an inline math island must select the table"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn mixed_math_drag_reprojects_its_anchor_after_preedit_repagination()
+-> Result<(), Box<dyn std::error::Error>> {
+    let table_id = NodeId::generate();
+    let formula_id = NodeId::generate();
+    let inline_id = NodeId::generate();
+    let first_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(paragraph_with_id(&first_id, "first")),
+        Block::Table(caret_doc::Table {
+            id: table_id.clone(),
+            rows: vec![caret_doc::TableRow {
+                id: NodeId::generate(),
+                cells: vec![caret_doc::TableCell {
+                    id: NodeId::generate(),
+                    blocks: vec![equation_block(&formula_id, "x")],
+                }],
+            }],
+        }),
+        paragraph_with_math_text_island(&NodeId::generate(), &inline_id),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document.clone())?;
+    let endpoints = |map: &Value| {
+        let stops = map["stops"].as_array().ok_or("missing drag stops")?;
+        let find = |kind: &str, target_key: &str, id: &NodeId| {
+            stops
+                .iter()
+                .find(|stop| {
+                    stop["domainId"] == "body"
+                        && stop["position"]["kind"] == kind
+                        && stop["position"]["target"][target_key] == id.as_str()
+                        && (kind != "math" || stop["position"]["orderUtf8"] == "3")
+                })
+                .cloned()
+        };
+        Ok::<_, Box<dyn std::error::Error>>((
+            find("math", "mathId", &inline_id),
+            find("mathTree", "blockId", &formula_id),
+        ))
+    };
+    let committed: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+    let (committed_inline, committed_tree) = endpoints(&committed)?;
+    let committed_inline = committed_inline.ok_or("missing committed inline stop")?;
+    let committed_tree = committed_tree.ok_or("missing committed display stop")?;
+    for inline_is_anchor in [true, false] {
+        runtime
+            .session
+            .run(caret_engine::Command::SetSelection(Some(
+                collapsed_selection(&first_id, 5),
+            )))?;
+        let preedit = "wide line word ".repeat(450);
+        let cursor = preedit.len();
+        runtime.input_method_event_json(preedit, String::new(), 0, 0, cursor)?;
+        let pages = runtime.current_snapshot()?.pages.len();
+        let mut preview_inline = None;
+        let mut preview_tree = None;
+        for page_index in 1..pages {
+            let map: Value =
+                serde_json::from_str(&runtime.drag_hit_map_json(i32::try_from(page_index)?)?)?;
+            let (inline, tree) = endpoints(&map)?;
+            preview_inline = preview_inline.or(inline);
+            preview_tree = preview_tree.or(tree);
+        }
+        let preview_inline =
+            preview_inline.ok_or("composition must move the inline formula off the first page")?;
+        let preview_tree =
+            preview_tree.ok_or("composition must move the display formula off the first page")?;
+        let (anchor, focus, committed_anchor) = if inline_is_anchor {
+            (&preview_inline, &preview_tree, &committed_inline)
+        } else {
+            (&preview_tree, &preview_inline, &committed_tree)
+        };
+        let response: Value = serde_json::from_str(
+            &runtime.set_selection_json(
+                &serde_json::json!({"anchor": anchor["position"], "focus": focus["position"]})
+                    .to_string(),
+            )?,
+        )?;
+        assert_eq!(response["compositionCancelled"], true);
+        assert_eq!(&response["dragAnchor"], committed_anchor);
+        assert_eq!(
+            runtime.session.selected_atomic_blocks(),
+            std::slice::from_ref(&table_id)
+        );
+        assert_eq!(runtime.document(), &document);
+    }
+    Ok(())
+}
+
+#[test]
+fn drag_hit_uses_right_cell_on_blank_lines_beside_taller_neighbor()
+-> Result<(), Box<dyn std::error::Error>> {
+    let table_id = NodeId::generate();
+    let left_id = NodeId::generate();
+    let right_id = NodeId::generate();
+    let right_cell_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body = vec![Block::Table(caret_doc::Table {
+        id: table_id.clone(),
+        rows: vec![caret_doc::TableRow {
+            id: NodeId::generate(),
+            cells: vec![
+                caret_doc::TableCell {
+                    id: NodeId::generate(),
+                    blocks: vec![Block::Paragraph(paragraph_with_id(
+                        &left_id,
+                        &"left text ".repeat(40),
+                    ))],
+                },
+                caret_doc::TableCell {
+                    id: right_cell_id.clone(),
+                    blocks: vec![Block::Paragraph(paragraph_with_id(&right_id, "short"))],
+                },
+            ],
+        }],
+    })];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let hit_map: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+    let stops = hit_map["stops"].as_array().ok_or("drag stops")?;
+    let left_stops: Vec<_> = stops
+        .iter()
+        .filter(|stop| stop["position"]["paragraphId"] == left_id.as_str())
+        .collect();
+    let right_stops: Vec<_> = stops
+        .iter()
+        .filter(|stop| stop["position"]["paragraphId"] == right_id.as_str())
+        .collect();
+    assert!(
+        left_stops.len() > right_stops.len(),
+        "left cell should wrap to more lines"
+    );
+    assert!(
+        right_stops
+            .iter()
+            .all(|stop| stop["cellId"] == right_cell_id.as_str())
+    );
+    let right_x = right_stops
+        .iter()
+        .map(|stop| stop["xPt"].as_f64().ok_or("right stop x"))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .max_by(f64::total_cmp)
+        .ok_or("right cell stop")?;
+    let tall_line = left_stops
+        .iter()
+        .max_by(|left, right| {
+            left["position"]["yPt"]
+                .as_f64()
+                .unwrap_or_default()
+                .total_cmp(&right["position"]["yPt"].as_f64().unwrap_or_default())
+        })
+        .ok_or("left cell stop")?;
+    let y = tall_line["position"]["yPt"].as_f64().ok_or("left stop y")?;
+    let hit: Value = serde_json::from_str(&runtime.hit_test_json(0, right_x, y)?)?;
+    assert_eq!(hit["position"]["story"]["cellId"], right_cell_id.as_str());
+    let regions = hit_map["cellHitRegions"]
+        .as_array()
+        .ok_or("drag cell regions")?;
+    let mut matching_regions = regions
+        .iter()
+        .zip(rectangle_tuples(&hit_map["cellHitRegions"]))
+        .filter(|(_, (_, x0, y0, x1, y1))| {
+            (*x0..=*x1).contains(&right_x) && (*y0..=*y1).contains(&y)
+        });
+    let (region, _) = matching_regions.next().ok_or("right cell region")?;
+    assert_eq!(region["cellId"], right_cell_id.as_str());
+    assert!(matching_regions.next().is_none());
+
+    let anchor = left_stops[0];
+    let target = right_stops[0];
+    let endpoint = |stop: &Value| {
+        let mut position = stop["position"].clone();
+        position["visualAffinity"] = stop["visualAffinity"].clone();
+        position
+    };
+    let selection = serde_json::json!({
+        "anchor": endpoint(anchor),
+        "focus": endpoint(target),
+    });
+    runtime.set_selection_json(&selection.to_string())?;
+    assert_eq!(runtime.session.selected_atomic_blocks(), &[table_id]);
     Ok(())
 }

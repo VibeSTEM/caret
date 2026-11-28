@@ -18,7 +18,7 @@ use super::super::{
 };
 use super::Session;
 use super::history::{DocumentEditSnapshot, DocumentPatch, ParagraphState, SessionHistoryState};
-use crate::editing::paragraph_ops::BlockContainerPath;
+use crate::editing::paragraph_ops::{BlockContainerPath, ContainerStep};
 use caret_doc::{
     Align, Block, ClipboardFragment, ClipboardFragmentShape, Equation, InlineMath, MathTree,
     NodeId, Paragraph, ParagraphContent, ParagraphLineSpacing, TextFlow,
@@ -58,7 +58,8 @@ struct CopyContext<'a> {
     start_ordinal: Option<usize>,
     end_ordinal: Option<usize>,
     environments: Vec<NodeId>,
-    math_blocks: Vec<NodeId>,
+    atomic_blocks: Vec<NodeId>,
+    preserve_empty_text_edges: bool,
 }
 
 impl CopyContext<'_> {
@@ -67,15 +68,15 @@ impl CopyContext<'_> {
     }
 }
 
-/// 粘贴目标的单侧边界；块序列在 `parent_environment_ids` 的 `index` 处切开。
+/// 粘贴目标的单侧边界；块序列在 `container` 的 `index` 处切开。
 #[derive(Debug, Clone)]
 enum PasteBoundary {
     AtIndex {
-        parent_environment_ids: Vec<NodeId>,
+        container: BlockContainerPath,
         index: usize,
     },
     InParagraph {
-        parent_environment_ids: Vec<NodeId>,
+        container: BlockContainerPath,
         child_index: usize,
         paragraph_id: NodeId,
         offset: usize,
@@ -83,16 +84,9 @@ enum PasteBoundary {
 }
 
 impl PasteBoundary {
-    fn parent_ids(&self) -> &[NodeId] {
+    fn container(&self) -> &BlockContainerPath {
         match self {
-            Self::AtIndex {
-                parent_environment_ids,
-                ..
-            }
-            | Self::InParagraph {
-                parent_environment_ids,
-                ..
-            } => parent_environment_ids,
+            Self::AtIndex { container, .. } | Self::InParagraph { container, .. } => container,
         }
     }
 }
@@ -333,20 +327,23 @@ impl Session {
             .structure_index
             .paragraph_ordinal(&end.paragraph_id)
             .ok_or(EditError::InvalidPosition)?;
+        let (environments, atomic_blocks) = self.covered_block_nodes_for_text_pair(&start, &end)?;
+        let preserve_empty_text_edges = environments.is_empty() && atomic_blocks.is_empty();
         let context = CopyContext {
             start: Some(&start),
             end: Some(&end),
             start_ordinal: Some(start_ordinal),
             end_ordinal: Some(end_ordinal),
-            environments: Vec::new(),
-            math_blocks: Vec::new(),
+            environments,
+            atomic_blocks,
+            preserve_empty_text_edges,
         };
         self.assemble_copy_units(&context)
     }
 
     fn copy_structure_selection(&self) -> Result<Option<ClipboardCopy>, EditError> {
-        let (environments, math_blocks) = self.structure_range_block_nodes()?;
-        if environments.is_empty() && math_blocks.is_empty() {
+        let (environments, atomic_blocks) = self.structure_range_block_nodes()?;
+        if environments.is_empty() && atomic_blocks.is_empty() {
             return Err(EditError::ClipboardHostMismatch);
         }
         let text_bounds = self.usable_structure_text_bounds()?;
@@ -365,7 +362,8 @@ impl Session {
             start_ordinal,
             end_ordinal,
             environments,
-            math_blocks,
+            atomic_blocks,
+            preserve_empty_text_edges: false,
         };
         self.assemble_copy_units(&context)
     }
@@ -452,7 +450,7 @@ impl Session {
         }))
     }
 
-    /// 只拒绝与复制范围相交的表格；含表文档内与表格无关的正文复制保持可用。
+    /// 判断是否要遍历表格单元格，提取范围内的部分内容。
     fn table_intersects_copy_range(
         &self,
         table_id: &NodeId,
@@ -508,10 +506,28 @@ impl Session {
             path.push(index);
             match block {
                 Block::Table(table) => {
-                    if self.table_intersects_copy_range(&table.id, context)? {
-                        return Err(EditError::UnsupportedTableContent);
+                    if context.atomic_blocks.contains(&table.id) {
+                        validate_copy_block(block)?;
+                        units.push(CopyUnit {
+                            block: block.clone(),
+                            clipped_start: false,
+                            clipped_end: false,
+                        });
+                    } else if self.table_intersects_copy_range(&table.id, context)? {
+                        for (row_index, row) in table.rows.iter().enumerate() {
+                            path.push(row_index + 1);
+                            for (cell_index, cell) in row.cells.iter().enumerate() {
+                                path.push(cell_index + 1);
+                                units.extend(self.collect_copy_units(
+                                    &cell.blocks,
+                                    path,
+                                    context,
+                                )?);
+                                path.pop();
+                            }
+                            path.pop();
+                        }
                     }
-                    continue;
                 }
                 Block::Paragraph(paragraph) => {
                     if let Some(unit) = self.copy_paragraph_unit(paragraph, context)? {
@@ -559,7 +575,14 @@ impl Session {
                         });
                     }
                 }
-                Block::Opaque(_) => return Err(EditError::UnsupportedOpaqueContent),
+                Block::Opaque(_) => {
+                    // 没有文本切口时无法按段落路径判定匿名块是否在范围中。
+                    if !context.has_text_bounds()
+                        || self.block_path_strictly_inside(path, context)?
+                    {
+                        return Err(EditError::UnsupportedOpaqueContent);
+                    }
+                }
             }
             path.pop();
         }
@@ -605,10 +628,11 @@ impl Session {
         } else {
             text_len
         };
-        if ordinal == start_ordinal && ordinal != end_ordinal && start_offset >= text_len {
-            return Ok(None);
-        }
-        if ordinal == end_ordinal && ordinal != start_ordinal && end_offset == 0 {
+        if !context.preserve_empty_text_edges
+            && start_ordinal != end_ordinal
+            && ((ordinal == start_ordinal && start_offset >= text_len)
+                || (ordinal == end_ordinal && end_offset == 0))
+        {
             return Ok(None);
         }
         let end_offset = end_offset.min(text_len);
@@ -617,8 +641,14 @@ impl Session {
             validate_copy_paragraph(paragraph)?;
             return Ok(Some(CopyUnit {
                 block: Block::Paragraph(paragraph.clone()),
-                clipped_start: false,
-                clipped_end: false,
+                clipped_start: context.preserve_empty_text_edges
+                    && text_len == 0
+                    && ordinal == start_ordinal
+                    && ordinal != end_ordinal,
+                clipped_end: context.preserve_empty_text_edges
+                    && text_len == 0
+                    && ordinal == end_ordinal
+                    && ordinal != start_ordinal,
             }));
         }
         let (through_end, _) = split_inline_nodes(paragraph.inlines.clone(), end_offset)?;
@@ -644,7 +674,7 @@ impl Session {
             Block::Align(align) => &align.id,
             _ => return Ok(false),
         };
-        if context.math_blocks.contains(block_id) {
+        if context.atomic_blocks.contains(block_id) {
             return Ok(true);
         }
         self.block_path_strictly_inside(path, context)
@@ -782,7 +812,16 @@ fn validate_copy_block(block: &Block) -> Result<(), EditError> {
             }
             Ok(())
         }
-        Block::Table(_) => Err(EditError::UnsupportedTableContent),
+        Block::Table(table) => {
+            for row in &table.rows {
+                for cell in &row.cells {
+                    for child in &cell.blocks {
+                        validate_copy_block(child)?;
+                    }
+                }
+            }
+            Ok(())
+        }
         Block::ExplicitBreak(explicit_break) => ensure_empty_extra(&explicit_break.extra),
         Block::Opaque(_) => Err(EditError::UnsupportedOpaqueContent),
     }
@@ -835,7 +874,21 @@ fn block_clipboard_text(block: &Block) -> Result<String, EditError> {
             }
             Ok(parts.join("\n"))
         }
-        Block::Table(_) => Err(EditError::UnsupportedTableContent),
+        Block::Table(table) => {
+            let mut rows = Vec::with_capacity(table.rows.len());
+            for row in &table.rows {
+                let mut cells = Vec::with_capacity(row.cells.len());
+                for cell in &row.cells {
+                    let mut blocks = Vec::with_capacity(cell.blocks.len());
+                    for block in &cell.blocks {
+                        blocks.push(block_clipboard_text(block)?);
+                    }
+                    cells.push(blocks.join("\n"));
+                }
+                rows.push(cells.join("\t"));
+            }
+            Ok(rows.join("\n"))
+        }
         Block::ExplicitBreak(_) => Ok(String::new()),
         Block::Opaque(_) => Err(EditError::UnsupportedOpaqueContent),
     }
@@ -1202,7 +1255,14 @@ impl Session {
         }
         let mut blocks = fragment.blocks;
         caret_doc::regenerate_clipboard_ids(&mut blocks);
-        let (start, end) = self.paste_target_boundaries()?;
+        let preserve_text_cuts = fragment.start_clipped || fragment.end_clipped;
+        let (start, end) = self.paste_target_boundaries(preserve_text_cuts)?;
+        if (start.container().innermost_cell().is_some()
+            || end.container().innermost_cell().is_some())
+            && blocks_contain_table(&blocks)
+        {
+            return Err(EditError::ClipboardHostMismatch);
+        }
         let plan = self.plan_block_paste(
             blocks,
             &start,
@@ -1278,7 +1338,10 @@ impl Session {
         })
     }
 
-    fn paste_target_boundaries(&self) -> Result<(PasteBoundary, PasteBoundary), EditError> {
+    fn paste_target_boundaries(
+        &self,
+        preserve_text_cuts: bool,
+    ) -> Result<(PasteBoundary, PasteBoundary), EditError> {
         if self.composition.is_some() {
             return Err(EditError::CompositionPending);
         }
@@ -1290,7 +1353,10 @@ impl Session {
         }
         if self.has_structure_selection() {
             let (start, end) = self.ordered_structure_selection()?;
-            return Ok((self.paste_boundary(start)?, self.paste_boundary(end)?));
+            return Ok((
+                self.paste_boundary(start, preserve_text_cuts)?,
+                self.paste_boundary(end, preserve_text_cuts)?,
+            ));
         }
         if let Some((block_id, direction)) = self.block_boundary_exit() {
             let start = DocumentRangeEndpoint::BlockEdge {
@@ -1301,7 +1367,10 @@ impl Session {
                 block_id,
                 side: direction,
             };
-            return Ok((self.paste_boundary(&start)?, self.paste_boundary(&end)?));
+            return Ok((
+                self.paste_boundary(&start, preserve_text_cuts)?,
+                self.paste_boundary(&end, preserve_text_cuts)?,
+            ));
         }
         let anchor = self.selection.anchor.clone();
         let focus = self.selection.focus.clone();
@@ -1310,23 +1379,24 @@ impl Session {
         }
         let (start, end) = self.ordered_text_range(&anchor, &focus)?;
         Ok((
-            self.paste_boundary(&DocumentRangeEndpoint::Text(start))?,
-            self.paste_boundary(&DocumentRangeEndpoint::Text(end))?,
+            self.paste_boundary(&DocumentRangeEndpoint::Text(start), preserve_text_cuts)?,
+            self.paste_boundary(&DocumentRangeEndpoint::Text(end), preserve_text_cuts)?,
         ))
     }
 
-    fn paste_boundary(&self, endpoint: &DocumentRangeEndpoint) -> Result<PasteBoundary, EditError> {
+    fn paste_boundary(
+        &self,
+        endpoint: &DocumentRangeEndpoint,
+        preserve_text_cuts: bool,
+    ) -> Result<PasteBoundary, EditError> {
         match endpoint {
             DocumentRangeEndpoint::Text(position) => {
-                if position.story != StoryId::Body {
-                    return Err(EditError::ClipboardHostMismatch);
-                }
                 let location = self
                     .paragraph_index
                     .get(&position.paragraph_id)
                     .cloned()
                     .ok_or(EditError::InvalidPosition)?;
-                if location.story != StoryId::Body || location.is_title {
+                if location.story != position.story || location.is_title {
                     return Err(EditError::ClipboardHostMismatch);
                 }
                 let paragraph = paragraph_at_location(&self.document.body, &location)
@@ -1338,19 +1408,20 @@ impl Session {
                     .block_path
                     .last()
                     .ok_or(EditError::InvalidPosition)?;
-                if position.offset == 0 {
+                // 裁切片段可在段首或段尾与零长切口拼接，例如只复制了一个段落换行。
+                if !preserve_text_cuts && position.offset == 0 {
                     Ok(PasteBoundary::AtIndex {
-                        parent_environment_ids: location.parent_environment_ids,
+                        container: location.container,
                         index: child_index,
                     })
-                } else if position.offset >= length {
+                } else if !preserve_text_cuts && position.offset >= length {
                     Ok(PasteBoundary::AtIndex {
-                        parent_environment_ids: location.parent_environment_ids,
+                        container: location.container,
                         index: child_index + 1,
                     })
                 } else {
                     Ok(PasteBoundary::InParagraph {
-                        parent_environment_ids: location.parent_environment_ids,
+                        container: location.container,
                         child_index,
                         paragraph_id: position.paragraph_id.clone(),
                         offset: position.offset,
@@ -1369,7 +1440,7 @@ impl Session {
                     Direction::Forward => index + 1,
                 };
                 Ok(PasteBoundary::AtIndex {
-                    parent_environment_ids: location.parent_environment_ids,
+                    container: location.container,
                     index,
                 })
             }
@@ -1386,8 +1457,8 @@ impl Session {
         start_clipped: bool,
         end_clipped: bool,
     ) -> Result<BodyPastePlan, EditError> {
-        let common = common_parent_ids(start.parent_ids(), end.parent_ids());
-        let children = caret_structure::block_list_by_environment_ids(&self.document.body, &common)
+        let common = common_container_path(start.container(), end.container());
+        let children = caret_structure::block_list_by_container(&self.document.body, &common)
             .ok_or(EditError::InvalidPosition)?
             .to_vec();
         let mut planned = self.rebuild_at_level(
@@ -1406,7 +1477,7 @@ impl Session {
         }
         let mut body = self.document.body.clone();
         {
-            let target = caret_structure::block_list_by_environment_ids_mut(&mut body, &common)
+            let target = caret_structure::block_list_by_container_mut(&mut body, &common)
                 .ok_or(EditError::InvalidPosition)?;
             *target = planned.blocks;
         }
@@ -1419,7 +1490,7 @@ impl Session {
     fn rebuild_at_level(
         &self,
         children: &[Block],
-        level_ids: &[NodeId],
+        level_container: &BlockContainerPath,
         start: &PasteBoundary,
         end: &PasteBoundary,
         fragment: Vec<Block>,
@@ -1429,8 +1500,8 @@ impl Session {
             start_clipped,
             end_clipped,
         } = clipped;
-        let start_local = self.resolve_local_boundary(children, level_ids, start)?;
-        let end_local = self.resolve_local_boundary(children, level_ids, end)?;
+        let start_local = self.resolve_local_boundary(children, level_container, start)?;
+        let end_local = self.resolve_local_boundary(children, level_container, end)?;
         if let (
             LocalBoundary::InParagraph {
                 child_index: start_child,
@@ -1452,9 +1523,10 @@ impl Session {
             let (through_end, right) =
                 split_inline_nodes(start_paragraph.inlines.clone(), *end_offset)?;
             let (left, _middle) = split_inline_nodes(through_end, *start_offset)?;
-            let mut prefix_blocks = Vec::new();
+            let mut prefix_blocks = children[..*start_child].to_vec();
             let mut suffix_blocks = Vec::new();
-            if !left.is_empty() || start_clipped {
+            let keeps_prefix = !left.is_empty() || start_clipped;
+            if keeps_prefix {
                 let mut prefix = start_paragraph.clone();
                 prefix.inlines = left;
                 prefix_blocks.push(Block::Paragraph(prefix));
@@ -1463,10 +1535,13 @@ impl Session {
                 let mut suffix = end_paragraph.clone();
                 // 首段保留目标段落身份；同一段被切成两个独立段落时，后缀必须
                 // 获得新身份，否则整文档校验会报重复节点 ID。
-                suffix.id = NodeId::generate();
+                if keeps_prefix {
+                    suffix.id = NodeId::generate();
+                }
                 suffix.inlines = right;
                 suffix_blocks.push(Block::Paragraph(suffix));
             }
+            suffix_blocks.extend(children[*end_child + 1..].iter().cloned());
             return self.splice_fragment(
                 prefix_blocks,
                 fragment,
@@ -1511,7 +1586,7 @@ impl Session {
                 prefix_blocks.extend(children[..child_index].iter().cloned());
                 prefix_blocks.extend(self.rebuild_prefix_block(
                     &children[child_index],
-                    level_ids,
+                    level_container,
                     &boundary,
                 )?);
             }
@@ -1549,7 +1624,7 @@ impl Session {
                 end_after = child_index + 1;
                 suffix_blocks.extend(self.rebuild_suffix_block(
                     &children[child_index],
-                    level_ids,
+                    level_container,
                     &boundary,
                 )?);
             }
@@ -1576,11 +1651,11 @@ impl Session {
     fn resolve_local_boundary(
         &self,
         children: &[Block],
-        level_ids: &[NodeId],
+        level_container: &BlockContainerPath,
         boundary: &PasteBoundary,
     ) -> Result<LocalBoundary, EditError> {
-        let parent_ids = boundary.parent_ids();
-        if parent_ids == level_ids {
+        let boundary_container = boundary.container();
+        if boundary_container == level_container {
             return match boundary {
                 PasteBoundary::AtIndex { index, .. } => {
                     if *index > children.len() {
@@ -1612,13 +1687,18 @@ impl Session {
                 }
             };
         }
-        if parent_ids.len() <= level_ids.len() || !parent_ids.starts_with(level_ids) {
+        if !container_is_prefix(level_container, boundary_container) {
             return Err(EditError::InvalidPosition);
         }
-        let child_id = &parent_ids[level_ids.len()];
+        let ContainerStep::Environment(child_id) =
+            next_container_step(level_container, boundary_container)
+                .ok_or(EditError::InvalidPosition)?
+        else {
+            return Err(EditError::InvalidPosition);
+        };
         let child_index = children
             .iter()
-            .position(|block| matches!(block, Block::Environment(environment) if &environment.id == child_id))
+            .position(|block| matches!(block, Block::Environment(environment) if environment.id == child_id))
             .ok_or(EditError::InvalidPosition)?;
         Ok(LocalBoundary::Deeper {
             child_index,
@@ -1629,14 +1709,14 @@ impl Session {
     fn rebuild_prefix_block(
         &self,
         block: &Block,
-        parent_ids: &[NodeId],
+        parent_container: &BlockContainerPath,
         boundary: &PasteBoundary,
     ) -> Result<Vec<Block>, EditError> {
         let Block::Environment(environment) = block else {
             return Err(EditError::InvalidPosition);
         };
-        let mut child_level = parent_ids.to_vec();
-        child_level.push(environment.id.clone());
+        let mut child_level = parent_container.clone();
+        child_level.push(ContainerStep::Environment(environment.id.clone()));
         let children =
             self.rebuild_prefix_children(&environment.children, &child_level, boundary)?;
         if children.is_empty() && environment.title.is_none() {
@@ -1650,10 +1730,10 @@ impl Session {
     fn rebuild_prefix_children(
         &self,
         children: &[Block],
-        level_ids: &[NodeId],
+        level_container: &BlockContainerPath,
         boundary: &PasteBoundary,
     ) -> Result<Vec<Block>, EditError> {
-        match self.resolve_local_boundary(children, level_ids, boundary)? {
+        match self.resolve_local_boundary(children, level_container, boundary)? {
             LocalBoundary::AtIndex(index) => Ok(children[..index].to_vec()),
             LocalBoundary::InParagraph {
                 child_index,
@@ -1676,7 +1756,7 @@ impl Session {
                 let mut output = children[..child_index].to_vec();
                 output.extend(self.rebuild_prefix_block(
                     &children[child_index],
-                    level_ids,
+                    level_container,
                     &boundary,
                 )?);
                 Ok(output)
@@ -1687,14 +1767,14 @@ impl Session {
     fn rebuild_suffix_block(
         &self,
         block: &Block,
-        parent_ids: &[NodeId],
+        parent_container: &BlockContainerPath,
         boundary: &PasteBoundary,
     ) -> Result<Vec<Block>, EditError> {
         let Block::Environment(environment) = block else {
             return Err(EditError::InvalidPosition);
         };
-        let mut child_level = parent_ids.to_vec();
-        child_level.push(environment.id.clone());
+        let mut child_level = parent_container.clone();
+        child_level.push(ContainerStep::Environment(environment.id.clone()));
         let children =
             self.rebuild_suffix_children(&environment.children, &child_level, boundary)?;
         if children.is_empty() {
@@ -1709,10 +1789,10 @@ impl Session {
     fn rebuild_suffix_children(
         &self,
         children: &[Block],
-        level_ids: &[NodeId],
+        level_container: &BlockContainerPath,
         boundary: &PasteBoundary,
     ) -> Result<Vec<Block>, EditError> {
-        match self.resolve_local_boundary(children, level_ids, boundary)? {
+        match self.resolve_local_boundary(children, level_container, boundary)? {
             LocalBoundary::AtIndex(index) => Ok(children[index..].to_vec()),
             LocalBoundary::InParagraph {
                 child_index,
@@ -1734,7 +1814,7 @@ impl Session {
                 boundary,
             } => {
                 let mut output =
-                    self.rebuild_suffix_block(&children[child_index], level_ids, &boundary)?;
+                    self.rebuild_suffix_block(&children[child_index], level_container, &boundary)?;
                 output.extend(children[child_index + 1..].iter().cloned());
                 Ok(output)
             }
@@ -1864,9 +1944,21 @@ impl Session {
             PasteCaretHint::Block { block_id } => {
                 let block_path =
                     block_path_of(&document.body, block_id).ok_or(EditError::InvalidPosition)?;
+                let target_is_table = caret_structure::find_document_node(document, block_id)
+                    .is_some_and(|location| {
+                        location.kind == caret_structure::DocumentNodeKind::Table
+                    });
                 let mut before: Option<(&ParagraphLocation, usize)> = None;
                 let mut after: Option<(&ParagraphLocation, usize)> = None;
                 for location in paragraph_index.values() {
+                    if target_is_table
+                        && location
+                            .container
+                            .table_cells()
+                            .any(|cell| cell.table_id == *block_id)
+                    {
+                        continue;
+                    }
                     if location.document_path.as_slice() < block_path.as_slice() {
                         let paragraph = paragraph_at_location(&document.body, location)
                             .ok_or(EditError::InvalidPosition)?;
@@ -2031,7 +2123,9 @@ fn caret_hint_for_blocks(blocks: &[Block]) -> Result<Option<PasteCaretHint>, Edi
         Block::Align(align) => Some(PasteCaretHint::Block {
             block_id: align.id.clone(),
         }),
-        Block::Table(_) => return Err(EditError::UnsupportedTableContent),
+        Block::Table(table) => Some(PasteCaretHint::Block {
+            block_id: table.id.clone(),
+        }),
         Block::ExplicitBreak(_) => None,
         Block::Opaque(_) => return Err(EditError::UnsupportedOpaqueContent),
     };
@@ -2097,6 +2191,7 @@ fn block_path_of(blocks: &[Block], block_id: &NodeId) -> Option<Vec<usize>> {
                         return Some(found);
                     }
                 }
+                Block::Table(table) if &table.id == target => return Some(path.clone()),
                 Block::Equation(equation) if &equation.id == target => return Some(path.clone()),
                 Block::Align(align) if &align.id == target => return Some(path.clone()),
                 _ => {}
@@ -2108,13 +2203,56 @@ fn block_path_of(blocks: &[Block], block_id: &NodeId) -> Option<Vec<usize>> {
     visit(blocks, &mut Vec::new(), block_id)
 }
 
-fn common_parent_ids(left: &[NodeId], right: &[NodeId]) -> Vec<NodeId> {
-    let mut common = Vec::new();
-    for (left_id, right_id) in left.iter().zip(right) {
-        if left_id != right_id {
-            break;
+fn container_is_prefix(prefix: &BlockContainerPath, path: &BlockContainerPath) -> bool {
+    let mut current = path.clone();
+    while &current != prefix {
+        let Some(parent) = current.without_last() else {
+            return false;
+        };
+        current = parent;
+    }
+    true
+}
+
+fn blocks_contain_table(blocks: &[Block]) -> bool {
+    blocks.iter().any(|block| match block {
+        Block::Table(_) => true,
+        Block::Environment(environment) => blocks_contain_table(&environment.children),
+        Block::Paragraph(_)
+        | Block::Equation(_)
+        | Block::Align(_)
+        | Block::ExplicitBreak(_)
+        | Block::Opaque(_) => false,
+    })
+}
+
+fn next_container_step(
+    parent: &BlockContainerPath,
+    child: &BlockContainerPath,
+) -> Option<ContainerStep> {
+    if parent == child || !container_is_prefix(parent, child) {
+        return None;
+    }
+    let mut current = child.clone();
+    loop {
+        let previous = current.without_last()?;
+        if &previous == parent {
+            return current.last_step().cloned();
         }
-        common.push(left_id.clone());
+        current = previous;
+    }
+}
+
+fn common_container_path(
+    left: &BlockContainerPath,
+    right: &BlockContainerPath,
+) -> BlockContainerPath {
+    let mut common = left.clone();
+    while !container_is_prefix(&common, right) {
+        let Some(parent) = common.without_last() else {
+            return BlockContainerPath::default();
+        };
+        common = parent;
     }
     common
 }

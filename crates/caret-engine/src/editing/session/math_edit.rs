@@ -38,18 +38,18 @@ mod tree_position;
 use super::super::text_map::{OBJECT_REPLACEMENT, TextMap, inline_length, split_inline_nodes};
 use super::super::{
     Affinity, Command, CommandLine, Direction, EditError, Effect, HostCaretKind, HostCaretPosition,
-    HostCaretTransition, Pos, PositionMap, Selection, StoryId,
+    Pos, PositionMap, Selection, StoryId,
 };
 use super::Session;
+use super::block_navigation::{find_block_by_id, find_block_container_path};
 use super::document_position::visual_affinity_for_block_edge;
 use super::history::{self, DocumentPatch, EditGroup, MathEditPosition, SessionHistoryState};
-use super::range_extension::AdjacentComplexUnit;
 use crate::{StructureIndex, VisualAffinity};
 #[cfg(test)]
 use caret_doc::TextFlow;
 use caret_doc::{
-    Align, Block, BlockEnvironment, Equation, InlineMath, MathAlignRow, MathContent, MathFlow,
-    MathNode, MathNodeKind, MathTree, NodeId, Paragraph, ParagraphContent,
+    Align, Block, Equation, InlineMath, MathAlignRow, MathContent, MathFlow, MathNode,
+    MathNodeKind, MathTree, NodeId, Paragraph, ParagraphContent,
 };
 use inline_root_split::{
     InlineRootFocus, replace_inline_math_with_split, split_inline_math_root_with_map,
@@ -1068,11 +1068,6 @@ fn find_inline_math_in_blocks<'a>(
     })
 }
 
-pub(super) fn find_block_by_id<'a>(blocks: &'a [Block], id: &NodeId) -> Option<&'a Block> {
-    let (container, index) = find_block_container_path(blocks, id)?;
-    caret_structure::block_list_by_container(blocks, &container)?.get(index)
-}
-
 fn parked_position_for_math_target(
     session: &Session,
     target: &MathEditTarget,
@@ -1434,26 +1429,6 @@ pub(super) fn find_inline_math_mut<'a>(
     })
 }
 
-/// 在块树中查找块 ID，返回真实容器路径与同级下标；环境与表格单元格统一寻址。
-pub(crate) fn find_block_container_path(
-    blocks: &[Block],
-    id: &NodeId,
-) -> Option<(BlockContainerPath, usize)> {
-    let location = caret_structure::find_block_node(blocks, id)?;
-    if location.kind != caret_structure::DocumentNodeKind::Paragraph
-        && !location.kind.is_range_block()
-    {
-        return None;
-    }
-    Some((location.container, location.sibling_index?))
-}
-
-/// 兼容投影：只返回父环境 ID 链；新代码应使用 [`find_block_container_path`]。
-pub(crate) fn find_block_path(blocks: &[Block], id: &NodeId) -> Option<(Vec<NodeId>, usize)> {
-    find_block_container_path(blocks, id)
-        .map(|(container, index)| (container.environment_ids(), index))
-}
-
 #[cfg(test)]
 fn display_math_block(align: bool, source: &str) -> Result<Block, EditError> {
     display_math_block_with_projection(align, source, NodeId::generate()).map(|(block, _)| block)
@@ -1515,109 +1490,6 @@ use symbol_input::{
     display_math_block_with_id, display_math_block_with_projection, literal_symbol_text,
     symbol_text,
 };
-/// 返回块环境在方向上的第一个可编辑入口，供逐块水平导航和公式外侧停靠使用。
-pub(super) fn block_environment_entry(
-    environment: &BlockEnvironment,
-    direction: Direction,
-) -> Option<Pos> {
-    match direction {
-        Direction::Forward => {
-            if let Some(title) = &environment.title {
-                return Some(environment_title_position(
-                    environment,
-                    title,
-                    Affinity::Downstream,
-                ));
-            }
-            first_entry_in_blocks(&environment.children)
-        }
-        Direction::Backward => {
-            if let Some(position) = last_entry_in_blocks(&environment.children) {
-                return Some(position);
-            }
-            let title = environment.title.as_ref()?;
-            let offset = TextMap::new(title).ok()?.text.len();
-            Some(Pos {
-                offset,
-                affinity: Affinity::Upstream,
-                ..environment_title_position(environment, title, Affinity::Upstream)
-            })
-        }
-    }
-}
-
-fn environment_title_position(
-    environment: &BlockEnvironment,
-    title: &Paragraph,
-    affinity: Affinity,
-) -> Pos {
-    Pos {
-        story: StoryId::EnvironmentTitle(environment.id.clone()),
-        paragraph_id: title.id.clone(),
-        offset: 0,
-        affinity,
-    }
-}
-
-/// 环境入口的既定契约是“标题起点 / 首个可编辑文本段落”，不直接停靠到首个子公式。
-///
-/// 公式外停靠进入环境时复用该入口（见 `block_environment_entry`）；环境内部以公式
-/// 开头/结尾时，随后按方向键由共享块顺序仲裁逐个进入该公式，不在入口一步伪造
-/// 块外侧停靠。空环境或全是不可编辑块时返回 `None`，由调用方保持 no-op。
-fn first_entry_in_blocks(blocks: &[Block]) -> Option<Pos> {
-    for block in blocks {
-        match block {
-            Block::Paragraph(paragraph) => {
-                return Some(Pos {
-                    story: StoryId::Body,
-                    paragraph_id: paragraph.id.clone(),
-                    offset: 0,
-                    affinity: Affinity::Downstream,
-                });
-            }
-            Block::Environment(environment) => {
-                if let Some(position) = block_environment_entry(environment, Direction::Forward) {
-                    return Some(position);
-                }
-            }
-            // 表格内部首个/末个位置随 046 的单元格导航接入。
-            Block::Table(_)
-            | Block::Equation(_)
-            | Block::Align(_)
-            | Block::ExplicitBreak(_)
-            | Block::Opaque(_) => {}
-        }
-    }
-    None
-}
-
-fn last_entry_in_blocks(blocks: &[Block]) -> Option<Pos> {
-    for block in blocks.iter().rev() {
-        match block {
-            Block::Paragraph(paragraph) => {
-                let offset = TextMap::new(paragraph).ok()?.text.len();
-                return Some(Pos {
-                    story: StoryId::Body,
-                    paragraph_id: paragraph.id.clone(),
-                    offset,
-                    affinity: Affinity::Upstream,
-                });
-            }
-            Block::Environment(environment) => {
-                if let Some(position) = block_environment_entry(environment, Direction::Backward) {
-                    return Some(position);
-                }
-            }
-            Block::Table(_)
-            | Block::Equation(_)
-            | Block::Align(_)
-            | Block::ExplicitBreak(_)
-            | Block::Opaque(_) => {}
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 #[path = "math_edit/tests.rs"]
 mod tests;

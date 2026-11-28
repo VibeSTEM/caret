@@ -1,6 +1,6 @@
 # 文档树与结构
 
-更新日期：2026-11-22。本文是持久化 DTO、文档树、页面层级及 Block/Inline 内容层次的唯一权威定义。Paragraph 是 `Block` 的一个具体变体，也是结构最简单的块；其他 Block 可拥有更复杂的容器或内部位置。语义草图与具体 Rust/JSON schema 分别说明概念和字段，不照搬 OOXML，也不承诺 DOCX 兼容；内容节点的职责链路见[内容节点代码链路](content-code-path.md)；块环境标题、编号、模板和结构编辑见[块环境模型](document-environments.md)；共享 Block 交互协议及 Paragraph 基线见[块宿主交互](block-interaction.md)。位置与上限见[文档位置](document-position.md)，导航投影见[结构导航](../structure-navigation.md)，载体视图见[环境视图](environment-views.md)，文件格式与写入边界见[`.cdoc` 格式](document-storage.md)。
+更新日期：2026-11-28。本文是持久化 DTO、文档树、页面层级及 Block/Inline 内容层次的唯一权威定义。Paragraph 是 `Block` 的一个具体变体，也是结构最简单的块；其他 Block 可拥有更复杂的容器或内部位置。语义草图与具体 Rust/JSON schema 分别说明概念和字段，不照搬 OOXML，也不承诺 DOCX 兼容；内容节点的职责链路见[内容节点代码链路](content-code-path.md)；块环境标题、编号、模板和结构编辑见[块环境模型](document-environments.md)；共享 Block 交互协议及 Paragraph 基线见[块宿主交互](block-interaction.md)。位置与上限见[文档位置](document-position.md)，导航投影见[结构导航](../structure-navigation.md)，载体视图见[环境视图](environment-views.md)，文件格式与写入边界见[`.cdoc` 格式](document-storage.md)。
 
 ## 持久化树
 
@@ -30,6 +30,21 @@
 页面角色组织 Block 流；Paragraph block 持有 `Vec<ParagraphContent>` 并负责段落级排版。Section 等容器 Block 持有 `Vec<Block>`，可通过 Paragraph 子项承载行内内容；其他 Block（例如 Align 或 Table/Figure 等容器块）只有在其内部模型显式提供 ParagraphContent、MathContent 或等价 inline-capable 流时才承载 Inline。Inline 可复用在 Paragraph 及这些内层流中，但不能越过宿主定义直接插进任意 Block 序列。公式文本项和正文 `ParagraphContent::Text` 共用同一种 `TextFlow`，但公式文本项不获得段落折行、段落前后间距或块级身份。`InlineEnvironment<Child>` 的子项类型由宿主流决定：正文包装使用 `ParagraphContent`，数学流包装使用 `MathContent`。正文格式树编辑与 InlineMath 根层提升由各自宿主适配器处理；共用 TextFlow 文本/格式操作、Run 范围替换和字素原语，不将两种节点枚举抹平成无类型数据。数学节点的分子、分母、上下标等固定槽位各自持有 `MathFlow`；槽内文本和 MathNode 不得提升到 Paragraph 层，只有 InlineMath 根流及其格式包装子树中的 TextFlow 可按 Paragraph 宿主规则提升为相邻 ParagraphContent。Run 边界和行内环境边界不改变宿主 UTF-8 偏移或跨节点字素分段。InlineMath 创建及从源码导入时执行根层提升；具体事务规则见[数学公式](../math.md#宿主边界与拆分)。
 
 共享结构消除重复文本与格式语义，不自动构成性能保证。正文 TextFlow 与 MathFlow TextFlow 共用范围编辑、格式树拆分合并和字素原语；各自宿主适配器解析物理路径、校验元数据并提交对应历史事务。MathEdit 只为固定操作数槽位与公式焦点管理提供宿主策略；临时 TeX 草稿和位置映射仅用于源码编辑，不参与普通文本操作或文档持久化。实现成本是否下降、局部事务是否减少分配，需用代表性基准验证，不能据此宣称性能收益。
+
+### 内容形状与空容器
+
+打开和保存保留合法内容的原始形状和节点 ID。编辑事务可以在变更触及的局部范围归并无语义的空 Run 或相同样式的相邻 Run，归并条件见[文本与实现边界](#文本与实现边界)。跨 Run 和相邻 TextFlow 的拼接字素使用同一宿主停靠表。带语言、显式格式或扩展元数据的内容在判断形状等价前须保留其语义。
+
+行内包装的类型、ID、模板引用和直接属性确定活跃宿主。合法的相邻或嵌套包装保持各自身份。重合边界按[共享光标仲裁](block-interaction.md)合并同位置的移动步骤，控制选择和格式继承仍可区分不同宿主。
+
+| 容器 | 持久化约束 | 编辑入口 |
+| --- | --- | --- |
+| `Document.body` | 保存有序 Block 序列 | 新建文档含一个空 Paragraph。打开可编辑会话需要能定位到首个 Paragraph，包括标题或单元格段落。没有该落点时返回明确的文档错误。 |
+| Section、Custom | `children` 可为空，标题独立可选 | 有标题时可进入该段。标题和正文都没有可达位置时，普通方向键跳过，结构范围仍可包含该块。 |
+| `InlineEnvironment` | `children` 可为空 | 空包装可有内部停靠。光标、格式输入、删除由行内宿主协议决定。 |
+| Equation、InlineMath、Align cell | 各自持有带稳定 ID 的 `MathFlow`，根内容可为空 | 空流根有公式内部停靠。显式 Placeholder 与空流可共用空槽几何，存储身份和必需、可选槽导航按[数学语义](../math.md)处理。 |
+| Align | 行或 cell 序列可为空 | 可入位置来自首末实际 cell。整块没有 cell 时，尝试进入内部返回位置错误，块边界仍保留结构身份。 |
+| Table | 至少一行一列，各行同宽，每格至少一个 Block | 清除单元格最后一个块的编辑事务用空段落补位。几何和可编辑范围见[表格](../tables.md)。 |
 
 ### 编辑命令与内容插入
 
@@ -95,7 +110,7 @@ Document
 
 ```text
 Document { body: Vec<Block>, pageSections, globalSettings }
-Block = Paragraph | Environment(BlockEnvironment) | Equation | Align | ExplicitBreak | Opaque
+Block = Paragraph | Environment(BlockEnvironment) | Equation | Align | Table | ExplicitBreak | Opaque
 Paragraph { id, language?, layout?, inlines: Vec<ParagraphContent>, markStyle, props }
 ParagraphContent = Text(TextFlow) | Math(InlineMath) | Environment(InlineEnvironment<ParagraphContent>) | SoftBreak | Opaque
 TextFlow { runs: Vec<Run> }
@@ -103,6 +118,9 @@ Run { text, language?, props }  # text 保留原始 Unicode 码点序列
 InlineEnvironment<Child> { id, kind, definitionId?, props, children: Vec<Child> }
 
 BlockEnvironment { id, kind, definitionId?, props, title?: Paragraph, children: Vec<Block> }
+Table { id, rows: Vec<TableRow> }
+TableRow { id, cells: Vec<TableCell> }
+TableCell { id, blocks: Vec<Block> }
 Equation { id, mathTree }
 Align { id, rows: Vec<MathAlignRow> }
 MathAlignRow { id, cells: Vec<MathTree> }

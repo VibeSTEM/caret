@@ -113,9 +113,13 @@ struct ClipFields {
     bool enabled = false;
     qreal y0_pt = 0.0;
     qreal y1_pt = 0.0;
+    bool x_enabled = false;
+    qreal x0_pt = 0.0;
+    qreal x1_pt = 0.0;
 };
 
-/// clipEnabled 必须是布尔；启用时 clipY0Pt/clipY1Pt 必须是有限且 y0 >= 0、y1 > y0 的数值。
+/// 裁切开关使用布尔值，启用的轴必须给出有限、非负且递增的 pt 范围。
+/// 横向字段可整组缺省，兼容只携带行高裁切的快照。
 std::optional<ClipFields> parse_clip_fields(const QVariantMap& item) {
     const QVariant enabled_value = item.value(QStringLiteral("clipEnabled"));
     if (!is_boolean_variant(enabled_value)) {
@@ -132,6 +136,30 @@ std::optional<ClipFields> parse_clip_fields(const QVariantMap& item) {
     if (fields.enabled && (!clip_y0_valid || !clip_y1_valid || !std::isfinite(clip_y0) ||
                            !std::isfinite(clip_y1) || clip_y0 < 0.0 || clip_y1 <= clip_y0)) {
         return std::nullopt;
+    }
+
+    const QString x_enabled_key = QStringLiteral("clipXEnabled");
+    const QString x0_key = QStringLiteral("clipX0Pt");
+    const QString x1_key = QStringLiteral("clipX1Pt");
+    const bool has_x_fields =
+        item.contains(x_enabled_key) || item.contains(x0_key) || item.contains(x1_key);
+    if (has_x_fields) {
+        const QVariant x_enabled_value = item.value(x_enabled_key);
+        bool x0_valid = false;
+        bool x1_valid = false;
+        const double clip_x0 = item.value(x0_key).toDouble(&x0_valid);
+        const double clip_x1 = item.value(x1_key).toDouble(&x1_valid);
+        if (!item.contains(x_enabled_key) || !item.contains(x0_key) || !item.contains(x1_key) ||
+            !is_boolean_variant(x_enabled_value)) {
+            return std::nullopt;
+        }
+        fields.x_enabled = x_enabled_value.toBool();
+        fields.x0_pt = clip_x0;
+        fields.x1_pt = clip_x1;
+        if (fields.x_enabled && (!x0_valid || !x1_valid || !std::isfinite(clip_x0) ||
+                                 !std::isfinite(clip_x1) || clip_x0 < 0.0 || clip_x1 <= clip_x0)) {
+            return std::nullopt;
+        }
     }
     return fields;
 }
@@ -226,6 +254,9 @@ std::optional<GlyphPlacement> parse_placement(const QVariantMap& placement,
     parsed.clip_enabled = clip_fields->enabled;
     parsed.clip_y0_pt = clip_fields->y0_pt;
     parsed.clip_y1_pt = clip_fields->y1_pt;
+    parsed.clip_x_enabled = clip_fields->x_enabled;
+    parsed.clip_x0_pt = clip_fields->x0_pt;
+    parsed.clip_x1_pt = clip_fields->x1_pt;
     return parsed;
 }
 
@@ -259,6 +290,9 @@ std::optional<GlyphDecoration> parse_decoration(const QVariant& value) {
     parsed.clip_enabled = clip_fields->enabled;
     parsed.clip_y0_pt = clip_fields->y0_pt;
     parsed.clip_y1_pt = clip_fields->y1_pt;
+    parsed.clip_x_enabled = clip_fields->x_enabled;
+    parsed.clip_x0_pt = clip_fields->x0_pt;
+    parsed.clip_x1_pt = clip_fields->x1_pt;
     if (!parse_color_channel(decoration, QStringLiteral("colorRed"), &parsed.color_red) ||
         !parse_color_channel(decoration, QStringLiteral("colorGreen"), &parsed.color_green) ||
         !parse_color_channel(decoration, QStringLiteral("colorBlue"), &parsed.color_blue) ||
@@ -320,6 +354,9 @@ std::optional<GlyphShape> parse_shape(const QVariant& value) {
     parsed.clip_enabled = clip_fields->enabled;
     parsed.clip_y0_pt = clip_fields->y0_pt;
     parsed.clip_y1_pt = clip_fields->y1_pt;
+    parsed.clip_x_enabled = clip_fields->x_enabled;
+    parsed.clip_x0_pt = clip_fields->x0_pt;
+    parsed.clip_x1_pt = clip_fields->x1_pt;
     if (!parse_color_channel(shape, QStringLiteral("fillRed"), &parsed.fill_red) ||
         !parse_color_channel(shape, QStringLiteral("fillGreen"), &parsed.fill_green) ||
         !parse_color_channel(shape, QStringLiteral("fillBlue"), &parsed.fill_blue) ||

@@ -1487,3 +1487,149 @@ fn table_cell_glyphs_and_borders_use_cell_geometry() {
         "second column glyphs must start in the second cell: {left_x} vs {right_x}"
     );
 }
+
+#[test]
+fn overflowing_cell_formula_uses_the_same_clip_for_ink_and_pointer_hits() {
+    enum Host {
+        Inline,
+        Equation,
+        Align,
+    }
+
+    for host in [Host::Inline, Host::Equation, Host::Align] {
+        let text = "M".repeat(120);
+        let source = format!(r"\boxed{{\frac{{\text{{{text}}}}}{{x}}}}");
+        let parsed = caret_math::parse(&source, caret_math::MathInputKind::Inline)
+            .unwrap_or_else(|error| panic!("formula fixture must parse: {error}"));
+        let caret_math::ParsedMath::Tree(tree) = parsed else {
+            panic!("fixture must produce a MathTree");
+        };
+        let math_id = NodeId::generate();
+        let paragraph_id = NodeId::generate();
+        let formula = match host {
+            Host::Inline => {
+                let mut paragraph = Paragraph::empty(paragraph_id.clone());
+                paragraph.inlines.push(ParagraphContent::Math(InlineMath {
+                    id: math_id.clone(),
+                    math_tree: tree,
+                    extra: Default::default(),
+                }));
+                Block::Paragraph(paragraph)
+            }
+            Host::Equation => Block::Equation(Equation {
+                id: math_id.clone(),
+                math_tree: tree,
+                extra: Default::default(),
+            }),
+            Host::Align => Block::Align(caret_doc::Align {
+                id: math_id.clone(),
+                rows: vec![caret_doc::MathAlignRow {
+                    id: NodeId::generate(),
+                    cells: vec![tree],
+                    extra: Default::default(),
+                }],
+                extra: Default::default(),
+            }),
+        };
+        let neighbor_id = NodeId::generate();
+        let mut document = Document::blank();
+        document.body = vec![Block::Table(Table {
+            id: NodeId::generate(),
+            rows: vec![TableRow {
+                id: NodeId::generate(),
+                cells: vec![
+                    TableCell {
+                        id: NodeId::generate(),
+                        blocks: vec![formula],
+                    },
+                    TableCell {
+                        id: NodeId::generate(),
+                        blocks: vec![Block::Paragraph(Paragraph::empty(neighbor_id.clone()))],
+                    },
+                ],
+            }],
+        })];
+        let snapshot = layout(&document);
+        let projection = snapshot
+            .math_projection(0, &math_id)
+            .unwrap_or_else(|| panic!("formula projection missing"));
+        let clip = projection
+            .clip_x_pt
+            .unwrap_or_else(|| panic!("formula must use cell content clip"));
+        let math_layout = match host {
+            Host::Inline => {
+                &snapshot
+                    .paragraph_by_id(&paragraph_id)
+                    .unwrap_or_else(|| panic!("paragraph projection missing"))
+                    .inline_math_layouts[0]
+            }
+            Host::Equation | Host::Align => &snapshot.math_blocks[&math_id],
+        };
+        let text_box = math_layout
+            .nodes
+            .iter()
+            .find(|node| node.is_text_flow && node.width > clip[1] - clip[0])
+            .unwrap_or_else(|| panic!("fixture must contain an overflowing text island"));
+        let neighbor = &snapshot.table_cell_hit_regions(0)[1];
+        let outer_x = neighbor.x0_pt + 6.0;
+        let inner_x = (clip[0] + clip[1]) / 2.0;
+        let text_x = projection.object_x_pt + text_box.x;
+        let y = projection.baseline_y_pt + text_box.y + text_box.height / 2.0;
+        assert!(text_x < inner_x && text_x + text_box.width > outer_x);
+        assert!(snapshot.hit_test_math_text(0, inner_x, y).is_some());
+        assert!(snapshot.hit_test_math_structure(0, inner_x, y).is_some());
+        assert!(snapshot.hit_test_math_text(0, outer_x, y).is_none());
+        assert!(snapshot.hit_test_math_structure(0, outer_x, y).is_none());
+        assert_eq!(
+            snapshot
+                .hit_test(0, outer_x, y)
+                .map(|hit| hit.position.paragraph_id),
+            Some(neighbor_id)
+        );
+
+        let glyphs = snapshot
+            .page_glyphs(0)
+            .unwrap_or_else(|error| panic!("formula must produce a glyph frame: {error}"));
+        assert!(
+            glyphs
+                .runs
+                .iter()
+                .flat_map(|run| &run.glyphs)
+                .any(|glyph| glyph.x_pt > outer_x)
+        );
+        assert!(
+            glyphs
+                .runs
+                .iter()
+                .all(|run| run.line_clip_x_pt == Some(clip))
+        );
+        assert!(!glyphs.decorations.is_empty());
+        assert!(
+            glyphs
+                .decorations
+                .iter()
+                .all(|decoration| decoration.line_clip_x_pt == Some(clip))
+        );
+        let rectangle = glyphs
+            .shapes
+            .iter()
+            .find(|shape| shape.kind == super::PageMathShapeKind::Rectangle);
+        assert_eq!(rectangle.and_then(|shape| shape.line_clip_x_pt), Some(clip));
+        assert!(
+            glyphs
+                .shapes
+                .iter()
+                .filter(|shape| shape.kind == super::PageMathShapeKind::Line)
+                .all(|shape| shape.line_clip_x_pt.is_none())
+        );
+        let rasterized = PageGlyphRasterizer::default()
+            .rasterize(&glyphs, 1.0, [0.0, 0.0], [0, 0, 0, 255])
+            .unwrap_or_else(|error| panic!("formula must rasterize: {error}"));
+        assert!(
+            rasterized
+                .placements
+                .iter()
+                .all(|placement| placement.line_clip_x_pt == Some(clip))
+        );
+    }
+}

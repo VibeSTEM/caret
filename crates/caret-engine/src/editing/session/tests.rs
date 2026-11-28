@@ -1,7 +1,9 @@
 //! 验证编辑会话缓存与修订代际。
 
 use super::*;
-use crate::editing::{DocumentRangeEndpoint, EditorKey, EnvironmentSource, StructureSelection};
+use crate::editing::{
+    DocumentRangeEndpoint, EditorKey, EnvironmentKind, EnvironmentSource, StructureSelection,
+};
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, DocumentFontTarget, InlineEnvironment,
     InlineEnvironmentKind, NodeId, Paragraph, ParagraphContent, Run, Table, TableCell, TableRow,
@@ -2370,7 +2372,7 @@ fn install_structure_selection_rejects_empty_coverage_without_side_effects() {
         .structure_selection_range()
         .map(|(anchor, focus)| (anchor.clone(), focus.clone()));
     let environments_before = session.selected_block_environments().to_vec();
-    let math_blocks_before = session.selected_math_blocks().to_vec();
+    let math_blocks_before = session.selected_atomic_blocks().to_vec();
     let generation_before = session.document_generation();
     let can_undo_before = session.can_undo();
 
@@ -2395,7 +2397,7 @@ fn install_structure_selection_rejects_empty_coverage_without_side_effects() {
         structure_before
     );
     assert_eq!(session.selected_block_environments(), environments_before);
-    assert_eq!(session.selected_math_blocks(), math_blocks_before);
+    assert_eq!(session.selected_atomic_blocks(), math_blocks_before);
     assert_eq!(session.document_generation(), generation_before);
     assert_eq!(session.can_undo(), can_undo_before);
 }
@@ -2819,6 +2821,17 @@ fn table_block_enter_and_exit_follow_adjacent_paragraph_navigation() {
             structure: false,
         }),
     );
+    assert!(
+        matches!(session.block_boundary_exit(), Some((id, Direction::Backward)) if id.to_string() == "table-blocks")
+    );
+    run_ok(
+        &mut session,
+        Command::EditorKey(EditorKey::DownArrow {
+            candidate: None,
+            extend: false,
+            structure: false,
+        }),
+    );
     assert_eq!(session.selection.focus.paragraph_id.to_string(), "p-a0");
 
     let table_id = NodeId::parse("table-blocks").unwrap_or_else(|error| panic!("{error}"));
@@ -2848,6 +2861,9 @@ fn table_block_enter_and_exit_follow_adjacent_paragraph_navigation() {
             extend: false,
             structure: false,
         }),
+    );
+    assert!(
+        matches!(session.block_boundary_exit(), Some((id, Direction::Forward)) if id.to_string() == "table-blocks")
     );
     assert_eq!(session.selection.focus.story, StoryId::Body);
     assert_eq!(session.selection.focus.paragraph_id, after_id);
@@ -3219,6 +3235,526 @@ fn table_tab_and_shift_tab_move_between_cells_and_grow_the_last_row() {
 }
 
 #[test]
+fn table_tab_uses_the_block_boundary_owner_cell_without_changing_the_document()
+-> Result<(), EditError> {
+    let equation_id = NodeId::generate();
+    let caret_math::ParsedMath::Tree(math_tree) =
+        caret_math::parse("x", caret_math::MathInputKind::Equation)
+            .map_err(|error| EditError::InvalidMath(error.to_string()))?
+    else {
+        return Err(EditError::InvalidPosition);
+    };
+    let equation = Block::Equation(caret_doc::Equation {
+        id: equation_id.clone(),
+        math_tree,
+        extra: Default::default(),
+    });
+    let first = cell_with(vec![Block::Paragraph(paragraph_with("first"))]);
+    let second = cell_with(vec![equation, Block::Paragraph(paragraph_with("second"))]);
+    let third = cell_with(vec![Block::Paragraph(paragraph_with("third"))]);
+    let table = Table {
+        id: NodeId::generate(),
+        rows: vec![TableRow {
+            id: NodeId::generate(),
+            cells: vec![first, second, third],
+        }],
+    };
+    let table_id = table.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Table(table),
+        Block::Paragraph(paragraph_with("outside")),
+    ];
+    let mut session =
+        Session::new(document).unwrap_or_else(|error| panic!("table document must open: {error}"));
+
+    assert_eq!(
+        session.focused_table_cell().map(|cell| cell.cell_index),
+        Some(0)
+    );
+    let before = session.document().clone();
+    let generation = session.document_generation();
+    let effect = session.run(Command::EditorKey(EditorKey::Tab))?;
+    assert!(effect.selection_changed);
+    assert!(!effect.document_changed);
+    assert_eq!(
+        session.block_boundary_exit(),
+        Some((equation_id.clone(), Direction::Backward))
+    );
+    assert_eq!(
+        session.focused_table_cell().map(|cell| cell.cell_index),
+        Some(1)
+    );
+    let effect = session.run(Command::EditorKey(EditorKey::Tab))?;
+    assert!(effect.selection_changed);
+    assert!(!effect.document_changed);
+    assert_eq!(session.document(), &before);
+    assert_eq!(session.document_generation(), generation);
+    assert_eq!(
+        session.focused_table_cell().map(|cell| cell.cell_index),
+        Some(2)
+    );
+
+    session.run(Command::EditorKey(EditorKey::ShiftTab))?;
+    assert_eq!(session.document(), &before);
+    assert_eq!(session.document_generation(), generation);
+    assert_eq!(
+        session.focused_table_cell().map(|cell| cell.cell_index),
+        Some(1)
+    );
+    session.run(Command::EditorKey(EditorKey::ShiftTab))?;
+    session.run(Command::EditorKey(EditorKey::Tab))?;
+    assert_eq!(
+        session.block_boundary_exit(),
+        Some((equation_id, Direction::Backward))
+    );
+    let effect = session.run(Command::EditorKey(EditorKey::ShiftTab))?;
+    assert!(effect.selection_changed);
+    assert_eq!(
+        session.focused_table_cell().map(|cell| cell.cell_index),
+        Some(0)
+    );
+    assert_eq!(session.document(), &before);
+    assert_eq!(session.document_generation(), generation);
+
+    // 表格块本身的边界属于外层容器，借用的段落位置不能伪装成单元格焦点。
+    session.park_at_block_edge(table_id, Direction::Forward)?;
+    assert_eq!(session.focused_table_cell(), None);
+    let table_before = session.document().body[0].clone();
+    let generation = session.document_generation();
+    session.run(Command::EditorKey(EditorKey::Tab))?;
+    assert_eq!(session.document().body[0], table_before);
+    assert_eq!(session.document_generation(), generation + 1);
+    assert_eq!(session.focused_table_cell(), None);
+    Ok(())
+}
+
+#[test]
+fn equivalent_text_flow_shapes_keep_grapheme_navigation_and_edit_semantics_after_cdoc_roundtrip() {
+    use caret_doc::{CdocFile, FlowContent, InlineEnvironment, InlineEnvironmentKind, open};
+
+    fn run(text: &str) -> Run {
+        Run {
+            text: text.to_owned(),
+            language: None,
+            props: Default::default(),
+            extra: Default::default(),
+        }
+    }
+
+    fn text_flow(runs: Vec<Run>) -> ParagraphContent {
+        ParagraphContent::Text(TextFlow {
+            runs,
+            extra: Default::default(),
+        })
+    }
+
+    fn paragraph(inlines: Vec<ParagraphContent>) -> Document {
+        let mut paragraph = Paragraph::empty(NodeId::generate());
+        paragraph.inlines = inlines;
+        Document {
+            body: vec![Block::Paragraph(paragraph)],
+            ..Document::blank()
+        }
+    }
+
+    fn roundtrip_document(document: &Document) -> Document {
+        let bytes = CdocFile::new(document.clone())
+            .and_then(|file| file.to_bytes())
+            .unwrap_or_else(|error| panic!("cdoc encoding failed: {error}"));
+        let opened = open(&bytes).unwrap_or_else(|error| panic!("cdoc opening failed: {error}"));
+        let caret_doc::OpenedDocument::Editable(file) = opened else {
+            panic!("known text document must open for editing");
+        };
+        file.document().clone()
+    }
+
+    fn set_caret(session: &mut Session, paragraph_id: &NodeId, offset: usize) {
+        let position = Pos {
+            story: StoryId::Body,
+            paragraph_id: paragraph_id.clone(),
+            offset,
+            affinity: Affinity::Downstream,
+        };
+        session
+            .run(Command::SetSelection(Some(Selection {
+                anchor: position.clone(),
+                focus: position,
+            })))
+            .unwrap_or_else(|error| panic!("setting caret at {offset} failed: {error}"));
+    }
+
+    let mut bold_run = run("a");
+    bold_run
+        .props
+        .insert("underline".to_owned(), serde_json::json!(true));
+    let mut bold_right = run("b");
+    bold_right
+        .props
+        .insert("underline".to_owned(), serde_json::json!(true));
+    let mut language_empty = run("");
+    language_empty.language = Some("fr".to_owned());
+    language_empty
+        .extra
+        .insert("vendorTag".to_owned(), serde_json::json!("keep"));
+    let wrapped = InlineEnvironment {
+        id: NodeId::generate(),
+        kind: InlineEnvironmentKind::Bold,
+        definition_id: None,
+        props: Default::default(),
+        children: vec![text_flow(vec![run("a"), run("b")])],
+        extra: Default::default(),
+    };
+    let explicit_environment_document = paragraph(vec![FlowContent::Environment(wrapped)]);
+    assert_eq!(
+        roundtrip_document(&explicit_environment_document),
+        explicit_environment_document,
+        "opening must preserve the explicit InlineEnvironment and its identity"
+    );
+
+    let cases = [
+        (
+            "single TextFlow and Run",
+            paragraph(vec![text_flow(vec![run("ab")])]),
+            "ab",
+            vec![0, 1, 2],
+        ),
+        (
+            "adjacent same-property Runs and default empty Run",
+            paragraph(vec![text_flow(vec![
+                bold_run,
+                run(""),
+                bold_right,
+                run(""),
+            ])]),
+            "ab",
+            vec![0, 1, 2],
+        ),
+        (
+            "adjacent TextFlows and metadata-bearing empty Run",
+            paragraph(vec![
+                text_flow(vec![run("a"), language_empty]),
+                text_flow(vec![run("b")]),
+            ]),
+            "ab",
+            vec![0, 1, 2],
+        ),
+        (
+            "combining grapheme split across Runs",
+            paragraph(vec![text_flow(vec![run("e"), run("\u{301}")])]),
+            "e\u{301}",
+            vec![0, "e\u{301}".len()],
+        ),
+        (
+            "combining grapheme split across adjacent TextFlows",
+            paragraph(vec![
+                text_flow(vec![run("e")]),
+                text_flow(vec![run("\u{301}")]),
+            ]),
+            "e\u{301}",
+            vec![0, "e\u{301}".len()],
+        ),
+    ];
+
+    for (shape, input_document, expected_text, boundaries) in cases {
+        let decoded_document = roundtrip_document(&input_document);
+        assert_eq!(
+            decoded_document, input_document,
+            "{shape}: opening rewrote the tree"
+        );
+        let paragraph_id = match &decoded_document.body[0] {
+            Block::Paragraph(paragraph) => paragraph.id.clone(),
+            _ => panic!("{shape}: expected a paragraph"),
+        };
+        let mut session = Session::new(decoded_document)
+            .unwrap_or_else(|error| panic!("{shape}: session creation failed: {error}"));
+
+        set_caret(&mut session, &paragraph_id, boundaries[0]);
+        for expected in boundaries.iter().copied().skip(1) {
+            session
+                .run(Command::MoveCaret(Direction::Forward))
+                .unwrap_or_else(|error| panic!("{shape}: forward movement failed: {error}"));
+            assert_eq!(
+                session.selection().focus.offset,
+                expected,
+                "{shape}: forward stop"
+            );
+        }
+        for expected in boundaries.iter().rev().copied().skip(1) {
+            session
+                .run(Command::MoveCaret(Direction::Backward))
+                .unwrap_or_else(|error| panic!("{shape}: backward movement failed: {error}"));
+            assert_eq!(
+                session.selection().focus.offset,
+                expected,
+                "{shape}: backward stop"
+            );
+        }
+
+        let Some(&end) = boundaries.last() else {
+            panic!("{shape}: expected an end boundary");
+        };
+        let reverse_selection = Selection {
+            anchor: Pos {
+                story: StoryId::Body,
+                paragraph_id: paragraph_id.clone(),
+                offset: end,
+                affinity: Affinity::Upstream,
+            },
+            focus: Pos {
+                story: StoryId::Body,
+                paragraph_id: paragraph_id.clone(),
+                offset: 0,
+                affinity: Affinity::Downstream,
+            },
+        };
+        session
+            .run(Command::SetSelection(Some(reverse_selection.clone())))
+            .unwrap_or_else(|error| panic!("{shape}: setting reverse selection failed: {error}"));
+        assert_eq!(
+            session.selection(),
+            &reverse_selection,
+            "{shape}: selection direction"
+        );
+
+        let insertion_offset = boundaries.get(1).copied().unwrap_or(end);
+        set_caret(&mut session, &paragraph_id, insertion_offset);
+        session
+            .run(Command::InsertText("X".to_owned()))
+            .unwrap_or_else(|error| panic!("{shape}: insertion failed: {error}"));
+        let inserted = format!(
+            "{}X{}",
+            &expected_text[..insertion_offset],
+            &expected_text[insertion_offset..]
+        );
+        assert_eq!(
+            paragraph_text(&session, 0),
+            inserted,
+            "{shape}: inserted text"
+        );
+        session
+            .run(Command::Delete(Direction::Backward))
+            .unwrap_or_else(|error| panic!("{shape}: deleting inserted text failed: {error}"));
+        assert_eq!(
+            paragraph_text(&session, 0),
+            expected_text,
+            "{shape}: delete result"
+        );
+        session
+            .run(Command::Undo)
+            .unwrap_or_else(|error| panic!("{shape}: undo failed: {error}"));
+        assert_eq!(
+            paragraph_text(&session, 0),
+            inserted,
+            "{shape}: undo result"
+        );
+        session
+            .run(Command::Redo)
+            .unwrap_or_else(|error| panic!("{shape}: redo failed: {error}"));
+        assert_eq!(
+            paragraph_text(&session, 0),
+            expected_text,
+            "{shape}: redo result"
+        );
+
+        set_caret(&mut session, &paragraph_id, end);
+        let before_grapheme_delete_document = session.document().clone();
+        let before_grapheme_delete_selection = session.selection().clone();
+        session
+            .run(Command::Delete(Direction::Backward))
+            .unwrap_or_else(|error| panic!("{shape}: deleting prior grapheme failed: {error}"));
+        let after_grapheme_delete_document = session.document().clone();
+        let after_grapheme_delete_selection = session.selection().clone();
+        let without_last_grapheme = &expected_text[..boundaries[boundaries.len() - 2]];
+        assert_eq!(
+            paragraph_text(&session, 0),
+            without_last_grapheme,
+            "{shape}: backward deletion must remove one grapheme"
+        );
+        session
+            .run(Command::Undo)
+            .unwrap_or_else(|error| panic!("{shape}: undoing grapheme deletion failed: {error}"));
+        assert_eq!(
+            session.document(),
+            &before_grapheme_delete_document,
+            "{shape}: undo restores the exact pre-delete tree"
+        );
+        assert_eq!(
+            session.selection(),
+            &before_grapheme_delete_selection,
+            "{shape}: undo restores selection and affinity"
+        );
+        assert_eq!(
+            paragraph_text(&session, 0),
+            expected_text,
+            "{shape}: restored text"
+        );
+        session
+            .run(Command::Redo)
+            .unwrap_or_else(|error| panic!("{shape}: redoing grapheme deletion failed: {error}"));
+        assert_eq!(
+            session.document(),
+            &after_grapheme_delete_document,
+            "{shape}: redo restores its committed tree"
+        );
+        assert_eq!(
+            session.selection(),
+            &after_grapheme_delete_selection,
+            "{shape}: redo restores selection and affinity"
+        );
+
+        let reopened_document = roundtrip_document(session.document());
+        let mut reopened = Session::new(reopened_document)
+            .unwrap_or_else(|error| panic!("{shape}: reopened session failed: {error}"));
+        assert_eq!(
+            paragraph_text(&reopened, 0),
+            without_last_grapheme,
+            "{shape}: semantic text after save and reopen"
+        );
+        let reopened_id = reopened.selection().focus.paragraph_id.clone();
+        set_caret(&mut reopened, &reopened_id, 0);
+        assert_eq!(
+            reopened.selection().focus.offset,
+            0,
+            "{shape}: reopened caret starts on a valid UTF-8 boundary"
+        );
+        for expected in boundaries
+            .iter()
+            .copied()
+            .take(boundaries.len() - 1)
+            .skip(1)
+        {
+            reopened
+                .run(Command::MoveCaret(Direction::Forward))
+                .unwrap_or_else(|error| {
+                    panic!("{shape}: reopened forward movement failed: {error}")
+                });
+            assert_eq!(
+                reopened.selection().focus.offset,
+                expected,
+                "{shape}: reopened forward stop"
+            );
+        }
+    }
+
+    let mut underlined_left = run("a");
+    underlined_left
+        .props
+        .insert("underline".to_owned(), serde_json::json!(true));
+    let mut underlined_right = run("b");
+    underlined_right
+        .props
+        .insert("underline".to_owned(), serde_json::json!(true));
+    let document = paragraph(vec![text_flow(vec![
+        underlined_left,
+        run(""),
+        underlined_right,
+    ])]);
+    let paragraph_id = match &document.body[0] {
+        Block::Paragraph(paragraph) => paragraph.id.clone(),
+        _ => panic!("underline boundary case requires a paragraph"),
+    };
+    let mut session = Session::new(roundtrip_document(&document))
+        .unwrap_or_else(|error| panic!("underline boundary session failed: {error}"));
+    set_caret(&mut session, &paragraph_id, 1);
+    let view = session
+        .current_environment_view()
+        .unwrap_or_else(|error| panic!("underline environment lookup failed: {error}"));
+    let underline = view
+        .innermost_inline()
+        .unwrap_or_else(|| panic!("continuous underline property range is missing"));
+    assert_eq!(underline.kind, EnvironmentKind::Underline);
+    assert_eq!(underline.source, EnvironmentSource::RunProperty);
+    let range = underline
+        .inline_range
+        .as_ref()
+        .unwrap_or_else(|| panic!("underline property range is missing"));
+    assert_eq!((range.start_utf8, range.end_utf8), (0, 2));
+
+    let before_input_document = session.document().clone();
+    let before_input_selection = session.selection().clone();
+    session
+        .run(Command::InsertText("X".to_owned()))
+        .unwrap_or_else(|error| panic!("typing into continuous underline failed: {error}"));
+    assert_eq!(paragraph_text(&session, 0), "aXb");
+    let Block::Paragraph(inserted_paragraph) = &session.document().body[0] else {
+        panic!("underline edit must keep a paragraph");
+    };
+    let inserted_run = inserted_paragraph
+        .inlines
+        .iter()
+        .filter_map(|content| match content {
+            ParagraphContent::Text(flow) => Some(&flow.runs),
+            _ => None,
+        })
+        .flatten()
+        .find(|run| run.text.contains('X'))
+        .unwrap_or_else(|| panic!("inserted X must remain in a text Run"));
+    assert_eq!(
+        inserted_run.props.get("underline"),
+        Some(&serde_json::json!(true)),
+        "typed text inherits underline across the empty Run"
+    );
+    let after_input_document = session.document().clone();
+    let after_input_selection = session.selection().clone();
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("undoing underlined input failed: {error}"));
+    assert_eq!(session.document(), &before_input_document);
+    assert_eq!(session.selection(), &before_input_selection);
+    session
+        .run(Command::Redo)
+        .unwrap_or_else(|error| panic!("redoing underlined input failed: {error}"));
+    assert_eq!(session.document(), &after_input_document);
+    assert_eq!(session.selection(), &after_input_selection);
+}
+
+#[test]
+fn table_tab_adds_a_row_from_a_block_edge_and_restores_the_edge_on_undo() -> Result<(), EditError> {
+    let equation_id = NodeId::generate();
+    let caret_math::ParsedMath::Tree(math_tree) =
+        caret_math::parse("x", caret_math::MathInputKind::Equation)
+            .map_err(|error| EditError::InvalidMath(error.to_string()))?
+    else {
+        return Err(EditError::InvalidPosition);
+    };
+    let (document, _, _, _) = table_only_document(vec![
+        Block::Equation(caret_doc::Equation {
+            id: equation_id.clone(),
+            math_tree,
+            extra: Default::default(),
+        }),
+        Block::Paragraph(paragraph_with("cell")),
+    ]);
+    let document_before = document.clone();
+    let mut session = Session::new(document)?;
+    session.park_at_block_edge(equation_id.clone(), Direction::Backward)?;
+    let generation = session.document_generation();
+    let effect = session.run(Command::EditorKey(EditorKey::Tab))?;
+    assert!(effect.document_changed && effect.selection_changed);
+    assert_eq!(session.document_generation(), generation + 1);
+    assert_eq!(table_from_session(&session).rows.len(), 2);
+    assert_eq!(
+        session.focused_table_cell().map(|cell| cell.row_index),
+        Some(1)
+    );
+    assert!(session.block_boundary_exit().is_none());
+    let target = session.selection().focus.clone();
+
+    session.run(Command::Undo)?;
+    assert_eq!(session.document(), &document_before);
+    assert_eq!(
+        session.block_boundary_exit(),
+        Some((equation_id, Direction::Backward))
+    );
+    session.run(Command::Redo)?;
+    assert_eq!(table_from_session(&session).rows.len(), 2);
+    assert_eq!(session.selection().focus, target);
+    assert!(session.block_boundary_exit().is_none());
+    Ok(())
+}
+
+#[test]
 fn table_row_and_column_commands_are_atomic_and_undoable() {
     let mut session = Session::new(Document::blank())
         .unwrap_or_else(|error| panic!("blank session must open: {error}"));
@@ -3555,8 +4091,9 @@ fn table_structure_navigation_does_not_touch_history_or_generation() {
 }
 
 #[test]
-fn table_vertical_boundary_with_non_paragraph_neighbour_is_noop() {
-    let (mut document, ..) = table_only_document(vec![Block::Paragraph(paragraph_with("cell"))]);
+fn table_vertical_boundary_parks_before_a_noneditable_neighbour() {
+    let (mut document, table_id, ..) =
+        table_only_document(vec![Block::Paragraph(paragraph_with("cell"))]);
     document
         .body
         .push(Block::ExplicitBreak(caret_doc::ExplicitBreak {
@@ -3565,7 +4102,6 @@ fn table_vertical_boundary_with_non_paragraph_neighbour_is_noop() {
         }));
     let mut session =
         Session::new(document).unwrap_or_else(|error| panic!("table document must open: {error}"));
-    let before_focus = session.selection.focus.clone();
     let generation = session.document_generation();
     session
         .run(Command::EditorKey(EditorKey::DownArrow {
@@ -3573,25 +4109,34 @@ fn table_vertical_boundary_with_non_paragraph_neighbour_is_noop() {
             extend: false,
             structure: true,
         }))
-        .unwrap_or_else(|error| panic!("structure down must be no-op: {error}"));
-    assert_eq!(session.selection.focus, before_focus);
+        .unwrap_or_else(|error| panic!("structure down must park: {error}"));
+    assert_eq!(
+        session.block_boundary_exit(),
+        Some((table_id, Direction::Forward))
+    );
     assert_eq!(session.document_generation(), generation);
 }
 
 #[test]
-fn table_copy_of_unrelated_paragraphs_succeeds_but_spanning_selection_rejects() {
+fn copy_preserves_a_table_covered_by_surrounding_paragraph_endpoints() {
     let (mut document, ..) = table_only_document(vec![Block::Paragraph(paragraph_with("cell"))]);
     let first = paragraph_with("first");
     let second = paragraph_with("second");
     let trailing = paragraph_with("trailing");
+    let after_opaque = paragraph_with("after opaque");
     let first_id = first.id.clone();
     let second_id = second.id.clone();
     let trailing_id = trailing.id.clone();
+    let after_opaque_id = after_opaque.id.clone();
     document.body = vec![
         Block::Paragraph(first),
         Block::Paragraph(second),
         document.body[0].clone(),
         Block::Paragraph(trailing),
+        Block::Opaque(caret_doc::OpaqueNode {
+            raw: serde_json::json!({"type":"foreignBlock"}),
+        }),
+        Block::Paragraph(after_opaque),
     ];
     let mut session =
         Session::new(document).unwrap_or_else(|error| panic!("table document must open: {error}"));
@@ -3612,13 +4157,10 @@ fn table_copy_of_unrelated_paragraphs_succeeds_but_spanning_selection_rejects() 
         .unwrap_or_else(|error| panic!("copy before table must succeed: {error}"))
         .unwrap_or_else(|| panic!("copy must produce a fragment"));
     assert_eq!(copied.fragment.blocks.len(), 2);
-    assert!(
-        !copied
-            .fragment
-            .blocks
-            .iter()
-            .any(|block| matches!(block, Block::Table(_)))
-    );
+    assert!(matches!(
+        copied.fragment.blocks.as_slice(),
+        [Block::Paragraph(_), Block::Paragraph(_)]
+    ));
 
     session
         .set_selection(Some(Selection {
@@ -3626,9 +4168,29 @@ fn table_copy_of_unrelated_paragraphs_succeeds_but_spanning_selection_rejects() 
             focus: position(&trailing_id, 0),
         }))
         .unwrap_or_else(|error| panic!("spanning selection must be valid: {error}"));
+    let copied = session
+        .copy_clipboard_fragment()
+        .unwrap_or_else(|error| panic!("spanning table copy should succeed: {error}"))
+        .unwrap_or_else(|| panic!("spanning table range should produce a fragment"));
+    assert_eq!(
+        copied.fragment.shape,
+        caret_doc::ClipboardFragmentShape::Blocks
+    );
+    assert!(matches!(
+        copied.fragment.blocks.as_slice(),
+        [Block::Paragraph(_), Block::Paragraph(_), Block::Table(_)]
+    ));
+    assert_eq!(copied.plain_text, "first\nsecond\ncell");
+
+    session
+        .set_selection(Some(Selection {
+            anchor: position(&first_id, 0),
+            focus: position(&after_opaque_id, 0),
+        }))
+        .unwrap_or_else(|error| panic!("selection across opaque block must be valid: {error}"));
     assert!(matches!(
         session.copy_clipboard_fragment(),
-        Err(EditError::UnsupportedTableContent)
+        Err(EditError::UnsupportedOpaqueContent)
     ));
 }
 
@@ -3745,4 +4307,270 @@ fn table_insertion_key_inside_cell_is_ignored_without_document_change() {
     );
     assert_eq!(session.document(), &before);
     assert_eq!(session.document_generation(), generation);
+}
+
+#[test]
+fn table_block_edges_share_selection_deletion_and_undo() {
+    let (mut session, table_id, ..) = two_by_two_table_session();
+    let document = session.document().clone();
+    let generation = session.document_generation();
+
+    run_ok(&mut session, Command::EditorKey(EditorKey::Escape));
+    assert_eq!(
+        session.block_boundary_exit(),
+        Some((table_id.clone(), Direction::Forward))
+    );
+    assert_eq!(session.document_generation(), generation);
+
+    run_ok(
+        &mut session,
+        Command::EditorKey(EditorKey::LeftArrow {
+            candidate: None,
+            extend: true,
+        }),
+    );
+    assert!(matches!(
+        session.structure_selection_range(),
+        Some((
+            DocumentRangeEndpoint::BlockEdge { block_id: anchor, side: Direction::Forward },
+            DocumentRangeEndpoint::BlockEdge { block_id: focus, side: Direction::Backward },
+        )) if anchor == &table_id && focus == &table_id
+    ));
+
+    run_ok(&mut session, Command::EditorKey(EditorKey::Backspace));
+    assert!(
+        !session
+            .document()
+            .body
+            .iter()
+            .any(|block| matches!(block, Block::Table(_)))
+    );
+    run_ok(&mut session, Command::Undo);
+    assert_eq!(session.document(), &document);
+}
+
+#[test]
+fn selecting_a_formula_in_a_cell_deletes_only_that_block() -> Result<(), EditError> {
+    let outside_id = NodeId::generate();
+    let inside_id = NodeId::generate();
+    let equation = |id: NodeId| {
+        let caret_math::ParsedMath::Tree(math_tree) =
+            caret_math::parse("x", caret_math::MathInputKind::Equation)
+                .map_err(|error| EditError::InvalidMath(error.to_string()))?
+        else {
+            return Err(EditError::InvalidPosition);
+        };
+        Ok(Block::Equation(caret_doc::Equation {
+            id,
+            math_tree,
+            extra: Default::default(),
+        }))
+    };
+    for formula_only in [false, true] {
+        let mut blocks = vec![equation(inside_id.clone())?];
+        if !formula_only {
+            blocks.push(Block::Paragraph(paragraph_with("cell")));
+        }
+        let (mut document, table_id, ..) = table_only_document(blocks);
+        let Block::Table(table) = &mut document.body[0] else {
+            return Err(EditError::InvalidPosition);
+        };
+        table.rows[0]
+            .cells
+            .push(cell_with(vec![Block::Paragraph(paragraph_with("next"))]));
+        document.body.insert(0, equation(outside_id.clone())?);
+        document
+            .body
+            .insert(1, Block::Paragraph(paragraph_with("outside")));
+        let mut session = Session::new(document.clone())?;
+        session.park_at_block_edge(inside_id.clone(), Direction::Backward)?;
+        let right = |extend| {
+            Command::EditorKey(EditorKey::RightArrow {
+                candidate: None,
+                extend,
+            })
+        };
+        run_ok(&mut session, right(false));
+        assert!(matches!(session.math_edit().map(|edit| &edit.target),
+            Some(MathEditTarget::Block { block_id, .. }) if block_id == &inside_id));
+        assert_eq!(
+            session.focused_table_cell().map(|cell| cell.cell_index),
+            Some(0)
+        );
+        run_ok(&mut session, Command::EditorKey(EditorKey::Escape));
+        assert_eq!(
+            session.block_boundary_exit(),
+            Some((inside_id.clone(), Direction::Forward))
+        );
+        if formula_only {
+            run_ok(
+                &mut session,
+                Command::EditorKey(EditorKey::DownArrow {
+                    candidate: None,
+                    extend: false,
+                    structure: false,
+                }),
+            );
+            assert_eq!(
+                session.block_boundary_exit(),
+                Some((table_id, Direction::Forward))
+            );
+            session.park_at_block_edge(inside_id.clone(), Direction::Forward)?;
+        }
+        run_ok(&mut session, right(false));
+        assert_eq!(
+            session.focused_table_cell().map(|cell| cell.cell_index),
+            Some(usize::from(formula_only))
+        );
+        assert!(session.block_boundary_exit().is_none());
+
+        session.park_at_block_edge(inside_id.clone(), Direction::Backward)?;
+        run_ok(&mut session, right(true));
+        assert_eq!(
+            session.selected_atomic_blocks(),
+            std::slice::from_ref(&inside_id)
+        );
+        run_ok(&mut session, Command::EditorKey(EditorKey::Backspace));
+        assert_eq!(session.document.body[0], document.body[0]);
+        let Block::Table(table) = &session.document.body[2] else {
+            return Err(EditError::InvalidPosition);
+        };
+        let [Block::Paragraph(paragraph)] = table.rows[0].cells[0].blocks.as_slice() else {
+            return Err(EditError::InvalidPosition);
+        };
+        assert_eq!(
+            TextMap::new(paragraph)?.text,
+            if formula_only { "" } else { "cell" }
+        );
+        let deleted = session.document().clone();
+        run_ok(&mut session, Command::Undo);
+        assert_eq!(session.document(), &document);
+        run_ok(&mut session, Command::Redo);
+        assert_eq!(session.document(), &deleted);
+        run_ok(&mut session, Command::Undo);
+        session.park_at_block_edge(inside_id.clone(), Direction::Backward)?;
+        run_ok(&mut session, right(true));
+        run_ok(&mut session, Command::InsertText("replacement".into()));
+        assert_eq!(session.document.body[1], document.body[1]);
+        let Block::Table(table) = &session.document.body[2] else {
+            return Err(EditError::InvalidPosition);
+        };
+        let [Block::Paragraph(paragraph)] = table.rows[0].cells[0].blocks.as_slice() else {
+            return Err(EditError::InvalidPosition);
+        };
+        let expected = if formula_only {
+            "replacement"
+        } else {
+            "replacementcell"
+        };
+        assert_eq!(TextMap::new(paragraph)?.text, expected);
+        assert_eq!(
+            session.focused_table_cell().map(|cell| cell.cell_index),
+            Some(0)
+        );
+        run_ok(&mut session, Command::Undo);
+        assert_eq!(session.document(), &document);
+    }
+    Ok(())
+}
+
+#[test]
+fn stale_horizontal_candidate_preserves_table_focus() -> Result<(), EditError> {
+    let (mut session, ..) = two_by_two_table_session();
+    let focus = session.selection.focus.clone();
+    let document = session.document().clone();
+    let result = session.run(Command::EditorKey(EditorKey::RightArrow {
+        candidate: Some(crate::NavigationCandidate::Document {
+            focus: focus.clone(),
+            visual_affinity: VisualAffinity::Downstream,
+            generation: crate::NavigationGeneration {
+                session_id: NodeId::generate(),
+                document_generation: session.document_generation(),
+                font_generation: 1,
+            },
+        }),
+        extend: false,
+    }));
+    assert!(matches!(result, Err(EditError::InvalidPosition)));
+    assert_eq!(session.selection.focus, focus);
+    assert_eq!(session.document(), &document);
+    Ok(())
+}
+
+#[test]
+fn pending_inline_style_stays_at_its_original_table_position() {
+    let (mut session, ..) = two_by_two_table_session();
+    run_ok(
+        &mut session,
+        Command::ToggleInlineFormat(InlineEnvironmentKind::Bold),
+    );
+    assert!(session.has_pending_inline_style());
+    run_ok(&mut session, Command::EditorKey(EditorKey::Tab));
+    assert_eq!(
+        session.focused_table_cell().map(|cell| cell.cell_index),
+        Some(1)
+    );
+    assert!(!session.has_pending_inline_style());
+}
+
+#[test]
+fn vertical_navigation_exits_a_nested_formula_through_its_cell_boundaries() -> Result<(), EditError>
+{
+    let math_id = NodeId::generate();
+    let section_id = NodeId::generate();
+    let caret_math::ParsedMath::Tree(math_tree) =
+        caret_math::parse("x", caret_math::MathInputKind::Equation)
+            .map_err(|error| EditError::InvalidMath(error.to_string()))?
+    else {
+        return Err(EditError::InvalidPosition);
+    };
+    let title = paragraph_with("title");
+    let title_id = title.id.clone();
+    let (mut document, table_id, ..) =
+        table_only_document(vec![Block::Environment(BlockEnvironment {
+            id: section_id.clone(),
+            kind: BlockEnvironmentKind::Section,
+            definition_id: None,
+            props: Default::default(),
+            title: Some(title),
+            children: vec![Block::Equation(caret_doc::Equation {
+                id: math_id.clone(),
+                math_tree,
+                extra: Default::default(),
+            })],
+            extra: Default::default(),
+        })]);
+    document
+        .body
+        .push(Block::Paragraph(paragraph_with("after")));
+    let mut session = Session::new(document)?;
+    session.park_at_block_edge(math_id.clone(), Direction::Backward)?;
+    assert!(!session.block_boundary_uses_vertical_step(Direction::Backward, false));
+    run_ok(
+        &mut session,
+        Command::EditorKey(EditorKey::LeftArrow {
+            candidate: None,
+            extend: false,
+        }),
+    );
+    assert_eq!(session.selection.focus.paragraph_id, title_id);
+    session.park_at_block_edge(math_id, Direction::Forward)?;
+    let down = || {
+        Command::EditorKey(EditorKey::DownArrow {
+            candidate: None,
+            extend: false,
+            structure: false,
+        })
+    };
+    run_ok(&mut session, down());
+    assert_eq!(
+        session.block_boundary_exit(),
+        Some((section_id, Direction::Forward))
+    );
+    run_ok(&mut session, down());
+    assert_eq!(
+        session.block_boundary_exit(),
+        Some((table_id, Direction::Forward))
+    );
+    Ok(())
 }

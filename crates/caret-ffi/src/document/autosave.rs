@@ -121,54 +121,30 @@ pub(crate) fn recovery_update_write_finished_with_binding(
     worker_binding_generation: u64,
     succeeded: bool,
 ) -> String {
-    let is_current_session = runtime.runtime.as_ref().is_ok_and(|session| {
-        session.session_generation() == session_generation
-            && session.recovery_id() == Some(recovery_id.as_str())
-    });
-    if !is_current_session {
-        return "error:document.stale_recovery_completion".to_owned();
-    }
     let Some(gate) = runtime.recovery_update_gate.as_ref() else {
         return "error:document.stale_recovery_completion".to_owned();
     };
-    let pending = gate.pending.load(std::sync::atomic::Ordering::Acquire);
-    let current_generation = gate
-        .binding_generation
-        .load(std::sync::atomic::Ordering::Acquire);
-    let binding_is_current = !pending && current_generation == worker_binding_generation;
-    let failed_rebind_is_current = pending
-        && !succeeded
-        && runtime.recovery_binding_generation == recovery_binding_generation
-        && worker_binding_generation == current_generation;
-    if !binding_is_current && !failed_rebind_is_current {
-        return "error:document.stale_recovery_completion".to_owned();
-    }
     let now = runtime.monotonic_origin.elapsed();
-    let _ = runtime
-        .lifecycle
-        .recovery_update_finished(revision, succeeded, now);
-    let binding_changed =
-        binding_is_current && runtime.recovery_binding_generation != worker_binding_generation;
-    if binding_changed {
-        runtime.recovery_binding_generation = worker_binding_generation;
-        runtime.lifecycle.recovery_binding_changed();
+    let session = match &runtime.runtime {
+        Ok(session) => session,
+        Err(error) => return format!("error:{error}"),
+    };
+    match caret_app::document_recovery::DocumentRecoveryCoordinator.update_finished(
+        session,
+        &mut runtime.lifecycle,
+        gate,
+        &mut runtime.recovery_binding_generation,
+        session_generation,
+        revision,
+        &recovery_id,
+        recovery_binding_generation,
+        worker_binding_generation,
+        succeeded,
+        now,
+    ) {
+        Ok(deadline) => deadline.map(format_lifecycle_deadline).unwrap_or_default(),
+        Err(error) => format!("error:{error}"),
     }
-    // 写入期间的新编辑需要重新排期，失败的旧快照不能吞掉这次更新。
-    if (binding_changed || (pending && !succeeded))
-        && runtime.runtime.as_ref().is_ok_and(|session| {
-            session.document_generation() > revision && session.recovery_id().is_some()
-        })
-    {
-        let current_revision = runtime
-            .runtime
-            .as_ref()
-            .map(DocumentSessionService::document_generation)
-            .unwrap_or(revision);
-        runtime
-            .lifecycle
-            .resume_recovery_revision(current_revision, now);
-    }
-    auto_save_deadline_json(runtime)
 }
 
 /// 校验 Qt 单次唤醒并在有效时捕获当前文档快照。

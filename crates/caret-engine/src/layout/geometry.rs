@@ -17,6 +17,28 @@ pub(super) struct ParagraphTextRange {
 const STRUCTURE_CARET_MAX_HALVINGS: u32 = 5;
 
 impl MathPageProjection {
+    /// 将数学交互几何限制在宿主提供的水平可见区；无裁切宿主保持原几何。
+    pub(super) fn clip_caret_x(&self, mut caret: PageCaretGeometry) -> PageCaretGeometry {
+        if let Some([left, right]) = self.clip_x_pt {
+            caret.x_pt = caret.x_pt.clamp(left, right);
+        }
+        caret
+    }
+
+    pub(super) fn contains_x(&self, x_pt: f64) -> bool {
+        self.clip_x_pt
+            .is_none_or(|[left, right]| x_pt >= left && x_pt <= right)
+    }
+
+    pub(super) fn clip_selection_x(&self, rect: &mut PageSelectionRect) -> bool {
+        let Some([left, right]) = self.clip_x_pt else {
+            return true;
+        };
+        rect.x0_pt = rect.x0_pt.max(left);
+        rect.x1_pt = rect.x1_pt.min(right);
+        rect.x0_pt < rect.x1_pt
+    }
+
     /// 生成正文基础行高的 caret，用于公式根层、块边界与命中容差。
     pub(super) fn caret_at_math_baseline(
         &self,
@@ -138,9 +160,16 @@ impl MathPageProjection {
         mut caret: PageCaretGeometry,
         row_id: Option<&NodeId>,
     ) -> Option<PageCaretGeometry> {
-        let Some([row_top, row_bottom]) = self.row_clip(row_id) else {
+        let Some([mut row_top, mut row_bottom]) = self.row_clip(row_id) else {
             return self.clip_caret(caret);
         };
+        if let Some([host_top, host_bottom]) = self.clip_y_pt {
+            row_top = row_top.max(host_top);
+            row_bottom = row_bottom.min(host_bottom);
+            if row_top >= row_bottom {
+                return self.clip_caret(caret);
+            }
+        }
         let Some((top, bottom)) = self.clip_range_for_row(caret.y0_pt, caret.y1_pt, row_id) else {
             let height = (caret.y1_pt - caret.y0_pt).min(row_bottom - row_top);
             if (caret.y0_pt + caret.y1_pt) / 2.0 < row_top {
@@ -193,7 +222,7 @@ impl DocumentLayoutSnapshot {
             crate::editing::Direction::Backward => projection.row_baselines.first(),
             crate::editing::Direction::Forward => projection.row_baselines.last(),
         };
-        Some(row_baseline.map_or_else(
+        projection.clip_caret(row_baseline.map_or_else(
             || PageCaretGeometry {
                 page_index: projection.page_index,
                 x_pt,
@@ -253,6 +282,11 @@ impl DocumentLayoutSnapshot {
         if let Some(caret) = self.math_block_boundary_caret(block_id, direction) {
             return caret;
         }
+        if let Some(caret) =
+            self.table_block_boundary_caret(block_id, direction, fallback.y1_pt - fallback.y0_pt)
+        {
+            return caret;
+        }
         fallback.x_pt = self
             .block_boundary_x(block_id, fallback.page_index, direction)
             .unwrap_or(fallback.x_pt);
@@ -260,7 +294,7 @@ impl DocumentLayoutSnapshot {
     }
 
     /// 按页索引取连续片段，避免命中时扫描其他页面的公式。
-    pub(super) fn math_projections_on_page(&self, page_index: usize) -> &[MathPageProjection] {
+    pub(crate) fn math_projections_on_page(&self, page_index: usize) -> &[MathPageProjection] {
         let start = self
             .math_projection_index
             .projections
@@ -290,6 +324,74 @@ impl DocumentLayoutSnapshot {
 }
 
 impl DocumentLayoutSnapshot {
+    /// 返回当前视觉侧的文本插入槽。空格式环境与待输入格式使用同一几何。
+    /// 位置或裁切后的槽位不可见时返回 `None`。
+    pub fn inline_text_insertion_slot(
+        &self,
+        position: &Pos,
+        visual_affinity: VisualAffinity,
+    ) -> Option<PageSelectionRect> {
+        let (caret, clip) = self.caret_geometry_with_clip(position, visual_affinity)?;
+        let size = self.font_size_centipoints_at(position, visual_affinity)?;
+        self.inline_insertion_slot(caret, size, clip.map(|clip| [clip.x0_pt, clip.x1_pt]))
+    }
+
+    /// 返回行内公式的实际树光标和可见插入槽。公式或槽位在当前布局中不可见时返回 `None`。
+    pub fn inline_math_insertion_slot(
+        &self,
+        target: &MathEditTarget,
+        position: &MathTreePosition,
+    ) -> Option<(PageCaretGeometry, PageSelectionRect)> {
+        let (caret, size) = self.math_tree_caret(target, position)?;
+        let projection = self
+            .math_projections_for_target(target)
+            .find(|projection| {
+                projection.page_index == caret.page_index && projection.inline_index.is_some()
+            })?;
+        let slot = self.inline_insertion_slot(caret, size, projection.clip_x_pt)?;
+        Some((caret, slot))
+    }
+
+    /// 在同代页面放置插入槽。字号以 centipoints 表示，碰到纸张或单元格内容边缘时整体内移。
+    pub(super) fn inline_insertion_slot(
+        &self,
+        caret: PageCaretGeometry,
+        font_size_centipoints: u16,
+        horizontal_clip: Option<[f64; 2]>,
+    ) -> Option<PageSelectionRect> {
+        const FONT_SIZE_FRACTION: f64 = 0.5;
+        const MIN_WIDTH_PT: f64 = 4.0;
+
+        let page = self.pages.get(caret.page_index)?;
+        if ![caret.x_pt, caret.y0_pt, caret.y1_pt]
+            .into_iter()
+            .all(f64::is_finite)
+        {
+            return None;
+        }
+        let [left, right] = horizontal_clip.unwrap_or([0.0, page.width_pt]);
+        let left = left.max(0.0);
+        let right = right.min(page.width_pt);
+        if right <= left {
+            return None;
+        }
+        let font_size_pt = DocumentUnits::centipoints_to_points(u32::from(font_size_centipoints));
+        let width_pt = (font_size_pt * FONT_SIZE_FRACTION)
+            .max(MIN_WIDTH_PT)
+            .min(right - left);
+        let x0_pt = (caret.x_pt - width_pt / 2.0).clamp(left, (right - width_pt).max(left));
+        let mut slot = PageSelectionRect {
+            page_index: caret.page_index,
+            x0_pt,
+            x1_pt: x0_pt + width_pt,
+            y0_pt: caret.y0_pt,
+            y1_pt: caret.y1_pt,
+        };
+        PageClip::from_array([left, 0.0, right, page.height_pt])
+            .clamp_rect(&mut slot)
+            .then_some(slot)
+    }
+
     /// 根据同代公式结构插入点返回所属 MathFlow 的页面 caret 几何。
     pub fn math_tree_caret_geometry(
         &self,
@@ -335,6 +437,23 @@ impl DocumentLayoutSnapshot {
         &self,
         target: &MathEditTarget,
         position: &MathTreePosition,
+    ) -> Option<(PageCaretGeometry, u16)> {
+        self.math_tree_caret_with_x_clipping(target, position, true)
+    }
+
+    pub(super) fn math_tree_caret_unclipped_x(
+        &self,
+        target: &MathEditTarget,
+        position: &MathTreePosition,
+    ) -> Option<(PageCaretGeometry, u16)> {
+        self.math_tree_caret_with_x_clipping(target, position, false)
+    }
+
+    fn math_tree_caret_with_x_clipping(
+        &self,
+        target: &MathEditTarget,
+        position: &MathTreePosition,
+        clip_x: bool,
     ) -> Option<(PageCaretGeometry, u16)> {
         for projection in self.math_projections_for_target(target) {
             let Some((layout, _)) = self.math_projection_items(projection) else {
@@ -421,10 +540,9 @@ impl DocumentLayoutSnapshot {
                                             },
                                         )
                                     });
-                            if let Some(caret) = nested_position
-                                .as_ref()
-                                .and_then(|nested| self.math_tree_caret(target, nested))
-                            {
+                            if let Some(caret) = nested_position.as_ref().and_then(|nested| {
+                                self.math_tree_caret_with_x_clipping(target, nested, clip_x)
+                            }) {
                                 return Some(caret);
                             }
                         }
@@ -464,6 +582,7 @@ impl DocumentLayoutSnapshot {
                                         &text_position,
                                         visual_affinity,
                                         true,
+                                        clip_x,
                                     )
                                     .map(|(caret, _)| caret)
                                 {
@@ -529,6 +648,11 @@ impl DocumentLayoutSnapshot {
                     projection.clip_caret_for_row(raw_caret, math_row_id_for_host(&position.host))
                 else {
                     continue;
+                };
+                let caret = if clip_x {
+                    projection.clip_caret_x(caret)
+                } else {
+                    caret
                 };
                 let font_size_centipoints = edge_font_size
                     .and_then(|size| visible_font_size_centipoints(size as f32))
@@ -634,13 +758,16 @@ impl DocumentLayoutSnapshot {
                     else {
                         continue;
                     };
-                    rectangles.push(PageSelectionRect {
+                    let mut rectangle = PageSelectionRect {
                         page_index: projection.page_index,
                         x0_pt,
                         y0_pt,
                         x1_pt,
                         y1_pt,
-                    });
+                    };
+                    if projection.clip_selection_x(&mut rectangle) {
+                        rectangles.push(rectangle);
+                    }
                 }
                 return Some(rectangles);
             }
@@ -656,6 +783,15 @@ impl DocumentLayoutSnapshot {
         position: &Pos,
         visual_affinity: VisualAffinity,
     ) -> Option<PageCaretGeometry> {
+        self.caret_geometry_with_clip(position, visual_affinity)
+            .map(|(caret, _)| caret)
+    }
+
+    fn caret_geometry_with_clip(
+        &self,
+        position: &Pos,
+        visual_affinity: VisualAffinity,
+    ) -> Option<(PageCaretGeometry, Option<PageClip>)> {
         let paragraph = self.paragraph_by_id(&position.paragraph_id)?;
         if paragraph.story != position.story {
             return None;
@@ -678,140 +814,128 @@ impl DocumentLayoutSnapshot {
         {
             return None;
         }
-        Some(geometry)
+        Some((geometry, location.clip))
     }
 
-    /// 焦点单元格的网格外框（含边框/内边距拆分后的整个 cell 矩形）；焦点不在表格内为空。
-    fn focused_table_cell_rect(&self, position: &Pos) -> Option<PageSelectionRect> {
-        let paragraph = self.paragraph_by_id(&position.paragraph_id)?;
-        if paragraph.story != position.story {
+    fn table_cell_rect(&self, cell: &caret_structure::TableCellPath) -> Option<PageSelectionRect> {
+        self.pages
+            .iter()
+            .enumerate()
+            .find_map(|(page_index, page)| {
+                page.table_cell_hit_regions
+                    .iter()
+                    .find(|region| region.cell_id == cell.cell_id)
+                    .map(|region| PageSelectionRect {
+                        page_index,
+                        x0_pt: region.x0_pt,
+                        y0_pt: region.y0_pt,
+                        x1_pt: region.x1_pt,
+                        y1_pt: region.y1_pt,
+                    })
+            })
+    }
+
+    /// 返回单元格同代网格边框；页面裁切后没有可见面积时为空。
+    pub fn table_guidelines(
+        &self,
+        cell: &caret_structure::TableCellPath,
+    ) -> Vec<PageSelectionRect> {
+        self.table_cell_rect(cell).into_iter().collect()
+    }
+
+    /// 返回页面上真实网格单元格的命中范围，边框和内边距也参与命中。
+    ///
+    /// 区域逐页裁切；嵌套表格同时发布外层和内层区域，调用方可按包含关系
+    /// 选择最小区域，从而保持最内层单元格的焦点归属。
+    pub fn table_cell_hit_regions(&self, page_index: usize) -> &[PageCellHitRegion] {
+        self.pages
+            .get(page_index)
+            .map_or(&[], |page| page.table_cell_hit_regions.as_slice())
+    }
+
+    pub(super) fn table_fragment_rect(
+        &self,
+        page_index: usize,
+        fragment: &caret_layout::TableFragment,
+    ) -> Option<PageSelectionRect> {
+        let page = self.pages.get(page_index)?;
+        let grid = self.table_layouts.get(&fragment.table_id)?;
+        let x = page.margin_left_pt + f64::from(fragment.x_offset_pt);
+        let y = page.margin_top_pt + f64::from(fragment.y_offset_pt);
+        let [top, bottom] = grid.row_rule_bounds_pt(fragment.row_range.clone())?;
+        let x0_pt = x.clamp(0.0, page.width_pt);
+        let x1_pt = (x + grid.width_pt).clamp(0.0, page.width_pt);
+        let y0_pt = (y + top).clamp(0.0, page.height_pt);
+        let y1_pt = (y + bottom).clamp(0.0, page.height_pt);
+        (x1_pt > x0_pt && y1_pt > y0_pt).then_some(PageSelectionRect {
+            page_index,
+            x0_pt,
+            y0_pt,
+            x1_pt,
+            y1_pt,
+        })
+    }
+
+    pub(super) fn table_fragment_boundary_caret(
+        &self,
+        page_index: usize,
+        fragment: &caret_layout::TableFragment,
+        direction: crate::Direction,
+        caret_height: f64,
+    ) -> Option<PageCaretGeometry> {
+        let grid = self.table_layouts.get(&fragment.table_id)?;
+        let rect = self.table_fragment_rect(page_index, fragment)?;
+        let (x_pt, row_index) = match direction {
+            crate::Direction::Backward if fragment.row_range.start == 0 => {
+                (rect.x0_pt, fragment.row_range.start)
+            }
+            crate::Direction::Forward if fragment.row_range.end == grid.rows.len() => {
+                (rect.x1_pt, fragment.row_range.end - 1)
+            }
+            _ => return None,
+        };
+        let page = self.pages.get(page_index)?;
+        let origin_y = page.margin_top_pt + f64::from(fragment.y_offset_pt);
+        let [row_top, row_bottom] = grid.row_rule_bounds_pt(row_index..row_index + 1)?;
+        let top = (origin_y + row_top).max(rect.y0_pt);
+        let bottom = (origin_y + row_bottom).min(rect.y1_pt);
+        if bottom <= top {
             return None;
         }
-        let cell = paragraph.container.innermost_cell()?;
-        let grid = self.table_layouts.get(&cell.table_id)?;
-        let row = grid.rows.get(cell.row_index)?;
-        row.cells.get(cell.cell_index)?;
-        let horizontal_inset_pt = grid.columns.first().map_or(0.0, |(x, _)| *x);
-        let vertical_inset_pt = grid.rows.first().map_or(0.0, |row| row.top_pt);
-        let x0_cell = if cell.cell_index == 0 {
-            grid.columns
-                .first()
-                .map_or(0.0, |(x, _)| *x - horizontal_inset_pt)
-        } else {
-            grid.columns.get(cell.cell_index).map_or(0.0, |(x, _)| *x)
-        };
-        let x1_cell = if cell.cell_index + 1 == grid.columns.len() {
-            grid.columns
-                .get(cell.cell_index)
-                .map_or(0.0, |(x, width)| *x + *width + horizontal_inset_pt)
-        } else {
-            grid.columns
-                .get(cell.cell_index + 1)
-                .map_or(0.0, |(x, _)| *x)
-        };
-        let y0_cell = if cell.row_index == 0 {
-            row.top_pt - vertical_inset_pt
-        } else {
-            row.top_pt
-        };
-        let y1_cell = if cell.row_index + 1 == grid.rows.len() {
-            grid.height_pt
-        } else {
-            grid.rows
-                .get(cell.row_index + 1)
-                .map_or(row.top_pt + row.height_pt, |next| next.top_pt)
-        };
-        for (page_index, page) in self.pages.iter().enumerate() {
-            for fragment in &page.layout.table_fragments {
-                if fragment.table_id != cell.table_id
-                    || !fragment.row_range.contains(&cell.row_index)
-                {
-                    continue;
-                }
-                let x0_pt = page.margin_left_pt + f64::from(fragment.x_offset_pt) + x0_cell;
-                let y0_pt = page.margin_top_pt + f64::from(fragment.y_offset_pt) + y0_cell;
-                let x1_pt = page.margin_left_pt + f64::from(fragment.x_offset_pt) + x1_cell;
-                let y1_pt = page.margin_top_pt + f64::from(fragment.y_offset_pt) + y1_cell;
-                let x0_pt = x0_pt.clamp(0.0, page.width_pt);
-                let x1_pt = x1_pt.clamp(0.0, page.width_pt);
-                let y0_pt = y0_pt.clamp(0.0, page.height_pt);
-                let y1_pt = y1_pt.clamp(0.0, page.height_pt);
-                if !x0_pt.is_finite()
-                    || !y0_pt.is_finite()
-                    || !x1_pt.is_finite()
-                    || !y1_pt.is_finite()
-                    || x1_pt <= x0_pt
-                    || y1_pt <= y0_pt
-                {
-                    continue;
-                }
-                return Some(PageSelectionRect {
-                    page_index,
-                    x0_pt,
-                    y0_pt,
-                    x1_pt,
-                    y1_pt,
-                });
-            }
-        }
-        None
+        let center = top.midpoint(bottom);
+        let half_height = 0.5 * caret_height.min(bottom - top);
+        Some(PageCaretGeometry {
+            page_index,
+            x_pt,
+            y0_pt: center - half_height,
+            y1_pt: center + half_height,
+        })
     }
 
-    /// 当前焦点单元格的编辑辅助线矩形；与共享 block 高亮/命中使用同一网格外框。
-    pub fn table_guidelines(&self, position: &Pos) -> Vec<PageSelectionRect> {
-        self.focused_table_cell_rect(position).into_iter().collect()
-    }
-
-    /// 焦点位于表格内时，整张表格的共享 block 高亮矩形（跨页逐 fragment）。
-    pub fn table_block_highlight_rects(&self, position: &Pos) -> Vec<PageSelectionRect> {
-        let Some(paragraph) = self.paragraph_by_id(&position.paragraph_id) else {
-            return Vec::new();
-        };
-        if paragraph.story != position.story {
-            return Vec::new();
-        }
-        let Some(cell) = paragraph.container.innermost_cell() else {
-            return Vec::new();
-        };
-        let Some(grid) = self.table_layouts.get(&cell.table_id) else {
-            return Vec::new();
-        };
-        let mut rectangles = Vec::new();
-        for (page_index, page) in self.pages.iter().enumerate() {
-            for fragment in &page.layout.table_fragments {
-                if fragment.table_id != cell.table_id {
-                    continue;
-                }
-                let Some(first_row) = grid.rows.get(fragment.row_range.start) else {
-                    continue;
-                };
-                let Some(last_row) = grid.rows.get(fragment.row_range.end.saturating_sub(1)) else {
-                    continue;
-                };
-                let x0_pt = page.margin_left_pt + f64::from(fragment.x_offset_pt);
-                let y0_pt = page.margin_top_pt + f64::from(fragment.y_offset_pt) + first_row.top_pt;
-                let x1_pt = x0_pt + grid.width_pt;
-                let y1_pt = page.margin_top_pt
-                    + f64::from(fragment.y_offset_pt)
-                    + last_row.top_pt
-                    + last_row.height_pt;
-                let x0_pt = x0_pt.clamp(0.0, page.width_pt);
-                let x1_pt = x1_pt.clamp(0.0, page.width_pt);
-                let y0_pt = y0_pt.clamp(0.0, page.height_pt);
-                let y1_pt = y1_pt.clamp(0.0, page.height_pt);
-                if x1_pt <= x0_pt || y1_pt <= y0_pt {
-                    continue;
-                }
-                rectangles.push(PageSelectionRect {
-                    page_index,
-                    x0_pt,
-                    y0_pt,
-                    x1_pt,
-                    y1_pt,
-                });
-            }
-        }
-        rectangles
+    fn table_block_boundary_caret(
+        &self,
+        block_id: &NodeId,
+        direction: crate::Direction,
+        caret_height: f64,
+    ) -> Option<PageCaretGeometry> {
+        self.table_layouts.get(block_id)?;
+        self.pages
+            .iter()
+            .enumerate()
+            .find_map(|(page_index, page)| {
+                page.layout
+                    .table_fragments
+                    .iter()
+                    .filter(|fragment| &fragment.table_id == block_id)
+                    .find_map(|fragment| {
+                        self.table_fragment_boundary_caret(
+                            page_index,
+                            fragment,
+                            direction,
+                            caret_height,
+                        )
+                    })
+            })
     }
 
     /// 返回裁切到可见分页片段内的选区矩形。
@@ -879,18 +1003,10 @@ impl DocumentLayoutSnapshot {
             })
     }
 
-    /// 返回选中块级公式在同一代布局中的整栏矩形。
+    /// 返回同代原子块的页面矩形。表格按网格外框投影，公式沿用对应的物理宿主范围。
     ///
-    /// 每个矩形横跨页面版心宽度，纵向采用该公式片段的 MathBox 范围并裁切到页面，
-    /// 供选区层与活动公式高亮共用同一几何来源；不进入公式内部 MathBox。
-    /// 任一公式 ID 在当前快照中没有任何分页片段时返回 `None`，让调用方拒绝过期投影。
-    ///
-    /// 退化片段（零高度或裁切后纵向区间为空）在当前布局契约下不可达：Equation
-    /// 无 soft break 时宿主行框由正文行网格撑开正高度（`calculate_math_host_metrics`），
-    /// 含 soft break 的 Equation 与 Align 由 `calculate_math_align_host_metrics`
-    /// 拒绝非正高度，分页再拒绝负高度；即使公式行高于整页，页边距校验也保证裁切后
-    /// 仍为正高度。因此下面的跳过分支只是防御性检查，不应据此断言快照过期。
-    pub fn math_block_geometry(&self, block_ids: &[NodeId]) -> Option<Vec<PageSelectionRect>> {
+    /// 已裁切的格内公式可以没有可见矩形。其余块 ID 找不到布局片段时返回 `None`。
+    pub fn atomic_block_geometry(&self, block_ids: &[NodeId]) -> Option<Vec<PageSelectionRect>> {
         if block_ids.is_empty() {
             return Some(Vec::new());
         }
@@ -936,9 +1052,13 @@ impl DocumentLayoutSnapshot {
                 else {
                     continue;
                 };
-                let x0_pt = placement.object_x_pt.clamp(0.0, page.width_pt);
-                let x1_pt =
+                let mut x0_pt = placement.object_x_pt.clamp(0.0, page.width_pt);
+                let mut x1_pt =
                     (placement.object_x_pt + placement.width_pt).clamp(x0_pt, page.width_pt);
+                if let Some([clip_x0, clip_x1]) = placement.clip_x_pt {
+                    x0_pt = x0_pt.max(clip_x0);
+                    x1_pt = x1_pt.min(clip_x1);
+                }
                 let mut y0_pt =
                     (placement.baseline_y_pt - placement.ascent_pt).clamp(0.0, page.height_pt);
                 let mut y1_pt =
@@ -959,6 +1079,15 @@ impl DocumentLayoutSnapshot {
                     y1_pt,
                 });
             }
+            for fragment in &page.layout.table_fragments {
+                let Some(index) = block_ids.iter().position(|id| id == &fragment.table_id) else {
+                    continue;
+                };
+                if let Some(rectangle) = self.table_fragment_rect(page_index, fragment) {
+                    found[index] = true;
+                    rectangles.push(rectangle);
+                }
+            }
         }
         // 表格单元格内被版心裁剪掉（不可见/不可导航）的公式：降级为空高亮，
         // 让编辑继续发布快照，而不是把所有 table math 误判为过期投影。
@@ -970,19 +1099,23 @@ impl DocumentLayoutSnapshot {
         found.iter().all(|found| *found).then_some(rectangles)
     }
 
-    /// 返回结构选区在同一代布局中的全部可见矩形：环境外正文、被选块环境与公式块。
+    /// 返回结构选区的同代文本与块矩形。
     ///
-    /// 文本端点必须与本快照同代；选中的公式 ID 任一缺少分页片段时整体
+    /// 文本端点必须与本快照同代；选中的原子块缺少分页片段时整体
     /// 返回 `None`。空块环境没有排版内容，因此没有环境矩形，这不视为过期投影。
     pub fn structure_selection_rectangles(
         &self,
         anchor: &Pos,
         focus: &Pos,
         selected_environment_ids: &[NodeId],
-        selected_math_block_ids: &[NodeId],
+        selected_atomic_block_ids: &[NodeId],
     ) -> Option<Vec<PageSelectionRect>> {
-        let mut rectangles =
-            self.structure_selection_geometry(anchor, focus, selected_environment_ids)?;
+        let excluded_ids = selected_environment_ids
+            .iter()
+            .chain(selected_atomic_block_ids)
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut rectangles = self.structure_selection_geometry(anchor, focus, &excluded_ids)?;
         rectangles.extend(
             self.environment_ranges
                 .iter()
@@ -995,7 +1128,7 @@ impl DocumentLayoutSnapshot {
                     y1_pt: range.y1_pt,
                 }),
         );
-        rectangles.extend(self.math_block_geometry(selected_math_block_ids)?);
+        rectangles.extend(self.atomic_block_geometry(selected_atomic_block_ids)?);
         Some(rectangles)
     }
 
@@ -1063,7 +1196,7 @@ impl DocumentLayoutSnapshot {
         range: ParagraphTextRange,
         composition: bool,
         story: Option<&StoryId>,
-        excluded_environment_ids: &[NodeId],
+        excluded_block_ids: &[NodeId],
     ) -> Option<Vec<PageSelectionRect>> {
         let mut rectangles = Vec::new();
         for paragraph_index in range.start_index..=range.end_index {
@@ -1073,7 +1206,11 @@ impl DocumentLayoutSnapshot {
                     .container
                     .environment_ids()
                     .iter()
-                    .any(|id| excluded_environment_ids.contains(id))
+                    .any(|id| excluded_block_ids.contains(id))
+                || paragraph
+                    .container
+                    .innermost_cell()
+                    .is_some_and(|cell| excluded_block_ids.contains(&cell.table_id))
             {
                 continue;
             }

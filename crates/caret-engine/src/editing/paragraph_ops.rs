@@ -723,6 +723,22 @@ pub(super) fn compare_positions(
     left: &Pos,
     right: &Pos,
 ) -> Result<std::cmp::Ordering, EditError> {
+    if (matches!(&left.story, StoryId::TableCell { .. })
+        || matches!(&right.story, StoryId::TableCell { .. }))
+        && left.story != right.story
+    {
+        return Err(EditError::WrongStory);
+    }
+    compare_document_positions(blocks, index, left, right)
+}
+
+/// 比较已校验的文档位置，包含不同单元格及正文之间的物理顺序。
+pub(super) fn compare_document_positions(
+    blocks: &[Block],
+    index: &ParagraphIndex,
+    left: &Pos,
+    right: &Pos,
+) -> Result<std::cmp::Ordering, EditError> {
     let left_location = index
         .get(&left.paragraph_id)
         .ok_or_else(|| EditError::UnknownParagraph(left.paragraph_id.to_string()))?;
@@ -735,11 +751,6 @@ pub(super) fn compare_positions(
         return Err(EditError::InvalidPosition);
     }
     if left_location.story != left.story || right_location.story != right.story {
-        return Err(EditError::WrongStory);
-    }
-    let left_is_cell = matches!(left_location.story, StoryId::TableCell { .. });
-    let right_is_cell = matches!(right_location.story, StoryId::TableCell { .. });
-    if (left_is_cell || right_is_cell) && left_location.story != right_location.story {
         return Err(EditError::WrongStory);
     }
     let left_paragraph =

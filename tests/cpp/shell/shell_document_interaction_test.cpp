@@ -7,9 +7,11 @@
 #include "layout_view_model.hpp"
 #include "shell_test_support.hpp"
 #include "theme_view_model.hpp"
+#include <tuple>
 #ifdef CARET_ENABLE_APP
 #include "caret_ffi.h"
 #include "document_runtime_bridge.hpp"
+#include "theme_catalog.hpp"
 #endif
 #include <QByteArray>
 #include <QChar>
@@ -35,12 +37,14 @@
 #include <QQmlComponent>
 #include <QQuickImageProvider>
 #include <QQuickItem>
+#include <QQuickItemGrabResult>
 #include <QQuickWindow>
 #include <QRect>
 #include <QRectF>
 #include <QRegularExpression>
 #include <QScopeGuard>
 #include <QSet>
+#include <QShortcut>
 #include <QSignalSpy>
 #include <QSize>
 #include <QString>
@@ -755,32 +759,74 @@ void ShellDocumentInteractionTest::documentCanvasRoutesCommandKeysAndKeepsNormal
     QCOMPARE(editor_keys.size(), 1);
     QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("insert-table"));
 #ifdef Q_OS_MACOS
-    QTest::keyClick(&window, Qt::Key_Up, Qt::MetaModifier | Qt::AltModifier | Qt::ShiftModifier);
-    QCOMPARE(editor_keys.size(), 1);
-    QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("table-insert-row-before"));
-    QTest::keyClick(&window, Qt::Key_Backspace, Qt::AltModifier | Qt::ShiftModifier);
-    QCOMPARE(editor_keys.size(), 1);
-    QCOMPARE(editor_keys.takeFirst().at(0).toString(),
-             QStringLiteral("table-delete-row-backspace"));
-    QTest::keyClick(&window, Qt::Key_Delete, Qt::AltModifier);
-    QCOMPARE(editor_keys.size(), 1);
-    QCOMPARE(editor_keys.takeFirst().at(0).toString(),
-             QStringLiteral("table-delete-column-delete"));
+    const Qt::KeyboardModifiers insert_modifiers =
+        caret::keyboard::physicalControlModifier() | Qt::AltModifier | Qt::ShiftModifier;
+    const Qt::KeyboardModifiers delete_row_modifiers = Qt::AltModifier | Qt::ShiftModifier;
+    const Qt::KeyboardModifiers delete_column_modifiers = Qt::AltModifier;
 #else
-    QTest::keyClick(&window, Qt::Key_Down, Qt::AltModifier);
-    QCOMPARE(editor_keys.size(), 1);
-    QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("table-insert-row-after"));
-    QTest::keyClick(&window, Qt::Key_Left, Qt::AltModifier);
-    QCOMPARE(editor_keys.size(), 1);
-    QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("table-insert-col-before"));
-    QTest::keyClick(&window, Qt::Key_Backspace, Qt::AltModifier | Qt::ShiftModifier);
-    QCOMPARE(editor_keys.size(), 1);
-    QCOMPARE(editor_keys.takeFirst().at(0).toString(),
-             QStringLiteral("table-delete-row-backspace"));
-    QTest::keyClick(&window, Qt::Key_Delete, Qt::AltModifier);
-    QCOMPARE(editor_keys.size(), 1);
-    QCOMPARE(editor_keys.takeFirst().at(0).toString(),
-             QStringLiteral("table-delete-column-delete"));
+    const Qt::KeyboardModifiers insert_modifiers = Qt::AltModifier;
+    const Qt::KeyboardModifiers alternative_insert_modifiers =
+        caret::keyboard::physicalControlModifier() | Qt::AltModifier | Qt::ShiftModifier;
+    const Qt::KeyboardModifiers delete_row_modifiers = Qt::AltModifier | Qt::ShiftModifier;
+    const Qt::KeyboardModifiers delete_column_modifiers = Qt::AltModifier;
+#endif
+    const QList<std::tuple<Qt::Key, Qt::KeyboardModifiers, QString>> table_key_cases = {
+        {Qt::Key_Up, insert_modifiers, QStringLiteral("table-insert-row-before")},
+        {Qt::Key_Down, insert_modifiers, QStringLiteral("table-insert-row-after")},
+        {Qt::Key_Left, insert_modifiers, QStringLiteral("table-insert-col-before")},
+        {Qt::Key_Right, insert_modifiers, QStringLiteral("table-insert-col-after")},
+        {Qt::Key_Backspace, delete_row_modifiers, QStringLiteral("table-delete-row-backspace")},
+        {Qt::Key_Delete, delete_row_modifiers, QStringLiteral("table-delete-row-delete")},
+        {Qt::Key_Backspace, delete_column_modifiers,
+         QStringLiteral("table-delete-column-backspace")},
+        {Qt::Key_Delete, delete_column_modifiers, QStringLiteral("table-delete-column-delete")},
+    };
+    QShortcut colliding_window_shortcut(QKeySequence(Qt::ALT | Qt::Key_Backspace), &window);
+    QSignalSpy colliding_shortcut_activated(&colliding_window_shortcut, &QShortcut::activated);
+    QVERIFY(colliding_shortcut_activated.isValid());
+    for (const auto& [key, modifiers, expected] : table_key_cases) {
+        QKeyEvent shortcut_override(QEvent::ShortcutOverride, key, modifiers);
+        shortcut_override.ignore();
+        QCoreApplication::sendEvent(canvas, &shortcut_override);
+        QVERIFY2(shortcut_override.isAccepted(),
+                 "table editing shortcut must override window shortcuts");
+        QTest::keyClick(&window, key, modifiers);
+        QCOMPARE(editor_keys.size(), 1);
+        QCOMPARE(editor_keys.takeFirst().at(0).toString(), expected);
+        if (key == Qt::Key_Backspace && modifiers == delete_column_modifiers) {
+            QVERIFY2(colliding_shortcut_activated.isEmpty(),
+                     "the focused canvas must win against a colliding window shortcut");
+        }
+    }
+#ifndef Q_OS_MACOS
+    const QList<QPair<Qt::Key, QString>> insert_cases = {
+        {Qt::Key_Up, QStringLiteral("table-insert-row-before")},
+        {Qt::Key_Down, QStringLiteral("table-insert-row-after")},
+        {Qt::Key_Left, QStringLiteral("table-insert-col-before")},
+        {Qt::Key_Right, QStringLiteral("table-insert-col-after")},
+    };
+    for (const auto& [key, expected] : insert_cases) {
+        QKeyEvent shortcut_override(QEvent::ShortcutOverride, key, alternative_insert_modifiers);
+        shortcut_override.ignore();
+        QCoreApplication::sendEvent(canvas, &shortcut_override);
+        QVERIFY2(shortcut_override.isAccepted(),
+                 "alternate table insertion shortcut must override window shortcuts");
+        QTest::keyClick(&window, key, alternative_insert_modifiers);
+        QCOMPARE(editor_keys.size(), 1);
+        QCOMPARE(editor_keys.takeFirst().at(0).toString(), expected);
+    }
+#endif
+    auto* non_canvas_focus = new QQuickItem(window.contentItem());
+    non_canvas_focus->setFocus(true);
+    QTRY_VERIFY_WITH_TIMEOUT(non_canvas_focus->hasActiveFocus(), 3000);
+    QTest::keyClick(&window, Qt::Key_Backspace, delete_column_modifiers);
+    QCOMPARE(colliding_shortcut_activated.size(), 1);
+    canvas->forceActiveFocus(Qt::OtherFocusReason);
+    QTRY_VERIFY_WITH_TIMEOUT(canvas->hasActiveFocus(), 3000);
+#ifdef Q_OS_MACOS
+    // macOS 上 Qt 用 ControlModifier 表示 Command；此处只接受物理 Control 映射。
+    QTest::keyClick(&window, Qt::Key_Up, Qt::ControlModifier | Qt::AltModifier | Qt::ShiftModifier);
+    QVERIFY2(editor_keys.isEmpty(), "Command+Option+Shift+Up is not the table insertion chord");
 #endif
     QInputMethodEvent preedit(QStringLiteral("ni"), {});
     QCoreApplication::sendEvent(canvas, &preedit);
@@ -864,7 +910,8 @@ class DocumentInteractionFixture {
     DocumentInteractionFixture(const DocumentInteractionFixture&) = delete;
     DocumentInteractionFixture& operator=(const DocumentInteractionFixture&) = delete;
 
-    bool initialize(QSize size);
+    bool initialize(QSize size, const QString& active_theme = QStringLiteral("light"),
+                    bool sentinel_theme_colors = false);
 
     std::unique_ptr<QQmlEngine> engine;
     std::unique_ptr<QQmlComponent> surface_component;
@@ -879,16 +926,27 @@ class DocumentInteractionFixture {
 };
 
 // 页面渲染依赖 Theme 单例；单独运行某个 slot 时先注入断言所需的主题 token。
-// 断言只依赖 colorText/colorPanel 等 facade 合成值，与巨函数拆分前执行环境的主题 token 等价。
-void installDocumentInteractionTheme() {
+// sentinel_theme_colors 只给像素验收提供易区分色值，不表示产品主题的配色结论。
+void installDocumentInteractionTheme(const QString& active_theme = QStringLiteral("light"),
+                                     bool sentinel_theme_colors = false) {
     const QString theme =
         QString::fromUtf8(CARET_SOURCE_DIR) + QStringLiteral("/qml/Themes/Theme.qml");
     QHash<QString, QVariantMap> themes;
-    themes.insert(QStringLiteral("light"), caret::shell_test::snapshot_from_theme_facade(
-                                               theme, QColor(QStringLiteral("#ffffff")), 16));
-    themes.insert(QStringLiteral("dark"), caret::shell_test::snapshot_from_theme_facade(
-                                              theme, QColor(QStringLiteral("#111111")), 18));
-    caret::install_theme_snapshots(std::move(themes), QStringLiteral("light"));
+    QVariantMap light =
+        caret::shell_test::snapshot_from_theme_facade(theme, QColor(QStringLiteral("#ffffff")), 16);
+    QVariantMap dark =
+        caret::shell_test::snapshot_from_theme_facade(theme, QColor(QStringLiteral("#111111")), 18);
+    if (sentinel_theme_colors) {
+        light.insert(QStringLiteral("colorTableGuideline"), QColor(QStringLiteral("#e000c0")));
+        light.insert(QStringLiteral("colorBlockEnvironmentHighlight"),
+                     QColor(QStringLiteral("#00d060")));
+        dark.insert(QStringLiteral("colorTableGuideline"), QColor(QStringLiteral("#20c0ff")));
+        dark.insert(QStringLiteral("colorBlockEnvironmentHighlight"),
+                    QColor(QStringLiteral("#ffc020")));
+    }
+    themes.insert(QStringLiteral("light"), std::move(light));
+    themes.insert(QStringLiteral("dark"), std::move(dark));
+    caret::install_theme_snapshots(std::move(themes), active_theme);
 }
 
 bool installBlankInteractionRuntime(QString* error) {
@@ -910,8 +968,9 @@ bool installBlankInteractionRuntime(QString* error) {
     return true;
 }
 
-bool DocumentInteractionFixture::initialize(QSize size) {
-    installDocumentInteractionTheme();
+bool DocumentInteractionFixture::initialize(QSize size, const QString& active_theme,
+                                            bool sentinel_theme_colors) {
+    installDocumentInteractionTheme(active_theme, sentinel_theme_colors);
     engine = std::make_unique<QQmlEngine>();
     engine->addImportPath(QString::fromUtf8(CARET_QML_IMPORT_PATH));
     surface_component = std::make_unique<QQmlComponent>(engine.get());
@@ -955,12 +1014,13 @@ bool DocumentInteractionFixture::initialize(QSize size) {
     return true;
 }
 
-bool prepareDocumentInteractionFixture(DocumentInteractionFixture& fixture,
-                                       QSize size = {500, 500}) {
+bool prepareDocumentInteractionFixture(DocumentInteractionFixture& fixture, QSize size = {500, 500},
+                                       const QString& active_theme = QStringLiteral("light"),
+                                       bool sentinel_theme_colors = false) {
     if (!installBlankInteractionRuntime(&fixture.error)) {
         return false;
     }
-    return fixture.initialize(size);
+    return fixture.initialize(size, active_theme, sentinel_theme_colors);
 }
 
 bool waitForDocumentGeneration(DocumentInteractionFixture& fixture, const QString& generation) {
@@ -1109,6 +1169,104 @@ bool renderedGlyphHasInk(DocumentInteractionFixture& fixture, qsizetype placemen
     return false;
 }
 
+QRect windowPixelRectForDocumentRect(DocumentInteractionFixture& fixture, int page_index,
+                                     const QRectF& page_rect, const QImage& frame) {
+    const QPointF top_left = fixture.canvas->mapToItem(
+        fixture.window.contentItem(),
+        fixture.canvas->documentToContent(page_index, page_rect.topLeft()));
+    const QPointF bottom_right = fixture.canvas->mapToItem(
+        fixture.window.contentItem(),
+        fixture.canvas->documentToContent(page_index, page_rect.bottomRight()));
+    const qreal pixels_per_x = static_cast<qreal>(frame.width()) / fixture.window.width();
+    const qreal pixels_per_y = static_cast<qreal>(frame.height()) / fixture.window.height();
+    return QRect(qFloor(top_left.x() * pixels_per_x), qFloor(top_left.y() * pixels_per_y),
+                 qCeil((bottom_right.x() - top_left.x()) * pixels_per_x),
+                 qCeil((bottom_right.y() - top_left.y()) * pixels_per_y))
+        .intersected(frame.rect());
+}
+
+qsizetype exactColorPixels(const QImage& frame, const QRect& rect, const QColor& color) {
+    qsizetype count = 0;
+    const QRect bounded = rect.intersected(frame.rect());
+    for (int y = bounded.top(); y <= bounded.bottom(); ++y) {
+        for (int x = bounded.left(); x <= bounded.right(); ++x) {
+            if (frame.pixelColor(x, y) == color) {
+                ++count;
+            }
+        }
+    }
+    return count;
+}
+
+template <typename MatchesStroke>
+bool dashedGuidelineHasSeparatedRuns(DocumentInteractionFixture& fixture,
+                                     const QVariantMap& guideline, const QImage& frame,
+                                     const MatchesStroke& matches_stroke) {
+    const int page_index = guideline.value(QStringLiteral("pageIndex")).toInt();
+    const qreal x0 = guideline.value(QStringLiteral("x0Pt")).toReal();
+    const qreal x1 = guideline.value(QStringLiteral("x1Pt")).toReal();
+    const qreal y0 = guideline.value(QStringLiteral("y0Pt")).toReal();
+    const qreal y1 = guideline.value(QStringLiteral("y1Pt")).toReal();
+    const auto has_separated_runs = [](int first, int last, const auto& is_colored) {
+        bool saw_color = false;
+        int gap = 0;
+        for (int offset = first; offset <= last; ++offset) {
+            if (is_colored(offset)) {
+                if (gap >= 2) {
+                    return true;
+                }
+                saw_color = true;
+                gap = 0;
+            } else if (saw_color) {
+                ++gap;
+            }
+        }
+        return false;
+    };
+    // 沿单边扫描并略过转角，避免把矩形两条实线边之间的空白误认为虚线间隙。
+    constexpr qreal kEdgeTolerancePt = 3.0;
+    constexpr qreal kCornerInsetPt = 4.0;
+    for (const qreal y_pt : {y0, y1}) {
+        const QRect pixels = windowPixelRectForDocumentRect(
+            fixture, page_index,
+            QRectF(QPointF(x0 + kCornerInsetPt, y_pt - kEdgeTolerancePt),
+                   QPointF(x1 - kCornerInsetPt, y_pt + kEdgeTolerancePt)),
+            frame);
+        for (int y = pixels.top(); y <= pixels.bottom(); ++y) {
+            if (has_separated_runs(pixels.left(), pixels.right(),
+                                   [&](int x) { return matches_stroke(x, y); })) {
+                return true;
+            }
+        }
+    }
+    for (const qreal x_pt : {x0, x1}) {
+        const QRect pixels = windowPixelRectForDocumentRect(
+            fixture, page_index,
+            QRectF(QPointF(x_pt - kEdgeTolerancePt, y0 + kCornerInsetPt),
+                   QPointF(x_pt + kEdgeTolerancePt, y1 - kCornerInsetPt)),
+            frame);
+        for (int x = pixels.left(); x <= pixels.right(); ++x) {
+            if (has_separated_runs(pixels.top(), pixels.bottom(),
+                                   [&](int y) { return matches_stroke(x, y); })) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool dashedThemeColorHasSeparatedRuns(DocumentInteractionFixture& fixture,
+                                      const QVariantMap& guideline, const QColor& color,
+                                      const QImage& frame) {
+    return dashedGuidelineHasSeparatedRuns(fixture, guideline, frame, [&](int x, int y) {
+        const QColor pixel = frame.pixelColor(x, y);
+        constexpr int kAntialiasTolerance = 96;
+        return pixel.alpha() > 128 && std::abs(pixel.red() - color.red()) <= kAntialiasTolerance &&
+               std::abs(pixel.green() - color.green()) <= kAntialiasTolerance &&
+               std::abs(pixel.blue() - color.blue()) <= kAntialiasTolerance;
+    });
+}
+
 bool waitForGlyphFrame(DocumentInteractionFixture& fixture, const QString& generation,
                        qsizetype minimum_placements = 1) {
     QElapsedTimer timer;
@@ -1219,6 +1377,10 @@ bool replayDocumentToGeneration(DocumentInteractionFixture& fixture, int generat
     if (generation == 9) {
         return true;
     }
+    stops = findDocumentDragStops(fixture);
+    if (!stops.valid) {
+        return false;
+    }
     if (!requireValidInteractionResult(
             fixture.layout_view_model->setSelection(stops.start, stops.end),
             QStringLiteral("重新设置 1..4 字节选区"), fixture)) {
@@ -1276,6 +1438,23 @@ constexpr auto kRichClipboardDocument = R"json({
 })json";
 
 constexpr auto kClipboardFragmentMime = "application/vnd.caret.fragment+json";
+
+constexpr auto kTableWithDisplayMathDocument = R"json({
+    "format":"caret","version":1,"media":[],
+    "requiredFeatures":["caret.math.content-flow.v2","caret.math.equation","caret.math.syntax.v1",
+        "caret.paragraph.content-flow.v1","caret.paragraph.layout-settings","caret.table.v1",
+        "caret.text.default-font-size"],
+    "document":{"globalSettings":{},"body":[
+        {"type":"table","id":"table","rows":[{"id":"row","cells":[
+            {"id":"left","blocks":[{"type":"paragraph","id":"text","inlines":[
+                {"type":"text","runs":[{"text":"body text body text body text body text body text body text body text body text body text body text body text body text body text body text body text body text body text body text body text body text"}]}]}]},
+            {"id":"right","blocks":[{"type":"equation","id":"formula","mathTree":{
+                "schemaVersion":3,"root":{"id":"formula-root","content":[
+                    {"type":"math","id":"formula-x","kind":"symbol","text":"x",
+                     "attributes":{"atomClass":"ord"}}]}}}]}
+        ]}]}
+    ], "pageSections":[{"id":"page-section","props":{}}]}
+})json";
 
 QString clipboard_fragment_mime_name() { return QString::fromLatin1(kClipboardFragmentMime); }
 
@@ -1514,6 +1693,708 @@ void ShellDocumentInteractionTest::documentCanvasClickAndTypingPublishRustSnapsh
     QCOMPARE(updated_glyph_frame.value(QStringLiteral("documentGeneration")).toString(),
              QStringLiteral("1"));
     QVERIFY(!updated_glyph_frame.value(QStringLiteral("placements")).toList().isEmpty());
+}
+
+void ShellDocumentInteractionTest::tableGuidelinesRefreshForArrowAndCellClick() {
+    DocumentInteractionFixture fixture;
+    QVERIFY2(prepareDocumentInteractionFixture(fixture), qPrintable(fixture.error));
+    const QVariantMap inserted =
+        fixture.layout_view_model->handleEditorKey(QStringLiteral("insert-table"));
+    QVERIFY2(inserted.value(QStringLiteral("valid")).toBool(),
+             qPrintable(inserted.value(QStringLiteral("error")).toString()));
+    QTRY_COMPARE_WITH_TIMEOUT(fixture.layout_view_model->tableGuidelines().size(), 1, 3000);
+    const QVariantMap first_cell = fixture.layout_view_model->tableGuidelines().front().toMap();
+    const QVariantMap first_caret = fixture.canvas->caretGeometry();
+
+    fixture.canvas->forceActiveFocus();
+    QTRY_VERIFY_WITH_TIMEOUT(fixture.canvas->hasActiveFocus(), 3000);
+    QSignalSpy navigation_spy(fixture.canvas, &caret::DocumentCanvas::visualNavigationRequested);
+    QVERIFY(navigation_spy.isValid());
+    QTest::keyClick(&fixture.window, Qt::Key_Right);
+    QTRY_COMPARE_WITH_TIMEOUT(navigation_spy.size(), 1, 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(fixture.canvas->caretGeometry() != first_caret, 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(fixture.layout_view_model->tableGuidelines().size() == 1 &&
+                                 fixture.layout_view_model->tableGuidelines().front().toMap() !=
+                                     first_cell,
+                             3000);
+    const QVariantMap second_cell = fixture.layout_view_model->tableGuidelines().front().toMap();
+    QCOMPARE(fixture.canvas->tableGuidelines().front().toMap(), second_cell);
+
+    const QPointF page_point(first_cell.value(QStringLiteral("x0Pt")).toReal() +
+                                 (first_cell.value(QStringLiteral("x1Pt")).toReal() -
+                                  first_cell.value(QStringLiteral("x0Pt")).toReal()) /
+                                     2.0,
+                             first_cell.value(QStringLiteral("y0Pt")).toReal() +
+                                 (first_cell.value(QStringLiteral("y1Pt")).toReal() -
+                                  first_cell.value(QStringLiteral("y0Pt")).toReal()) /
+                                     2.0);
+    const QPointF content_point = fixture.canvas->documentToContent(0, page_point);
+    const QPointF window_point =
+        fixture.canvas->mapToItem(fixture.window.contentItem(), content_point);
+    QTest::mouseClick(&fixture.window, Qt::LeftButton, Qt::NoModifier, window_point.toPoint());
+    QTRY_VERIFY_WITH_TIMEOUT(fixture.layout_view_model->tableGuidelines().size() == 1 &&
+                                 fixture.layout_view_model->tableGuidelines().front().toMap() !=
+                                     second_cell,
+                             3000);
+    QCOMPARE(fixture.canvas->tableGuidelines().front().toMap(),
+             fixture.layout_view_model->tableGuidelines().front().toMap());
+    const QVariantMap focused_caret = fixture.layout_view_model->caretGeometry();
+    const QVariantList focused_guidelines = fixture.layout_view_model->tableGuidelines();
+    QSignalSpy stale_interaction_changed(fixture.layout_view_model,
+                                         &caret::LayoutViewModel::interactionChanged);
+    QVERIFY(stale_interaction_changed.isValid());
+    const rust::String current_interaction =
+        caret::ffi::interaction_state_json(*caret::document_runtime());
+    QVERIFY(!std::string_view(current_interaction.data(), current_interaction.size())
+                 .starts_with("error:"));
+    QJsonObject stale_interaction =
+        QJsonDocument::fromJson(QByteArray(current_interaction.data(),
+                                           static_cast<qsizetype>(current_interaction.size())))
+            .object();
+    stale_interaction.insert(QStringLiteral("documentGeneration"), QStringLiteral("0"));
+    QVERIFY(!caret::LayoutViewModelTestProbe::installInteraction(*fixture.layout_view_model,
+                                                                 stale_interaction));
+    QCOMPARE(fixture.layout_view_model->tableGuidelines(), focused_guidelines);
+    QCOMPARE(fixture.layout_view_model->caretGeometry(), focused_caret);
+    QCOMPARE(fixture.canvas->tableGuidelines(), focused_guidelines);
+    QCOMPARE(stale_interaction_changed.size(), 0);
+
+    const QVariantMap focused_cell = fixture.layout_view_model->tableGuidelines().front().toMap();
+    const QPointF outside_point(focused_cell.value(QStringLiteral("x0Pt")).toReal() +
+                                    (focused_cell.value(QStringLiteral("x1Pt")).toReal() -
+                                     focused_cell.value(QStringLiteral("x0Pt")).toReal()) /
+                                        2.0,
+                                focused_cell.value(QStringLiteral("y1Pt")).toReal() + 80.0);
+    const QPointF outside_content = fixture.canvas->documentToContent(0, outside_point);
+    const QPointF outside_window =
+        fixture.canvas->mapToItem(fixture.window.contentItem(), outside_content);
+    QTest::mouseClick(&fixture.window, Qt::LeftButton, Qt::NoModifier, outside_window.toPoint());
+    QTRY_VERIFY_WITH_TIMEOUT(fixture.layout_view_model->tableGuidelines().isEmpty(), 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(fixture.canvas->tableGuidelines().isEmpty(), 3000);
+}
+
+void ShellDocumentInteractionTest::tableThemeTokensRenderAcrossZoomAndWindowFocus() {
+    for (const QString& theme : {QStringLiteral("light"), QStringLiteral("dark")}) {
+        DocumentInteractionFixture fixture;
+        QVERIFY2(prepareDocumentInteractionFixture(fixture, QSize(600, 500), theme, true),
+                 qPrintable(fixture.error));
+        fixture.window.requestActivate();
+        QTRY_VERIFY_WITH_TIMEOUT(fixture.window.isActive(), 3000);
+        fixture.canvas->forceActiveFocus(Qt::OtherFocusReason);
+        QTRY_VERIFY_WITH_TIMEOUT(fixture.canvas->hasActiveFocus(), 3000);
+        const QColor guideline_color = theme == QStringLiteral("light")
+                                           ? QColor(QStringLiteral("#e000c0"))
+                                           : QColor(QStringLiteral("#20c0ff"));
+        const QColor highlight_color = theme == QStringLiteral("light")
+                                           ? QColor(QStringLiteral("#00d060"))
+                                           : QColor(QStringLiteral("#ffc020"));
+        const QColor page_color = theme == QStringLiteral("light")
+                                      ? QColor(QStringLiteral("#ffffff"))
+                                      : QColor(QStringLiteral("#111111"));
+        auto* theme_model = fixture.engine->singletonInstance<caret::ThemeViewModel*>(
+            "Caret.ViewModels", "ThemeViewModel");
+        if (theme_model == nullptr)
+            QFAIL("the page surface requires a theme view model");
+        QCOMPARE(theme_model->activeTheme(), theme);
+
+        const QVariantMap inserted =
+            fixture.layout_view_model->handleEditorKey(QStringLiteral("insert-table"));
+        QVERIFY2(inserted.value(QStringLiteral("valid")).toBool(),
+                 qPrintable(inserted.value(QStringLiteral("error")).toString()));
+        QTRY_COMPARE_WITH_TIMEOUT(fixture.canvas->tableGuidelines().size(), 1, 3000);
+        QTRY_COMPARE_WITH_TIMEOUT(fixture.canvas->blockHighlightRects().size(), 1, 3000);
+        QCOMPARE(fixture.canvas->tableGuidelineColor(), guideline_color);
+        QCOMPARE(fixture.canvas->blockHighlightColor(), highlight_color);
+        QCOMPARE(fixture.canvas->pageColor(), page_color);
+
+        const QVariantMap guideline = fixture.canvas->tableGuidelines().front().toMap();
+        const QVariantMap highlight = fixture.canvas->blockHighlightRects().front().toMap();
+        QCOMPARE(guideline.value(QStringLiteral("pageIndex")).toInt(), 0);
+        QCOMPARE(highlight.value(QStringLiteral("pageIndex")).toInt(), 0);
+        for (const qreal zoom : {1.0, 2.0}) {
+            fixture.canvas->setZoom(zoom);
+            QTRY_COMPARE_WITH_TIMEOUT(fixture.canvas->zoom(), zoom, 3000);
+            QTest::qWait(50);
+            const QImage frame = fixture.window.grabWindow().convertToFormat(QImage::Format_ARGB32);
+            QVERIFY(!frame.isNull());
+            const QRectF highlight_rect(QPointF(highlight.value(QStringLiteral("x0Pt")).toReal(),
+                                                highlight.value(QStringLiteral("y0Pt")).toReal()),
+                                        QPointF(highlight.value(QStringLiteral("x1Pt")).toReal(),
+                                                highlight.value(QStringLiteral("y1Pt")).toReal()));
+            const QRect highlight_pixels =
+                windowPixelRectForDocumentRect(fixture, 0, highlight_rect, frame);
+            QVERIFY2(exactColorPixels(frame, highlight_pixels, highlight_color) > 0,
+                     "the active theme block highlight token must appear in the captured window");
+            QVERIFY2(dashedThemeColorHasSeparatedRuns(fixture, guideline, guideline_color, frame),
+                     "the active theme table token must render separated dashed segments");
+        }
+
+        const QVariantList active_cell = fixture.layout_view_model->tableGuidelines();
+        const QVariantMap active_caret = fixture.layout_view_model->caretGeometry();
+        const QVariantList active_highlights = fixture.canvas->blockHighlightRects();
+        auto* other_focus = new QQuickItem(fixture.window.contentItem());
+        other_focus->forceActiveFocus(Qt::OtherFocusReason);
+        QTRY_VERIFY_WITH_TIMEOUT(other_focus->hasActiveFocus(), 3000);
+        QVERIFY(!fixture.canvas->hasActiveFocus());
+        fixture.canvas->forceActiveFocus(Qt::OtherFocusReason);
+        QTRY_VERIFY_WITH_TIMEOUT(fixture.canvas->hasActiveFocus(), 3000);
+        QCOMPARE(fixture.layout_view_model->tableGuidelines(), active_cell);
+        QCOMPARE(fixture.canvas->tableGuidelines(), active_cell);
+        QCOMPARE(fixture.layout_view_model->caretGeometry(), active_caret);
+        delete other_focus;
+
+        QQuickWindow other_window;
+        other_window.resize(200, 200);
+        other_window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&other_window, 3000));
+        other_window.requestActivate();
+        QTRY_VERIFY_WITH_TIMEOUT(other_window.isActive(), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(!fixture.window.isActive(), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(!fixture.canvas->hasActiveFocus(), 3000);
+        QCOMPARE(fixture.canvas->tableGuidelines(), active_cell);
+        QCOMPARE(fixture.canvas->blockHighlightRects(), active_highlights);
+        fixture.window.requestActivate();
+        QTRY_VERIFY_WITH_TIMEOUT(fixture.window.isActive(), 3000);
+        fixture.canvas->forceActiveFocus(Qt::OtherFocusReason);
+        QTRY_VERIFY_WITH_TIMEOUT(fixture.canvas->hasActiveFocus(), 3000);
+        QCOMPARE(fixture.layout_view_model->tableGuidelines(), active_cell);
+        QCOMPARE(fixture.canvas->tableGuidelines(), active_cell);
+        QCOMPARE(fixture.layout_view_model->caretGeometry(), active_caret);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            dashedThemeColorHasSeparatedRuns(
+                fixture, guideline, guideline_color,
+                fixture.window.grabWindow().convertToFormat(QImage::Format_ARGB32)),
+            3000);
+    }
+}
+
+void ShellDocumentInteractionTest::tablePaintUsesBuiltinThemeColors() {
+    const rust::String catalog = caret::ffi::builtin_theme_catalog();
+    const QByteArray catalog_bytes(catalog.data(), static_cast<qsizetype>(catalog.size()));
+    const QJsonDocument builtin_catalog = QJsonDocument::fromJson(catalog_bytes);
+    QVERIFY(builtin_catalog.isObject());
+    const QScopeGuard restore_theme(
+        [&catalog_bytes] { (void)caret::install_theme_catalog(catalog_bytes); });
+    DocumentInteractionFixture fixture;
+    QVERIFY2(prepareDocumentInteractionFixture(fixture, QSize(920, 500)),
+             qPrintable(fixture.error));
+    const QVariantMap inserted =
+        fixture.layout_view_model->handleEditorKey(QStringLiteral("insert-table"));
+    QVERIFY2(inserted.value(QStringLiteral("valid")).toBool(),
+             qPrintable(inserted.value(QStringLiteral("error")).toString()));
+    QTRY_COMPARE_WITH_TIMEOUT(fixture.canvas->tableGuidelines().size(), 1, 3000);
+    QTRY_COMPARE_WITH_TIMEOUT(fixture.canvas->blockHighlightRects().size(), 1, 3000);
+    const QVariantList active_guidelines = fixture.canvas->tableGuidelines();
+    const QVariantMap guideline = active_guidelines.front().toMap();
+    fixture.canvas->setCaretBlinkEnabled(false);
+    const QVariantMap highlight = fixture.canvas->blockHighlightRects().front().toMap();
+    const QRectF highlight_rect(QPointF(highlight.value(QStringLiteral("x0Pt")).toReal(),
+                                        highlight.value(QStringLiteral("y0Pt")).toReal()),
+                                QPointF(highlight.value(QStringLiteral("x1Pt")).toReal(),
+                                        highlight.value(QStringLiteral("y1Pt")).toReal()));
+    const int page_index = highlight.value(QStringLiteral("pageIndex")).toInt();
+    const auto grid_lines = [&fixture] {
+        return fixture.canvas->glyphFrames()
+            .value(0)
+            .toMap()
+            .value(QStringLiteral("shapes"))
+            .toList();
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(!grid_lines().isEmpty(), 3000);
+    const QVariantMap grid_line = grid_lines().front().toMap();
+    QVERIFY(grid_line.value(QStringLiteral("strokeEnabled")).toBool());
+    const QColor grid_color(grid_line.value(QStringLiteral("strokeRed")).toInt(),
+                            grid_line.value(QStringLiteral("strokeGreen")).toInt(),
+                            grid_line.value(QStringLiteral("strokeBlue")).toInt());
+    for (const QString& theme : {QStringLiteral("light"), QStringLiteral("dark")}) {
+        QJsonObject active_catalog = builtin_catalog.object();
+        active_catalog.insert(QStringLiteral("active"), theme);
+        QVERIFY(caret::install_theme_catalog(QJsonDocument(active_catalog).toJson()));
+        const QJsonObject tokens =
+            active_catalog.value(QStringLiteral("themes")).toObject().value(theme).toObject();
+        const auto token_color = [&tokens](const QString& name) {
+            return QColor::fromString(
+                tokens.value(name).toObject().value(QStringLiteral("value")).toString());
+        };
+        const QColor guideline_color = token_color(QStringLiteral("colorTableGuideline"));
+        const QColor highlight_color =
+            token_color(QStringLiteral("colorBlockEnvironmentHighlight"));
+        QVERIFY(guideline_color.isValid());
+        QVERIFY(highlight_color.isValid());
+        QTRY_COMPARE_WITH_TIMEOUT(fixture.canvas->tableGuidelineColor(), guideline_color, 3000);
+        QTRY_COMPARE_WITH_TIMEOUT(fixture.canvas->blockHighlightColor(), highlight_color, 3000);
+        QVERIFY(highlight_color != guideline_color);
+        QVERIFY(highlight_color != fixture.canvas->pageColor());
+        constexpr int kMinimumLightnessGap = 24;
+        QVERIFY2(std::abs(guideline_color.lightness() - grid_color.lightness()) >
+                     kMinimumLightnessGap,
+                 "the active cell dashes must be distinguishable from the solid grid");
+        QImage baseline;
+        QImage frame;
+        for (const bool show_dashes : {false, true}) {
+            fixture.canvas->setTableGuidelines(show_dashes ? active_guidelines : QVariantList{});
+            const auto capture = fixture.surface->grabToImage();
+            if (capture.isNull())
+                QFAIL("the page surface must support frame capture");
+            QTRY_VERIFY_WITH_TIMEOUT(!capture->image().isNull(), 3000);
+            (show_dashes ? frame : baseline) =
+                capture->image().convertToFormat(QImage::Format_ARGB32);
+        }
+        QCOMPARE(frame.size(), baseline.size());
+        const QRect pixels =
+            windowPixelRectForDocumentRect(fixture, page_index, highlight_rect, frame);
+        QVERIFY(exactColorPixels(frame, pixels, highlight_color) > 0);
+        // 细线可能只有混色像素。相对同一网格和底色比较，避免把实线误认为虚线。
+        const auto distance_to_guideline = [&guideline_color](const QColor& pixel) {
+            return std::abs(pixel.red() - guideline_color.red()) +
+                   std::abs(pixel.green() - guideline_color.green()) +
+                   std::abs(pixel.blue() - guideline_color.blue());
+        };
+        const auto matches_stroke = [&](int x, int y) {
+            constexpr int kMinimumColorChange = 12;
+            return distance_to_guideline(baseline.pixelColor(x, y)) -
+                       distance_to_guideline(frame.pixelColor(x, y)) >=
+                   kMinimumColorChange;
+        };
+        QVERIFY2(dashedGuidelineHasSeparatedRuns(fixture, guideline, frame, matches_stroke),
+                 qPrintable(theme));
+    }
+}
+
+void ShellDocumentInteractionTest::tableBoundaryCaretAndShiftArrowsUseWholeGrid() {
+    DocumentInteractionFixture fixture;
+    QVERIFY2(prepareDocumentInteractionFixture(fixture, QSize(920, 500)),
+             qPrintable(fixture.error));
+    auto* model = fixture.layout_view_model;
+    QVERIFY(model->insertText(QStringLiteral("before")).value(QStringLiteral("valid")).toBool());
+    QVERIFY(model->handleEditorKey(QStringLiteral("insert-table"))
+                .value(QStringLiteral("valid"))
+                .toBool());
+    const QVariantList table_rects = model->blockHighlightRects();
+    QCOMPARE(table_rects.size(), 1);
+    QVERIFY(
+        model->handleEditorKey(QStringLiteral("escape")).value(QStringLiteral("valid")).toBool());
+    QVERIFY(model->insertText(QStringLiteral("after")).value(QStringLiteral("valid")).toBool());
+    const QString generation = model->documentGeneration();
+    const QVariantMap hit_map = model->dragHitMap(0);
+    QVERIFY(hit_map.value(QStringLiteral("valid")).toBool());
+    const QVariantList cells = hit_map.value(QStringLiteral("cellHitRegions")).toList();
+    QCOMPARE(cells.size(), 4);
+    const QVariantMap table = table_rects.front().toMap();
+    const qreal table_top = table.value(QStringLiteral("y0Pt")).toReal();
+    const qreal table_bottom = table.value(QStringLiteral("y1Pt")).toReal();
+    QVariantMap before;
+    QVariantMap after;
+    for (const QVariant& entry : hit_map.value(QStringLiteral("stops")).toList()) {
+        const QVariantMap stop = entry.toMap();
+        const QVariantMap position = stop.value(QStringLiteral("position")).toMap();
+        if (position.value(QStringLiteral("offsetUtf8")).toString() != QStringLiteral("2") ||
+            !stop.value(QStringLiteral("cellId")).toString().isEmpty()) {
+            continue;
+        }
+        if (stop.value(QStringLiteral("y1Pt")).toReal() <= table_top) {
+            before = stop;
+        } else if (stop.value(QStringLiteral("y0Pt")).toReal() >= table_bottom) {
+            after = stop;
+        }
+    }
+    QVERIFY(!before.isEmpty());
+    QVERIFY(!after.isEmpty());
+    fixture.window.requestActivate();
+    fixture.canvas->forceActiveFocus(Qt::OtherFocusReason);
+    QTRY_VERIFY_WITH_TIMEOUT(fixture.canvas->hasActiveFocus(), 3000);
+
+    for (const bool forward : {true, false}) {
+        const QVariantMap& stop = forward ? before : after;
+        const Qt::Key key = forward ? Qt::Key_Down : Qt::Key_Up;
+        const QVariantMap cell = (forward ? cells.front() : cells.back()).toMap();
+        QVERIFY(model->setSelection(stop, stop).value(QStringLiteral("valid")).toBool());
+        QTest::keyClick(&fixture.window, key);
+        const QVariantMap caret = fixture.canvas->caretGeometry();
+        QCOMPARE(caret.value(QStringLiteral("xPt")).toReal(),
+                 cell.value(forward ? QStringLiteral("x0Pt") : QStringLiteral("x1Pt")).toReal());
+        const qreal caret_y_sum = caret.value(QStringLiteral("y0Pt")).toReal() +
+                                  caret.value(QStringLiteral("y1Pt")).toReal();
+        const qreal row_y_sum = cell.value(QStringLiteral("y0Pt")).toReal() +
+                                cell.value(QStringLiteral("y1Pt")).toReal();
+        QVERIFY(std::abs(caret_y_sum - row_y_sum) < 0.01);
+
+        QVERIFY(model->setSelection(stop, stop).value(QStringLiteral("valid")).toBool());
+        QTest::keyClick(&fixture.window, key, Qt::ShiftModifier);
+        QTRY_VERIFY_WITH_TIMEOUT(fixture.canvas->selectionRects().contains(table_rects.front()),
+                                 3000);
+        QCOMPARE(model->documentGeneration(), generation);
+    }
+}
+
+void ShellDocumentInteractionTest::tableGuidelineUsesTheVisiblePageFragment() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString path = directory.filePath(QStringLiteral("many-row-table.cdoc"));
+    QJsonArray rows;
+    for (int row_index = 0; row_index < 70; ++row_index) {
+        const QString row_id = QStringLiteral("row-%1").arg(row_index);
+        const QString cell_id = QStringLiteral("cell-%1").arg(row_index);
+        const QString paragraph_id = QStringLiteral("paragraph-%1").arg(row_index);
+        const QJsonObject paragraph{{QStringLiteral("type"), QStringLiteral("paragraph")},
+                                    {QStringLiteral("id"), paragraph_id},
+                                    {QStringLiteral("inlines"), QJsonArray{}}};
+        const QJsonObject cell{{QStringLiteral("id"), cell_id},
+                               {QStringLiteral("blocks"), QJsonArray{paragraph}}};
+        const QJsonObject row{{QStringLiteral("id"), row_id},
+                              {QStringLiteral("cells"), QJsonArray{cell}}};
+        rows.append(row);
+    }
+    const QJsonObject table{{QStringLiteral("type"), QStringLiteral("table")},
+                            {QStringLiteral("id"), QStringLiteral("long-table")},
+                            {QStringLiteral("rows"), rows}};
+    const QJsonObject page_section{{QStringLiteral("id"), QStringLiteral("section")},
+                                   {QStringLiteral("props"), QJsonObject{}}};
+    const QJsonObject document{
+        {QStringLiteral("format"), QStringLiteral("caret")},
+        {QStringLiteral("version"), 1},
+        {QStringLiteral("requiredFeatures"),
+         QJsonArray{QStringLiteral("caret.paragraph.content-flow.v1"),
+                    QStringLiteral("caret.paragraph.layout-settings"),
+                    QStringLiteral("caret.table.v1"),
+                    QStringLiteral("caret.text.default-font-size")}},
+        {QStringLiteral("media"), QJsonArray{}},
+        {QStringLiteral("document"),
+         QJsonObject{{QStringLiteral("globalSettings"), QJsonObject{}},
+                     {QStringLiteral("body"), QJsonArray{table}},
+                     {QStringLiteral("pageSections"), QJsonArray{page_section}}}}};
+    QFile file(path);
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
+    const QByteArray bytes = QJsonDocument(document).toJson(QJsonDocument::Compact);
+    QCOMPARE(file.write(bytes), bytes.size());
+    file.close();
+
+    DocumentInteractionFixture fixture;
+    QVERIFY2(
+        prepareDocumentInteractionFixture(fixture, QSize(600, 600), QStringLiteral("light"), true),
+        qPrintable(fixture.error));
+    QSignalSpy open_finished(fixture.layout_view_model,
+                             &caret::LayoutViewModel::documentFileOperationFinished);
+    QVERIFY(open_finished.isValid());
+    const QVariantMap open_result = fixture.layout_view_model->openDocument(path);
+    QVERIFY2(open_result.value(QStringLiteral("valid")).toBool(),
+             qPrintable(open_result.value(QStringLiteral("error")).toString()));
+    QTRY_COMPARE_WITH_TIMEOUT(open_finished.size(), 1, 5000);
+    QVERIFY2(open_finished.first().at(0).toBool(),
+             qPrintable(open_finished.first().at(1).toString()));
+    QVERIFY2(fixture.layout_view_model->pageLayouts().size() > 1,
+             "the real table layout must produce multiple pages");
+
+    fixture.window.requestActivate();
+    fixture.canvas->forceActiveFocus(Qt::OtherFocusReason);
+    QTRY_VERIFY_WITH_TIMEOUT(fixture.canvas->hasActiveFocus(), 3000);
+
+    constexpr int visible_page = 1;
+    const QPointF page_origin = fixture.canvas->pageOrigin(visible_page);
+    QVERIFY(fixture.scroller->setProperty("contentY", page_origin.y()));
+    QTRY_VERIFY_WITH_TIMEOUT(fixture.canvas->visiblePageRange().size() == 2 &&
+                                 fixture.canvas->visiblePageRange().at(0).toInt() <= visible_page &&
+                                 fixture.canvas->visiblePageRange().at(1).toInt() > visible_page,
+                             3000);
+
+    const QVariantMap hit_map = fixture.layout_view_model->dragHitMap(visible_page);
+    QVERIFY2(hit_map.value(QStringLiteral("valid")).toBool(),
+             qPrintable(hit_map.value(QStringLiteral("error")).toString()));
+    const QVariantList cells = hit_map.value(QStringLiteral("cellHitRegions")).toList();
+    QVERIFY(!cells.isEmpty());
+    const QVariantMap cell = cells.front().toMap();
+    const QPointF center((cell.value(QStringLiteral("x0Pt")).toReal() +
+                          cell.value(QStringLiteral("x1Pt")).toReal()) /
+                             2.0,
+                         (cell.value(QStringLiteral("y0Pt")).toReal() +
+                          cell.value(QStringLiteral("y1Pt")).toReal()) /
+                             2.0);
+    const QPointF window_point = fixture.canvas->mapToItem(
+        fixture.window.contentItem(), fixture.canvas->documentToContent(visible_page, center));
+    QVERIFY(QRectF(QPointF(0.0, 0.0), QSizeF(fixture.window.size())).contains(window_point));
+    QTest::mouseClick(&fixture.window, Qt::LeftButton, Qt::NoModifier, window_point.toPoint());
+    QTRY_VERIFY_WITH_TIMEOUT(fixture.layout_view_model->tableGuidelines().size() == 1 &&
+                                 fixture.layout_view_model->tableGuidelines()
+                                         .front()
+                                         .toMap()
+                                         .value(QStringLiteral("pageIndex"))
+                                         .toInt() == visible_page,
+                             3000);
+    const QVariantMap guideline = fixture.layout_view_model->tableGuidelines().front().toMap();
+    QCOMPARE(fixture.canvas->tableGuidelines(), fixture.layout_view_model->tableGuidelines());
+    const QColor guideline_color(QStringLiteral("#e000c0"));
+    QCOMPARE(fixture.canvas->tableGuidelineColor(), guideline_color);
+
+    // 请求 PageSurface 重新渲染完整视口，避免窗口截图读到软件后端的部分重绘缓冲。
+    const auto capture = fixture.surface->grabToImage();
+    if (capture.isNull())
+        QFAIL("the visible page surface must support frame capture");
+    QTRY_VERIFY_WITH_TIMEOUT(!capture->image().isNull(), 3000);
+    const QImage frame = capture->image().convertToFormat(QImage::Format_ARGB32);
+    QVERIFY(dashedThemeColorHasSeparatedRuns(fixture, guideline, guideline_color, frame));
+}
+
+void ShellDocumentInteractionTest::tableDragSelectsAcrossUnevenCells() {
+    DocumentInteractionFixture fixture;
+    QVERIFY2(prepareDocumentInteractionFixture(fixture), qPrintable(fixture.error));
+    auto* model = fixture.layout_view_model;
+    QVERIFY(model->handleEditorKey(QStringLiteral("insert-table"))
+                .value(QStringLiteral("valid"))
+                .toBool());
+    const auto caret_midpoint = [](const QVariantMap& caret) {
+        return QPointF(caret.value(QStringLiteral("xPt")).toReal(),
+                       (caret.value(QStringLiteral("y0Pt")).toReal() +
+                        caret.value(QStringLiteral("y1Pt")).toReal()) /
+                           2.0);
+    };
+    QVERIFY(model->insertText(QStringLiteral("first")).value(QStringLiteral("valid")).toBool());
+    const QPointF left_start = caret_midpoint(model->caretGeometry());
+    for (int line = 0; line < 3; ++line) {
+        QVERIFY(model->handleEditorKey(QStringLiteral("enter"))
+                    .value(QStringLiteral("valid"))
+                    .toBool());
+        QVERIFY(
+            model->insertText(QStringLiteral("long cell")).value(QStringLiteral("valid")).toBool());
+    }
+    const QPointF left_end = caret_midpoint(model->caretGeometry());
+    QVERIFY(model->handleEditorKey(QStringLiteral("tab")).value(QStringLiteral("valid")).toBool());
+    QVERIFY(model->insertText(QStringLiteral("short")).value(QStringLiteral("valid")).toBool());
+    const QVariantMap right_caret = model->caretGeometry();
+    QCOMPARE(model->tableGuidelines().size(), 1);
+    const QVariantMap right_cell = model->tableGuidelines().front().toMap();
+    const QPointF right_blank(caret_midpoint(right_caret).x(), left_end.y());
+    QVERIFY(right_blank.y() > right_caret.value(QStringLiteral("y1Pt")).toReal());
+    QVERIFY(right_blank.y() < right_cell.value(QStringLiteral("y1Pt")).toReal());
+
+    const QVariantList table_rect = model->blockHighlightRects();
+    QCOMPARE(table_rect.size(), 1);
+    const QString generation = model->documentGeneration();
+    const auto window_point = [&fixture](QPointF point) {
+        return fixture.canvas->mapToItem(fixture.window.contentItem(),
+                                         fixture.canvas->documentToContent(0, point));
+    };
+    const QPointF start = window_point(left_start);
+    const QPointF end = window_point(right_blank);
+    QTest::mousePress(&fixture.window, Qt::LeftButton, Qt::NoModifier, start.toPoint());
+    QMouseEvent move(QEvent::MouseMove, end, end, fixture.window.mapToGlobal(end.toPoint()),
+                     Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(&fixture.window, &move);
+    QTRY_VERIFY_WITH_TIMEOUT(fixture.pointer_handler->property("selectionDragActive").toBool(),
+                             3000);
+    QTRY_COMPARE_WITH_TIMEOUT(model->selectionRects(), table_rect, 3000);
+    QTest::mouseRelease(&fixture.window, Qt::LeftButton, Qt::NoModifier, end.toPoint());
+    QTRY_COMPARE_WITH_TIMEOUT(fixture.canvas->selectionRects(), table_rect, 3000);
+    QCOMPARE(model->documentGeneration(), generation);
+}
+
+void ShellDocumentInteractionTest::tableDragFromPreeditSelectsAcrossCells() {
+    DocumentInteractionFixture fixture;
+    QVERIFY2(prepareDocumentInteractionFixture(fixture), qPrintable(fixture.error));
+    auto* model = fixture.layout_view_model;
+    QVERIFY(model->handleEditorKey(QStringLiteral("insert-table"))
+                .value(QStringLiteral("valid"))
+                .toBool());
+    const QVariantList table_rect = model->blockHighlightRects();
+    QCOMPARE(table_rect.size(), 1);
+    const QString generation = model->documentGeneration();
+    fixture.canvas->forceActiveFocus(Qt::OtherFocusReason);
+    const QString preedit_text = QStringLiteral("nihong");
+    QInputMethodEvent preedit(preedit_text, {});
+    QCoreApplication::sendEvent(fixture.canvas, &preedit);
+    QTRY_VERIFY_WITH_TIMEOUT(!model->compositionRects().isEmpty(), 3000);
+
+    const auto stops = model->dragHitMap(0).value(QStringLiteral("stops")).toList();
+    const QString preedit_end = QString::number(preedit_text.toUtf8().size());
+    QVariantMap preedit_stop;
+    for (const QVariant& stop_value : stops) {
+        const auto stop = stop_value.toMap();
+        const auto position = stop.value(QStringLiteral("position")).toMap();
+        if (position.value(QStringLiteral("offsetUtf8")) == preedit_end) {
+            preedit_stop = stop;
+            break;
+        }
+    }
+    QVERIFY(!preedit_stop.isEmpty());
+    const QString preedit_cell = preedit_stop.value(QStringLiteral("cellId")).toString();
+    QVERIFY(!preedit_cell.isEmpty());
+    QVariantMap other_cell_stop;
+    for (const QVariant& stop_value : stops) {
+        const auto stop = stop_value.toMap();
+        const QString cell = stop.value(QStringLiteral("cellId")).toString();
+        if (!cell.isEmpty() && cell != preedit_cell) {
+            other_cell_stop = stop;
+            break;
+        }
+    }
+    QVERIFY(!other_cell_stop.isEmpty());
+
+    const QPointF start = documentStopWindowPoint(fixture, preedit_stop);
+    const QPointF end = documentStopWindowPoint(fixture, other_cell_stop);
+    QTest::mousePress(&fixture.window, Qt::LeftButton, Qt::NoModifier, start.toPoint());
+    QMouseEvent move(QEvent::MouseMove, end, end, fixture.window.mapToGlobal(end.toPoint()),
+                     Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(&fixture.window, &move);
+    QTRY_COMPARE_WITH_TIMEOUT(model->selectionRects(), table_rect, 3000);
+    QVERIFY(model->compositionRects().isEmpty());
+    QVERIFY(fixture.canvas->preeditText().isEmpty());
+    QTest::mouseRelease(&fixture.window, Qt::LeftButton, Qt::NoModifier, end.toPoint());
+    QTRY_COMPARE_WITH_TIMEOUT(fixture.canvas->selectionRects(), table_rect, 3000);
+    QCOMPARE(model->documentGeneration(), generation);
+}
+
+void ShellDocumentInteractionTest::textDragFromPreeditKeepsTheMappedAnchor() {
+    DocumentInteractionFixture fixture;
+    QVERIFY2(prepareDocumentInteractionFixture(fixture), qPrintable(fixture.error));
+    auto* model = fixture.layout_view_model;
+    const QString source = QStringLiteral("abcdefghijklmnopqrstuvwxyz");
+    QVERIFY(model->insertText(source).value(QStringLiteral("valid")).toBool());
+    const QString paragraph_id =
+        model->paragraphLayouts().first().toMap().value(QStringLiteral("paragraphId")).toString();
+    const int anchor_offset = 3;
+    const QVariantMap original_anchor =
+        findBodyDragStop(model->dragHitMap(0), paragraph_id, anchor_offset);
+    QVERIFY(!original_anchor.isEmpty());
+    QVERIFY(model->setSelection(original_anchor, original_anchor)
+                .value(QStringLiteral("valid"))
+                .toBool());
+    const QString generation = model->documentGeneration();
+    fixture.canvas->forceActiveFocus(Qt::OtherFocusReason);
+    const QString preedit_text = QStringLiteral("12345");
+    QInputMethodEvent preedit(preedit_text, {});
+    QCoreApplication::sendEvent(fixture.canvas, &preedit);
+    QTRY_VERIFY_WITH_TIMEOUT(!model->compositionRects().isEmpty(), 3000);
+
+    const QVariantMap hit_map = model->dragHitMap(0);
+    const int preedit_length = static_cast<int>(preedit_text.toUtf8().size());
+    const int source_length = static_cast<int>(source.toUtf8().size());
+    const QVariantMap preview_anchor =
+        findBodyDragStop(hit_map, paragraph_id, anchor_offset + preedit_length);
+    const QVariantMap preview_focus =
+        findBodyDragStop(hit_map, paragraph_id, source_length + preedit_length);
+    QVERIFY(!preview_anchor.isEmpty());
+    QVERIFY(!preview_focus.isEmpty());
+    const QPointF start = documentStopWindowPoint(fixture, preview_anchor);
+    const QPointF end = documentStopWindowPoint(fixture, preview_focus);
+    QTest::mousePress(&fixture.window, Qt::LeftButton, Qt::NoModifier, start.toPoint());
+    QMouseEvent move(QEvent::MouseMove, end, end, fixture.window.mapToGlobal(end.toPoint()),
+                     Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(&fixture.window, &move);
+    QTRY_VERIFY_WITH_TIMEOUT(!model->selectionRects().isEmpty(), 3000);
+    QTest::mouseRelease(&fixture.window, Qt::LeftButton, Qt::NoModifier, end.toPoint());
+    const QVariantMap input_context = model->inputMethodContext();
+    QCOMPARE(input_context.value(QStringLiteral("anchorPosition")).toInt(), anchor_offset);
+    QCOMPARE(input_context.value(QStringLiteral("cursorPosition")).toInt(), source_length);
+    QCOMPARE(input_context.value(QStringLiteral("surroundingText")).toString(), source);
+    QCOMPARE(model->documentGeneration(), generation);
+}
+
+void ShellDocumentInteractionTest::tableDragSelectsACellContainingOnlyDisplayMath() {
+    DocumentInteractionFixture fixture;
+    QVERIFY2(
+        installClipboardDocumentRuntime(QByteArray(kTableWithDisplayMathDocument), &fixture.error),
+        qPrintable(fixture.error));
+    QVERIFY2(fixture.initialize({500, 500}), qPrintable(fixture.error));
+    auto* model = fixture.layout_view_model;
+    const QVariantMap hit_map = model->dragHitMap(0);
+    const QVariantMap body_stop = findBodyDragStop(hit_map, QStringLiteral("text"), 0);
+    QVERIFY(!body_stop.isEmpty());
+    QVERIFY(model->setSelection(body_stop, body_stop).value(QStringLiteral("valid")).toBool());
+    const QVariantList table_rect = model->blockHighlightRects();
+    QCOMPARE(table_rect.size(), 1);
+    QVariantMap formula_cell;
+    for (const QVariant& entry : hit_map.value(QStringLiteral("cellHitRegions")).toList()) {
+        const auto region = entry.toMap();
+        if (region.value(QStringLiteral("cellId")) == QStringLiteral("right")) {
+            formula_cell = region;
+            break;
+        }
+    }
+    QVERIFY(!formula_cell.isEmpty());
+    const QPointF cell_point(formula_cell.value(QStringLiteral("x0Pt")).toReal() + 6.0,
+                             formula_cell.value(QStringLiteral("y1Pt")).toReal() - 3.0);
+    bool has_formula_boundary = false;
+    for (const QVariant& entry : hit_map.value(QStringLiteral("stops")).toList()) {
+        const auto stop = entry.toMap();
+        if (stop.value(QStringLiteral("cellId")) == QStringLiteral("right") &&
+            stop.value(QStringLiteral("domainId")) == QStringLiteral("body")) {
+            has_formula_boundary = true;
+            QVERIFY(stop.value(QStringLiteral("y1Pt")).toReal() < cell_point.y());
+        }
+    }
+    QVERIFY(has_formula_boundary);
+    const QPointF start = documentStopWindowPoint(fixture, body_stop);
+    const QPointF end = fixture.canvas->mapToItem(fixture.window.contentItem(),
+                                                  fixture.canvas->documentToContent(0, cell_point));
+    const QString generation = model->documentGeneration();
+    for (const bool forward : {true, false}) {
+        QVERIFY(model->clearSelection().value(QStringLiteral("valid")).toBool());
+        const QPointF anchor = forward ? start : end;
+        const QPointF focus = forward ? end : start;
+        QTest::mousePress(&fixture.window, Qt::LeftButton, Qt::NoModifier, anchor.toPoint());
+        QMouseEvent move(QEvent::MouseMove, focus, focus,
+                         fixture.window.mapToGlobal(focus.toPoint()), Qt::NoButton, Qt::LeftButton,
+                         Qt::NoModifier);
+        QCoreApplication::sendEvent(&fixture.window, &move);
+        QTRY_COMPARE_WITH_TIMEOUT(model->selectionRects(), table_rect, 3000);
+        QTest::mouseRelease(&fixture.window, Qt::LeftButton, Qt::NoModifier, focus.toPoint());
+        QTRY_COMPARE_WITH_TIMEOUT(fixture.canvas->selectionRects(), table_rect, 3000);
+    }
+    QCOMPARE(model->documentGeneration(), generation);
+}
+
+void ShellDocumentInteractionTest::tableShapeShortcutsMutateThroughTheFocusedViewModel() {
+    DocumentInteractionFixture fixture;
+    QVERIFY2(prepareDocumentInteractionFixture(fixture), qPrintable(fixture.error));
+    const QVariantMap inserted =
+        fixture.layout_view_model->handleEditorKey(QStringLiteral("insert-table"));
+    QVERIFY2(inserted.value(QStringLiteral("valid")).toBool(),
+             qPrintable(inserted.value(QStringLiteral("error")).toString()));
+    QTRY_COMPARE_WITH_TIMEOUT(fixture.layout_view_model->tableGuidelines().size(), 1, 3000);
+    fixture.canvas->forceActiveFocus(Qt::OtherFocusReason);
+    QTRY_VERIFY_WITH_TIMEOUT(fixture.canvas->hasActiveFocus(), 3000);
+
+    // QKeyEvent 经焦点画布、QML 信号处理器和 LayoutViewModel 进入 Rust；每次表格结构编辑
+    // 安装后都会推进文档代际。
+    QSignalSpy editor_key_spy(fixture.canvas, &caret::DocumentCanvas::editorKeyRequested);
+    QVERIFY(editor_key_spy.isValid());
+    const auto send_and_wait_for_edit =
+        [&fixture, &editor_key_spy](Qt::Key key, Qt::KeyboardModifiers modifiers,
+                                    const QString& expected_intent) {
+            const QString previous_generation = fixture.layout_view_model->documentGeneration();
+            QTest::keyClick(&fixture.window, key, modifiers);
+            QTRY_COMPARE_WITH_TIMEOUT(editor_key_spy.size(), 1, 3000);
+            QCOMPARE(editor_key_spy.takeFirst().at(0).toString(), expected_intent);
+            QTRY_VERIFY_WITH_TIMEOUT(
+                fixture.layout_view_model->documentGeneration() != previous_generation, 3000);
+        };
+#ifdef Q_OS_MACOS
+    const Qt::KeyboardModifiers insert_modifiers =
+        caret::keyboard::physicalControlModifier() | Qt::AltModifier | Qt::ShiftModifier;
+    send_and_wait_for_edit(Qt::Key_Down, insert_modifiers,
+                           QStringLiteral("table-insert-row-after"));
+    send_and_wait_for_edit(Qt::Key_Right, insert_modifiers,
+                           QStringLiteral("table-insert-col-after"));
+#else
+    send_and_wait_for_edit(Qt::Key_Down, Qt::AltModifier, QStringLiteral("table-insert-row-after"));
+    const Qt::KeyboardModifiers alternate_modifiers =
+        caret::keyboard::physicalControlModifier() | Qt::AltModifier | Qt::ShiftModifier;
+    send_and_wait_for_edit(Qt::Key_Down, alternate_modifiers,
+                           QStringLiteral("table-insert-row-after"));
+    send_and_wait_for_edit(Qt::Key_Right, Qt::AltModifier,
+                           QStringLiteral("table-insert-col-after"));
+    send_and_wait_for_edit(Qt::Key_Right, alternate_modifiers,
+                           QStringLiteral("table-insert-col-after"));
+#endif
+    const Qt::KeyboardModifiers delete_row_modifiers = Qt::AltModifier | Qt::ShiftModifier;
+    const Qt::KeyboardModifiers delete_column_modifiers = Qt::AltModifier;
+    send_and_wait_for_edit(Qt::Key_Backspace, delete_row_modifiers,
+                           QStringLiteral("table-delete-row-backspace"));
+    send_and_wait_for_edit(Qt::Key_Delete, delete_row_modifiers,
+                           QStringLiteral("table-delete-row-delete"));
+    send_and_wait_for_edit(Qt::Key_Backspace, delete_column_modifiers,
+                           QStringLiteral("table-delete-column-backspace"));
+    send_and_wait_for_edit(Qt::Key_Delete, delete_column_modifiers,
+                           QStringLiteral("table-delete-column-delete"));
 }
 
 void ShellDocumentInteractionTest::documentCanvasRasterizesTypedGlyphWithInk() {
@@ -2068,48 +2949,36 @@ void ShellDocumentInteractionTest::multilinePasteSplitsParagraphs() {
 
 void ShellDocumentInteractionTest::insertReplacementClearsSelectionAndPublishesInteractionChange() {
     DocumentInteractionFixture fixture;
-    QVERIFY2(prepareDocumentInteractionAt(fixture, 10), qPrintable(fixture.error));
-    const QVariantMap replacement_hit_map = fixture.layout_view_model->dragHitMap(0);
-    QVERIFY(replacement_hit_map.value(QStringLiteral("valid")).toBool());
-    const QString replacement_source = fixture.layout_view_model->paragraphLayouts()
-                                           .first()
-                                           .toMap()
-                                           .value(QStringLiteral("text"))
-                                           .toString();
-    const QString replacement_end = QString::number(replacement_source.toUtf8().size());
-    QVariantMap replacement_start_stop;
-    QVariantMap replacement_end_stop;
-    for (const QVariant& stop_value : replacement_hit_map.value(QStringLiteral("stops")).toList()) {
-        const QVariantMap stop = stop_value.toMap();
-        const QString offset = stop.value(QStringLiteral("position"))
-                                   .toMap()
-                                   .value(QStringLiteral("offsetUtf8"))
-                                   .toString();
-        if (offset == QStringLiteral("0")) {
-            replacement_start_stop = stop;
-        }
-        if (offset == replacement_end) {
-            replacement_end_stop = stop;
-        }
-    }
-    QVERIFY(!replacement_start_stop.isEmpty());
-    QVERIFY(!replacement_end_stop.isEmpty());
-    QVERIFY(fixture.layout_view_model->setSelection(replacement_start_stop, replacement_end_stop)
-                .value(QStringLiteral("valid"))
-                .toBool());
-    QVERIFY(!fixture.layout_view_model->selectionRects().isEmpty());
-    QSignalSpy interaction_changed_spy(fixture.layout_view_model,
-                                       &caret::LayoutViewModel::interactionChanged);
+    QVERIFY2(prepareDocumentInteractionFixture(fixture), qPrintable(fixture.error));
+    auto* model = fixture.layout_view_model;
+    const QString source = QStringLiteral("original text");
+    const QString neighbor = QStringLiteral("next paragraph");
+    QVERIFY(model->insertText(source).value(QStringLiteral("valid")).toBool());
+    QVERIFY(
+        model->handleEditorKey(QStringLiteral("enter")).value(QStringLiteral("valid")).toBool());
+    QVERIFY(model->insertText(neighbor).value(QStringLiteral("valid")).toBool());
+    const QVariantList paragraphs = model->paragraphLayouts();
+    QCOMPARE(paragraphs.size(), 2);
+    const QString paragraph_key = QStringLiteral("paragraphId");
+    const QString source_id = paragraphs[0].toMap().value(paragraph_key).toString();
+    const QString neighbor_id = paragraphs[1].toMap().value(paragraph_key).toString();
+    const QVariantMap hit_map = model->dragHitMap(0);
+    const QVariantMap start = findBodyDragStop(hit_map, source_id, 0);
+    const QVariantMap end =
+        findBodyDragStop(hit_map, source_id, static_cast<int>(source.toUtf8().size()));
+    QVERIFY(!start.isEmpty());
+    QVERIFY(!end.isEmpty());
+    QVERIFY(model->setSelection(start, end).value(QStringLiteral("valid")).toBool());
+    QVERIFY(!model->selectionRects().isEmpty());
+    QSignalSpy interaction_changed_spy(model, &caret::LayoutViewModel::interactionChanged);
     QVERIFY(interaction_changed_spy.isValid());
-    QVERIFY(fixture.layout_view_model->insertText(QStringLiteral("replacement"))
-                .value(QStringLiteral("valid"))
-                .toBool());
+    const QString replacement = QStringLiteral("replacement");
+    QVERIFY(model->insertText(replacement).value(QStringLiteral("valid")).toBool());
     QVERIFY(interaction_changed_spy.size() > 0);
-    QVERIFY(fixture.layout_view_model->selectionRects().isEmpty());
-    QCOMPARE(fixture.layout_view_model->inputMethodContext()
-                 .value(QStringLiteral("surroundingText"))
-                 .toString(),
-             QStringLiteral("replacement"));
+    QVERIFY(model->selectionRects().isEmpty());
+    QCOMPARE(model->inputMethodContext().value(QStringLiteral("surroundingText")).toString(),
+             replacement);
+    QCOMPARE(paragraph_text_by_id(*model, neighbor_id), neighbor);
 }
 
 void ShellDocumentInteractionTest::crossPageDragPreviewIncludesIntermediatePages() {
@@ -3180,6 +4049,90 @@ void ShellDocumentInteractionTest::richClipboardBlocksPasteRoundTripsDisplayMath
     QCOMPARE(view_model.documentGeneration(), QStringLiteral("3"));
     QCOMPARE(math_fragment_count(view_model), 4);
     QCOMPARE(inline_math_placeholder_count(view_model), 2);
+}
+
+void ShellDocumentInteractionTest::richClipboardRoundTripsATableAndItsDisplayMath() {
+    QString error;
+    QVERIFY2(installClipboardDocumentRuntime(QByteArray(kTableWithDisplayMathDocument), &error),
+             qPrintable(error));
+    {
+        caret::LayoutViewModel source;
+        const QVariantMap map = source.dragHitMap(0);
+        const QVariantMap text = findBodyDragStop(map, QStringLiteral("text"), 0);
+        QVERIFY(!text.isEmpty());
+        QVariantMap formula;
+        for (const QVariant& entry : map.value(QStringLiteral("stops")).toList()) {
+            const QVariantMap stop = entry.toMap();
+            if (stop.value(QStringLiteral("cellId")) == QStringLiteral("right") &&
+                stop.value(QStringLiteral("domainId")) == QStringLiteral("body")) {
+                formula = stop;
+                break;
+            }
+        }
+        QVERIFY(!formula.isEmpty());
+        QVERIFY(source.setSelection(text, formula).value(QStringLiteral("valid")).toBool());
+        const QVariantMap copied = source.copySelectionToClipboard();
+        QVERIFY2(copied.value(QStringLiteral("valid")).toBool(),
+                 qPrintable(copied.value(QStringLiteral("error")).toString()));
+    }
+
+    const QMimeData* mime = QGuiApplication::clipboard()->mimeData();
+    if (mime == nullptr)
+        QFAIL("clipboard must expose the copied MIME data");
+    QVERIFY(mime->hasFormat(clipboard_fragment_mime_name()));
+    const QJsonObject envelope =
+        QJsonDocument::fromJson(mime->data(clipboard_fragment_mime_name())).object();
+    QCOMPARE(envelope.value(QStringLiteral("shape")).toString(), QStringLiteral("blocks"));
+    const QJsonArray blocks = envelope.value(QStringLiteral("blocks")).toArray();
+    QCOMPARE(blocks.size(), 1);
+    QCOMPARE(blocks[0].toObject().value(QStringLiteral("type")).toString(),
+             QStringLiteral("table"));
+    QVERIFY(mime->text().startsWith(QStringLiteral("body text")));
+    QVERIFY(mime->text().contains(QStringLiteral("\t\\[x\\]")));
+    QVERIFY(!mime->text().contains(QChar(0xFFFC)));
+
+    QVERIFY2(installBlankInteractionRuntime(&error), qPrintable(error));
+    caret::LayoutViewModel destination;
+    const QVariantMap pasted = destination.pasteFromClipboard();
+    QVERIFY2(pasted.value(QStringLiteral("valid")).toBool(),
+             qPrintable(pasted.value(QStringLiteral("error")).toString()));
+    const auto pasted_regions =
+        destination.dragHitMap(0).value(QStringLiteral("cellHitRegions")).toList();
+    QCOMPARE(pasted_regions.size(), 2);
+    for (const QVariant& entry : pasted_regions) {
+        const QString id = entry.toMap().value(QStringLiteral("cellId")).toString();
+        QVERIFY(!id.isEmpty());
+        QVERIFY(id != QStringLiteral("left") && id != QStringLiteral("right"));
+    }
+    const auto table_formula_ids = [](caret::LayoutViewModel& model) {
+        QSet<QString> ids;
+        for (const QVariant& entry : model.dragHitMap(0).value(QStringLiteral("stops")).toList()) {
+            const auto stop = entry.toMap();
+            if (stop.value(QStringLiteral("cellId")).toString().isEmpty()) {
+                continue;
+            }
+            const QString block_id = stop.value(QStringLiteral("position"))
+                                         .toMap()
+                                         .value(QStringLiteral("target"))
+                                         .toMap()
+                                         .value(QStringLiteral("blockId"))
+                                         .toString();
+            if (!block_id.isEmpty()) {
+                ids.insert(block_id);
+            }
+        }
+        return ids;
+    };
+    const auto pasted_formulas = table_formula_ids(destination);
+    QCOMPARE(pasted_formulas.size(), 1);
+    QVERIFY(!pasted_formulas.contains(QStringLiteral("formula")));
+    QVERIFY(destination.undo().value(QStringLiteral("valid")).toBool());
+    QVERIFY(destination.dragHitMap(0).value(QStringLiteral("cellHitRegions")).toList().isEmpty());
+    QVERIFY(table_formula_ids(destination).isEmpty());
+    QVERIFY(destination.redo().value(QStringLiteral("valid")).toBool());
+    QCOMPARE(destination.dragHitMap(0).value(QStringLiteral("cellHitRegions")).toList(),
+             pasted_regions);
+    QCOMPARE(table_formula_ids(destination), pasted_formulas);
 }
 
 void ShellDocumentInteractionTest::richClipboardRejectsInvalidFragmentPayload() {
