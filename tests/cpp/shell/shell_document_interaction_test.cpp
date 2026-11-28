@@ -1198,20 +1198,15 @@ qsizetype exactColorPixels(const QImage& frame, const QRect& rect, const QColor&
     return count;
 }
 
-bool dashedThemeColorHasSeparatedRuns(DocumentInteractionFixture& fixture,
-                                      const QVariantMap& guideline, const QColor& color,
-                                      const QImage& frame, int tolerance = 96) {
+template <typename MatchesStroke>
+bool dashedGuidelineHasSeparatedRuns(DocumentInteractionFixture& fixture,
+                                     const QVariantMap& guideline, const QImage& frame,
+                                     const MatchesStroke& matches_stroke) {
     const int page_index = guideline.value(QStringLiteral("pageIndex")).toInt();
     const qreal x0 = guideline.value(QStringLiteral("x0Pt")).toReal();
     const qreal x1 = guideline.value(QStringLiteral("x1Pt")).toReal();
     const qreal y0 = guideline.value(QStringLiteral("y0Pt")).toReal();
     const qreal y1 = guideline.value(QStringLiteral("y1Pt")).toReal();
-    const auto matches_token = [&frame, &color, tolerance](int x, int y) {
-        const QColor pixel = frame.pixelColor(x, y);
-        return pixel.alpha() > 128 && std::abs(pixel.red() - color.red()) <= tolerance &&
-               std::abs(pixel.green() - color.green()) <= tolerance &&
-               std::abs(pixel.blue() - color.blue()) <= tolerance;
-    };
     const auto has_separated_runs = [](int first, int last, const auto& is_colored) {
         bool saw_color = false;
         int gap = 0;
@@ -1239,7 +1234,7 @@ bool dashedThemeColorHasSeparatedRuns(DocumentInteractionFixture& fixture,
             frame);
         for (int y = pixels.top(); y <= pixels.bottom(); ++y) {
             if (has_separated_runs(pixels.left(), pixels.right(),
-                                   [&](int x) { return matches_token(x, y); })) {
+                                   [&](int x) { return matches_stroke(x, y); })) {
                 return true;
             }
         }
@@ -1252,12 +1247,24 @@ bool dashedThemeColorHasSeparatedRuns(DocumentInteractionFixture& fixture,
             frame);
         for (int x = pixels.left(); x <= pixels.right(); ++x) {
             if (has_separated_runs(pixels.top(), pixels.bottom(),
-                                   [&](int y) { return matches_token(x, y); })) {
+                                   [&](int y) { return matches_stroke(x, y); })) {
                 return true;
             }
         }
     }
     return false;
+}
+
+bool dashedThemeColorHasSeparatedRuns(DocumentInteractionFixture& fixture,
+                                      const QVariantMap& guideline, const QColor& color,
+                                      const QImage& frame) {
+    return dashedGuidelineHasSeparatedRuns(fixture, guideline, frame, [&](int x, int y) {
+        const QColor pixel = frame.pixelColor(x, y);
+        constexpr int kAntialiasTolerance = 96;
+        return pixel.alpha() > 128 && std::abs(pixel.red() - color.red()) <= kAntialiasTolerance &&
+               std::abs(pixel.green() - color.green()) <= kAntialiasTolerance &&
+               std::abs(pixel.blue() - color.blue()) <= kAntialiasTolerance;
+    });
 }
 
 bool waitForGlyphFrame(DocumentInteractionFixture& fixture, const QString& generation,
@@ -1877,7 +1884,9 @@ void ShellDocumentInteractionTest::tablePaintUsesBuiltinThemeColors() {
              qPrintable(inserted.value(QStringLiteral("error")).toString()));
     QTRY_COMPARE_WITH_TIMEOUT(fixture.canvas->tableGuidelines().size(), 1, 3000);
     QTRY_COMPARE_WITH_TIMEOUT(fixture.canvas->blockHighlightRects().size(), 1, 3000);
-    const QVariantMap guideline = fixture.canvas->tableGuidelines().front().toMap();
+    const QVariantList active_guidelines = fixture.canvas->tableGuidelines();
+    const QVariantMap guideline = active_guidelines.front().toMap();
+    fixture.canvas->setCaretBlinkEnabled(false);
     const QVariantMap highlight = fixture.canvas->blockHighlightRects().front().toMap();
     const QRectF highlight_rect(QPointF(highlight.value(QStringLiteral("x0Pt")).toReal(),
                                         highlight.value(QStringLiteral("y0Pt")).toReal()),
@@ -1916,21 +1925,39 @@ void ShellDocumentInteractionTest::tablePaintUsesBuiltinThemeColors() {
         QTRY_COMPARE_WITH_TIMEOUT(fixture.canvas->blockHighlightColor(), highlight_color, 3000);
         QVERIFY(highlight_color != guideline_color);
         QVERIFY(highlight_color != fixture.canvas->pageColor());
-        // 生产主题的边缘像素可能混色，给虚线与实线各保留互不重叠的采样范围。
-        constexpr int kEdgeTolerance = 12;
+        constexpr int kMinimumLightnessGap = 24;
         QVERIFY2(std::abs(guideline_color.lightness() - grid_color.lightness()) >
-                     2 * kEdgeTolerance,
+                     kMinimumLightnessGap,
                  "the active cell dashes must be distinguishable from the solid grid");
-        const auto capture = fixture.surface->grabToImage();
-        if (capture.isNull())
-            QFAIL("the page surface must support frame capture");
-        QTRY_VERIFY_WITH_TIMEOUT(!capture->image().isNull(), 3000);
-        const QImage frame = capture->image().convertToFormat(QImage::Format_ARGB32);
+        QImage baseline;
+        QImage frame;
+        for (const bool show_dashes : {false, true}) {
+            fixture.canvas->setTableGuidelines(show_dashes ? active_guidelines : QVariantList{});
+            const auto capture = fixture.surface->grabToImage();
+            if (capture.isNull())
+                QFAIL("the page surface must support frame capture");
+            QTRY_VERIFY_WITH_TIMEOUT(!capture->image().isNull(), 3000);
+            (show_dashes ? frame : baseline) =
+                capture->image().convertToFormat(QImage::Format_ARGB32);
+        }
+        QCOMPARE(frame.size(), baseline.size());
         const QRect pixels =
             windowPixelRectForDocumentRect(fixture, page_index, highlight_rect, frame);
         QVERIFY(exactColorPixels(frame, pixels, highlight_color) > 0);
-        QVERIFY(dashedThemeColorHasSeparatedRuns(fixture, guideline, guideline_color, frame,
-                                                 kEdgeTolerance));
+        // 细线可能只有混色像素。相对同一网格和底色比较，避免把实线误认为虚线。
+        const auto distance_to_guideline = [&guideline_color](const QColor& pixel) {
+            return std::abs(pixel.red() - guideline_color.red()) +
+                   std::abs(pixel.green() - guideline_color.green()) +
+                   std::abs(pixel.blue() - guideline_color.blue());
+        };
+        const auto matches_stroke = [&](int x, int y) {
+            constexpr int kMinimumColorChange = 12;
+            return distance_to_guideline(baseline.pixelColor(x, y)) -
+                       distance_to_guideline(frame.pixelColor(x, y)) >=
+                   kMinimumColorChange;
+        };
+        QVERIFY2(dashedGuidelineHasSeparatedRuns(fixture, guideline, frame, matches_stroke),
+                 qPrintable(theme));
     }
 }
 
